@@ -2185,6 +2185,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// whatever the setting, so the count alone turned the list blue for a reader who had switched
     /// receipts off, while the chat's own ticks (from `lastRead`) stayed grey. Read now also needs
     /// their `lastRead` at or after the last message, the stamp the chat screen reads.
+    /// That holds only while `updatedAt` moves with messages alone: group setting writes and the 1:1
+    /// pre-upload touches in ChatService leave it unstamped for this reason.
     func lastReadByOther(_ me: String) -> Bool {
         guard updatedAtMillis > 0 else { return false }
         if isGroup {
@@ -2462,6 +2464,25 @@ struct SharedContactCard {
     let uid: String
     let name: String
     let photo: String?
+}
+
+/// AN ALBUM ITEM READ BACK FROM DISK IS CLEANED TOO (audit C2 check). `Message.init(data:)` clamps a
+/// video's `duration` on the Firestore path, but ThreadMessageCache decodes `[Message]` through
+/// Codable, and a chat cached by an older build can hold 1e300 or worse there. Here, in an
+/// extension, so the memberwise init the senders use stays; every key reads as the synthesized
+/// decoder read it, with the defaults for the ones that may be missing.
+extension Message.AlbumItem {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        imageUrl = try c.decode(String.self, forKey: .imageUrl)
+        enc = try c.decode(EncMeta.self, forKey: .enc)
+        width = try c.decode(Double.self, forKey: .width)
+        height = try c.decode(Double.self, forKey: .height)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "image"
+        videoUrl = try c.decodeIfPresent(String.self, forKey: .videoUrl)
+        videoEnc = try c.decodeIfPresent(EncMeta.self, forKey: .videoEnc)
+        duration = MediaDuration.clean(try c.decodeIfPresent(Double.self, forKey: .duration)) ?? 0
+    }
 }
 
 extension Message {

@@ -555,6 +555,7 @@ struct PostedStoriesView: View {
                     Task { await loader.load(uid: uid, force: true); await loader.loadViewCounts(isMe: isMe) }
                 }
                 .buttonStyle(.borderedProminent)
+                    .tint(Color.fariinAction).foregroundStyle(Color.onFariinAction)   // not white on white at night (audit M22 check)
             }
         case .loaded(let all):
             let rows = all.filter { filter.matches($0) }

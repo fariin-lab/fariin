@@ -96,6 +96,7 @@ struct GlowStoriesGridView: View {
                     Task { await loader.load(Array(glow.glowRelationship).sorted(), key: key) }
                 }
                 .buttonStyle(.borderedProminent)
+                    .tint(Color.fariinAction).foregroundStyle(Color.onFariinAction)   // not white on white at night (audit M22 check)
             }
         case .loaded(let cards) where cards.isEmpty:
             // Two different empties: nobody to glow with at all, versus people who simply have no

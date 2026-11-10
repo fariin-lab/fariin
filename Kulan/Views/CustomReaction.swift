@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import FirebaseFunctions
+import CryptoKit
 
 // ⛔ ANIMATED CUSTOM REACTIONS (owner 2026-11-02). 181 .tgs files ship in the app, played by
 // `TGSEngine` (rlottie off the main thread), never converted. A reaction is a string key on the post,
@@ -8,8 +9,9 @@ import FirebaseFunctions
 // channel (the Custom tab; the server's `setChannelReactions` enforces it); everyone can react with
 // the ones a channel offers. A pill keeps moving while it is on screen (owner 2026-11-02).
 enum CustomReaction {
-    /// @v, the only account that sees the Custom tab.
-    private static let chooserUid = "SVf0zxDVZzO8oLbGvM150QWgIWd2"
+    /// @v, the only account that sees the Custom tab. SHA-256 of the uid (lowercase hex), as in
+    /// ConnectionDiag, so the binary carries no real user id (audit M2 check).
+    private static let chooserUidHash = "413d3aee1a271d76b0059e70c5d34f96aff7221a5202884a335c7e6f8d01133b"
     private static let count = 181
     static let builtIn: [String] = (1...count).map { "ce_\($0)" }
     /// The built-in ones, then the ones uploaded in the admin panel (owner 2026-11-06), newest last.
@@ -20,7 +22,10 @@ enum CustomReaction {
         return builtIn.filter { !hidden.contains($0) } + LiveFeatures.shared.customEmoji.map { "cu_" + $0.id }
     }
 
-    @MainActor static var canChoose: Bool { AuthService.shared.uid == chooserUid }
+    @MainActor static var canChoose: Bool {
+        guard let uid = AuthService.shared.uid, !uid.isEmpty else { return false }
+        return SHA256.hash(data: Data(uid.utf8)).map { String(format: "%02x", $0) }.joined() == chooserUidHash
+    }
 
     static func isCustom(_ emoji: String?) -> Bool {
         guard let emoji else { return false }

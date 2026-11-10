@@ -5333,7 +5333,9 @@ struct ChatRow: View, Equatable {
                     // call" — but a call is not a message and has no sent/read state, so a tick
                     // beside one would be reporting delivery of something that was never sent. The
                     // field used to be cleared to prevent exactly this; the guard lives here now.
-                    if conv.lastIsMine(me), !lastIsCall, !conv.isChannel { ticksView.padding(.top, 1) }   // a channel post has no reader ticks
+                    // Not after Clear Chat either (audit H3 check): the preview is blank then, and lone
+                    // ticks would report on a message I cleared.
+                    if conv.lastIsMine(me), !lastIsCall, !conv.isChannel, !clearedByMe { ticksView.padding(.top, 1) }   // a channel post has no reader ticks
                     // ⛔ NO PIN GLYPH — owner, 2026-09-02, off build 725: "remove pin icon, now
                     // already everyone can see pinned, no need". He is right about the mechanism:
                     // the icon existed because pinned chats were only SORTED to the top with

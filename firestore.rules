@@ -647,13 +647,15 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // 2026-10-13: the app's own connection log (DiagLog), sent after a "dead until relaunch"
-      // episode. Write-once by the owner, small, and read only by the admin console (server side).
+      // 2026-10-13: the app's connection log (DiagLog), write-once by the owner, read by the admin
+      // console. `expireAt` (optional, at most 60 days out) is for a TTL policy (audit H1 check).
       match /diag/{id} {
         allow create: if signedIn() && request.auth.uid == uid
-          && request.resource.data.keys().hasOnly(['text', 'build', 'ios', 'at'])
+          && request.resource.data.keys().hasOnly(['text', 'build', 'ios', 'at', 'expireAt'])
           && request.resource.data.text is string && request.resource.data.text.size() <= 70000
-          && request.resource.data.at == request.time;
+          && request.resource.data.at == request.time
+          && (!('expireAt' in request.resource.data) || (request.resource.data.expireAt is timestamp
+              && request.resource.data.expireAt <= request.time + duration.value(60, 'd')));
         allow read, update, delete: if false;
       }
 
@@ -2518,19 +2520,16 @@ service cloud.firestore {
                  && (!('animated' in d) || d.animated is bool))
               : !d.keys().hasAny(['stickerPack', 'stickerId', 'emoji', 'animated']));
         }
-        // 2026-09-24 feature-audit: A VOICE NOTE'S SHAPE. `duration` and `waveform` were the two
-        // attachment fields with no check at all. The recorder stops at 30 minutes (1,800s), so a
-        // voice note's duration is a number from 0 to 1,900 (margin); other kinds (video) keep
-        // theirs unchecked here. The waveform is a list of at most 256 bars (the app sends 64 at
-        // most); the rules language cannot loop, so each bar's type is not checked. A one-time voice
-        // note carries NO waveform (absent or empty), the invariant `sendAudio` states and keeps.
+        // ATTACHMENT SHAPE (2026-09-24; audit C2 check 2026-11-10). Any `duration` is 0 to 359,999 s
+        // (older builds crash on 1e300), a voice note's 0 to 1,900. A waveform is at most 256 bars,
+        // none on a one-time note. One duration test for every kind: a restricted member's send is
+        // close to the engine's 1,000 expressions, so this costs about what the audio-only one did.
         function voiceShapeOk() {
           let d = request.resource.data;
-          return (!('waveform' in d) || (d.waveform is list && d.waveform.size() <= 256))
-            && (d.get('type', '') != 'audio'
-                || ((!('duration' in d)
-                     || (d.duration is number && d.duration >= 0 && d.duration <= 1900))
-                    && (d.get('viewOnce', false) != true || d.get('waveform', []).size() == 0)));
+          return (!('duration' in d) || (d.duration is number && d.duration >= 0
+                                         && d.duration <= (d.get('type', '') == 'audio' ? 1900 : 359999)))
+            && (!('waveform' in d) || (d.waveform is list && d.waveform.size() <= 256))
+            && (d.get('type', '') != 'audio' || d.get('viewOnce', false) != true || d.get('waveform', []).size() == 0);
         }
         // WHEN AN EDIT MAY LAND: not a tombstone, inside the window from server `createdAt` (900s +
         // 120s margin, Limits.swift), author not muted. A channel post has no window (owner 11-05).
@@ -2852,16 +2851,11 @@ service cloud.firestore {
                      .hasOnly(['imageUrl', 'enc', 'album', 'uploading',
                                'audioUrl', 'fileUrl', 'videoUrl', 'thumbUrl', 'thumbEnc'])
                 && mediaUrlsOk())   // 2026-09-24 decision D-composer-3: the attached address too
-            // "Delete for Everyone": the AUTHOR may turn their own message into a tombstone -
-            // deleted:true, text emptied, type back to 'text', every content field REMOVED.
-            // The end state is pinned (no content key may remain and text/type are fixed), so
-            // this branch cannot be used to edit a message into anything except the marker.
-            // Without it the app's tombstone write was refused and fell back to a hard delete,
-            // so "deleted" messages vanished instead of leaving the placeholder.
-            // 2026-09-24 feature-audit: OR a group admin holding "Delete messages", on the same
-            // pinned end state (see `adminDeletesMessage`). Never a call row. The admin signs it
-            // (`deletedBy` = the caller) so the author is not shown "You deleted this message"; the
-            // author's own tombstone carries no `deletedBy`.
+            // "Delete for Everyone": the AUTHOR turns their message into a tombstone (deleted:true,
+            // text '', type 'text', every content field REMOVED, the sealed file name included). The
+            // end state is pinned, so this cannot edit a message into anything but the marker.
+            // 2026-09-24: OR a group admin with "Delete messages" (`adminDeletesMessage`), never on a
+            // call row, signed `deletedBy` = the caller; the author's own carries no `deletedBy`.
             || (((request.auth.uid == resource.data.authorId
                   && !('deletedBy' in request.resource.data))
                  || (adminDeletesMessage() && resource.data.get('type', '') != 'call'
@@ -2874,14 +2868,14 @@ service cloud.firestore {
                       'fileName', 'fileSize', 'waveform', 'duration', 'blurhash', 'thumb',
                       'linkPreview', 'poll', 'locationCard', 'contactCard', 'replyTo', 'reactions',
                       'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded', 'fwdChannel', 'fwd',
-                      'edits', 'quote', 'bs', 'bsd'])   // 2026-09-24 feature-audit: the edit history is content too
+                      'edits', 'quote', 'bs', 'bsd', 'fileNameEnc'])   // 2026-09-24 feature-audit: the edit history is content too
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
                      ['deleted', 'text', 'type', 'enc', 'imageUrl', 'videoUrl', 'thumbUrl',
                       'audioUrl', 'fileUrl', 'album', 'fileName', 'fileSize', 'waveform',
                       'duration', 'blurhash', 'thumb', 'linkPreview', 'poll', 'locationCard',
                       'contactCard', 'replyTo', 'reactions', 'videoEnc', 'thumbEnc',
                       'viewOnce', 'mentions', 'forwarded', 'fwdChannel', 'fwd', 'edits', 'editedAt',
-                      'deletedBy', 'quote', 'bs', 'bsd', 'fmt']))   // 2026-09-24 feature-audit: the admin's signature
+                      'deletedBy', 'quote', 'bs', 'bsd', 'fmt', 'fileNameEnc']))   // 2026-09-24 feature-audit: the admin's signature
             // LIVE CALL ROW (2026-08-12): a call record is created at ring time ("Ringing") and the
             // SAME doc is finalised later (ongoing / answered / missed, duration, voice→video
             // upgrade). Either participant may update ONLY these call fields — the callee must be

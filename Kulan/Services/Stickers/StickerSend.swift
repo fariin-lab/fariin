@@ -252,13 +252,13 @@ enum StickerSend {
         return try await ChatService.uploadEncrypted(cipher, to: path, progressId: progressId)
     }
 
-    /// A 1:1 chat's conversation doc (`users` + `updatedAt`), which the message write needs. A group's
+    /// A 1:1 chat's conversation doc (`users`), which the message write needs. A group's
     /// doc exists from the moment the group is made, so there is nothing to write.
     private static func ensureOneToOne(_ convRef: DocumentReference, cid: String, uid: String,
                                        isGroup: Bool) async throws {
         guard !isGroup else { return }
         let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-        try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+        try await convRef.setData(["users": [uid, other]], merge: true)   // no `updatedAt` until the message lands (audit H4)
     }
 
     /// Forward (ChatService.forwardMessage). A built-in sticker is re-sent by name; one I made is

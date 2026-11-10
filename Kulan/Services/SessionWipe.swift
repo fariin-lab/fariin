@@ -249,7 +249,12 @@ enum SessionWipe {
         // 1 GB URLCache the viewer reads first, its own photo and clip folders, and the decoded
         // photos and frames in memory. All re-downloadable, so a plain Sign Out takes them too.
         URLCache.shared.removeAllCachedResponses()
+        // The tray's own downloads first (audit M19 check): a clip that landed after the wipe was
+        // written back into the story cache, under the next account.
+        StoryPrefetcher.cancelAll()
         StoryStorage.removeAll()
+        // The story cards and covers in the image cache, which a plain Sign Out otherwise keeps.
+        DiskImageCache.shared.removeStoryEntries()
         StoryVideoFrames.clearAll()
         AppRouter.shared.pendingChatId = nil
         AppRouter.shared.pendingChatName = nil
@@ -294,8 +299,11 @@ enum SessionWipe {
     private static func removeTempCopies() {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory
+        // Audit H9 check: also my own just-recorded voice note ("local-"), reposted story clips
+        // ("repost-"), picked media ("pick-") and story saves ("story-save-").
         let prefixes = ["open-", "sent-file-", "pending-file-", "pending-video-", "share-",
-                        "photo-files", "voice-once-", "FariinExport"]
+                        "photo-files", "voice-once-", "FariinExport",
+                        "local-", "repost-", "pick-", "story-save-"]
         for name in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? []
         where prefixes.contains(where: { name.hasPrefix($0) }) {
             try? fm.removeItem(at: tmp.appendingPathComponent(name))

@@ -38,6 +38,7 @@ struct TwoStepVerificationView: View {
                 } actions: {
                     Button("Try Again") { Task { await load() } }
                         .buttonStyle(.borderedProminent)
+                            .tint(Color.fariinAction).foregroundStyle(Color.onFariinAction)   // not white on white at night (audit M22 check)
                 }
             } else if enabled {
                 onState

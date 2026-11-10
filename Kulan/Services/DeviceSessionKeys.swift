@@ -18,7 +18,12 @@ import FirebaseFunctions
 enum DeviceSessionKeys {
     private static let service = "com.kulan.messenger.native.deviceSession"
 
-    static var deviceId: String { UIDevice.current.identifierForVendor?.uuidString ?? "" }
+    /// The id the Devices page files this phone under (audit M10 check). It was the vendor id, which
+    /// differs from `DeviceRegistry.thisDeviceId` after a reinstall (that one is kept in the
+    /// Keychain), so "sign out" on another phone revoked a key this phone did not hold, and
+    /// `revokeAllOthers` took this phone's own. A key filed under the old id is refused once and
+    /// the card asks for the usual sign-in, which issues one under this id.
+    static var deviceId: String { DeviceRegistry.thisDeviceId }
 
     // MARK: Keychain
 
@@ -90,9 +95,11 @@ enum DeviceSessionKeys {
         }
     }
 
-    /// Signed in: end other phones' keys ("sign out" on the Devices page). Best effort.
-    static func revoke(deviceIds: [String]) async {
-        _ = try? await functions.httpsCallable("revokeDeviceSessions").call(["deviceIds": deviceIds])
+    /// Signed in: end other phones' keys ("sign out" on the Devices page). True when the server
+    /// confirmed it.
+    @discardableResult
+    static func revoke(deviceIds: [String]) async -> Bool {
+        (try? await functions.httpsCallable("revokeDeviceSessions").call(["deviceIds": deviceIds])) != nil
     }
 
     static func revokeAllOthers() async {

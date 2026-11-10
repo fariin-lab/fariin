@@ -100,7 +100,9 @@ service firebase.storage {
       // Release audit 2026-11-10 M8: a member reads (a removed member no longer does), and so do
       // the people the Firestore message rule lets read the chat: a channel's followers and anyone
       // reading a public, not encrypted group from outside. See `chatReader`.
-      allow read: if request.auth != null && chatReader(cid);
+      // A real account (audit M8 check): Firestore's `signedIn()` refuses anonymous sessions, so
+      // their media reads are refused here too.
+      allow read: if uploader() && chatReader(cid);
 
       // ⚠️ THIS RULE USED TO CHECK ONE THING: are you signed in. Nothing else. Not whether you are
       // in that chat, not whether the file already existed, not what kind of file it was.
@@ -284,9 +286,23 @@ service firebase.storage {
                     && !(request.auth.uid in groupDoc(cid).data.get('bannedUids', []))
                     && groupDoc(cid).data.get('archivedAt', null) == null
                     && firestore.exists(/databases/(default)/documents/conversations/$(cid)/followers/$(request.auth.uid)))
-                || (groupDoc(cid).data.get('isPublic', false) == true
-                    && groupDoc(cid).data.get('e2ee', true) == false
-                    && !(request.auth.uid in groupDoc(cid).data.get('bannedUids', [])))));
+                || publicGroupReader(cid)));
+    }
+
+    // firestore.rules `publicPreviewRead`, field for field (audit M8 check): a public, not encrypted
+    // group that has not hidden its history, has not ended and is not disabled or suspended. All of
+    // it from the one group document `chatReader` already read.
+    function publicGroupReader(cid) {
+      return groupDoc(cid).data.get('type', '') == 'group'
+        && groupDoc(cid).data.get('isPublic', false) == true
+        && groupDoc(cid).data.get('e2ee', true) == false
+        && !(request.auth.uid in groupDoc(cid).data.get('bannedUids', []))
+        && (groupDoc(cid).data.get('hideHistoryAt', 0) == 0 || groupDoc(cid).data.get('hideHistoryAt', 0) == null)
+        && (groupDoc(cid).data.get('endedAt', 0) == 0 || groupDoc(cid).data.get('endedAt', 0) == null)
+        && groupDoc(cid).data.get('mod', {}).get('state', 'ok') != 'disabled'
+        && !(groupDoc(cid).data.get('mod', {}).get('state', 'ok') == 'suspended'
+             && (groupDoc(cid).data.get('mod', {}).get('until', null) == null
+                 || groupDoc(cid).data.get('mod', {}).get('until', null) > request.time));
     }
 
     // Release audit 2026-11-10 M5: an uploader is a real account. An anonymous session can be made

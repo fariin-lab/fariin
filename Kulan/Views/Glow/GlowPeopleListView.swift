@@ -142,6 +142,7 @@ struct GlowPeopleListView: View {
             } actions: {
                 Button("Try Again") { loader.invalidate(); Task { await reload() } }
                     .buttonStyle(.borderedProminent)
+                        .tint(Color.fariinAction).foregroundStyle(Color.onFariinAction)   // not white on white at night (audit M22 check)
             }
         case .loaded(let people):
             let rows = people.filter(matches)

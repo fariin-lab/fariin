@@ -39,8 +39,14 @@ enum DiagLog {
         return f
     }()
 
+    /// Test builds only (audit H1 check): an App Store install never sends the file, so it does not
+    /// keep one either. Chat ids, call ids and error text sat in Application Support, and with it in
+    /// the device backups, for no reader at all. Read once; the receipt does not change in a run.
+    private static let keepsFile = DiagUpload.allowed
+
     /// One line, timestamped. Cheap and safe from any thread.
     static func add(_ line: String) {
+        guard keepsFile else { return }
         let text = "\(stamp.string(from: Date())) \(line)\n"
         queue.async {
             guard let url = fileURL else { return }
@@ -76,6 +82,8 @@ enum DiagLog {
 
     /// Launch line: which build this process is, so episodes can be told apart.
     static func launched() {
+        // A file an earlier build wrote on an App Store install goes, with its upload flag.
+        if !keepsFile { wipe(); return }
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = info?["CFBundleVersion"] as? String ?? "?"
@@ -159,6 +167,8 @@ enum DiagLog {
                             "build": info?["CFBundleVersion"] as? String ?? "?",
                             "ios": UIDevice.current.systemVersion,
                             "at": FieldValue.serverTimestamp(),
+                            // Audit H1 check: deleted by a Firestore TTL policy on diag.expireAt.
+                            "expireAt": Timestamp(date: Date().addingTimeInterval(30 * 86_400)),
                         ])
                     UserDefaults.standard.set(false, forKey: pendingKey)
                     // Start the file over, so the next upload carries only what came after.

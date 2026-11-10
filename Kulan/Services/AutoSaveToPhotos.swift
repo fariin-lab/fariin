@@ -27,6 +27,8 @@ enum AutoSaveToPhotos {
     /// Only media sent in the last 7 days is ever offered, so a phone back after a long time away
     /// does not pour a backlog into the roll.
     private static let window: TimeInterval = 7 * 86_400
+    /// How far back the first start reaches for a switch that was already on before this build.
+    private static let legacyGrace: TimeInterval = 15 * 60
     /// When the Settings switch was turned on (seconds since 1970). Media sent before it is history
     /// and stays out of the roll (audit L24: turning it on saved the whole chat history).
     static let sinceKey = defaultsKey + ".since"
@@ -39,13 +41,15 @@ enum AutoSaveToPhotos {
     }
 
     /// From when this chat saves. A switch that was on before this build has no stamp yet; it
-    /// starts counting from the first look, so it never reaches back into the history.
+    /// starts counting from the first look, so it never reaches back into the history. That first
+    /// look is the arrival of the first new photo, sent a moment before it is checked, so the start
+    /// is set a little earlier (`legacyGrace`) or that photo would be the one left out.
     private static func since(cid: String) -> Date {
         let d = UserDefaults.standard
         let key = choice(for: cid) == .always ? chatSinceKey(cid) : sinceKey
         var t = d.double(forKey: key)
         if t <= 0 {
-            t = Date().timeIntervalSince1970
+            t = Date().timeIntervalSince1970 - legacyGrace
             d.set(t, forKey: key)
         }
         return Date(timeIntervalSince1970: t)

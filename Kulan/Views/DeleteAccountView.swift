@@ -266,9 +266,10 @@ struct DeleteAccountView: View {
 
     private func performDeletion() async {
         do {
-            try await verify()
+            let appleCode = try await verify()
             try await profile.scheduleDeletion(reasonCode: reason?.rawValue ?? "",
-                                               reasonText: reason == .other ? String(trimmedOther.prefix(Self.otherLimit)) : "")
+                                               reasonText: reason == .other ? String(trimmedOther.prefix(Self.otherLimit)) : "",
+                                               appleAuthorizationCode: appleCode)
             let due = profile.me?.deletionScheduledFor
                 ?? Calendar.current.date(byAdding: .day, value: ProfileStore.gracePeriodDays, to: Date())
                 ?? Date()
@@ -291,17 +292,23 @@ struct DeleteAccountView: View {
 
     /// Prove it is you with this account's own door. Legacy anonymous sessions have none, and the
     /// server lets them through without one (refusing would trap them in an account they cannot leave).
-    private func verify() async throws {
+    /// Returns the Apple sign-in's one-time `authorizationCode` when the door was Apple (audit H2):
+    /// the server trades it for the Apple token and revokes it, so Fariin leaves the person's
+    /// "Apps Using Apple ID" list. It lasts five minutes, and the schedule call follows at once.
+    private func verify() async throws -> String? {
         if methods.contains(.apple) {
             let request = ASAuthorizationAppleIDProvider().createRequest()
             AuthService.shared.prepareAppleRequest(request)
             let auth = try await ceremony.run([request])
             try await AuthService.shared.reauthApple(authorization: auth)
+            return (auth.credential as? ASAuthorizationAppleIDCredential)?.authorizationCode
+                .flatMap { String(data: $0, encoding: .utf8) }
         } else if methods.contains(.google) {
             try await AuthService.shared.reauthGoogle()
         } else if methods.contains(.email) {
             try await AuthService.shared.reauthEmail(password: password)
         }
+        return nil
     }
 
     /// Same order Settings uses: stop this phone's pushes while we still have auth, then sign out,

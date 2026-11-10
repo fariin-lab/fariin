@@ -48,6 +48,18 @@ const cases = [
     [...groupGet(channel), ...follower(OUT, false)]],
   ['OK      an outsider reads a public plain group\'s media', 'ALLOW', 'ALLOW', OUT, groupFile, 'get', null, blob,
     groupGet(group({ isPublic: true, e2ee: false }))],
+  // M8 check: the public branch matches firestore.rules publicPreviewRead, and anonymous is refused.
+  ['FIX     an outsider reads a public group\'s media after it hid history', 'ALLOW', 'DENY', OUT, groupFile, 'get',
+    null, blob, groupGet(group({ isPublic: true, e2ee: false, hideHistoryAt: REQ_TIME }))],
+  ['FIX     an outsider reads an ended public group\'s media', 'ALLOW', 'DENY', OUT, groupFile, 'get',
+    null, blob, groupGet(group({ isPublic: true, e2ee: false, endedAt: REQ_TIME }))],
+  ['FIX     an outsider reads a disabled public group\'s media', 'ALLOW', 'DENY', OUT, groupFile, 'get',
+    null, blob, groupGet(group({ isPublic: true, e2ee: false, mod: { state: 'disabled' } }))],
+  ['FIX     an outsider reads a suspended public group\'s media', 'ALLOW', 'DENY', OUT, groupFile, 'get',
+    null, blob, groupGet(group({ isPublic: true, e2ee: false, mod: { state: 'suspended' } }))],
+  ['FIX     anonymous session reads a public group\'s media', 'ALLOW', 'DENY', OUT, groupFile, 'get',
+    null, blob, groupGet(group({ isPublic: true, e2ee: false })), 'anonymous'],
+  ['FIX     anonymous session reads 1:1 media', 'ALLOW', 'DENY', ME, pairFile, 'get', null, blob, [], 'anonymous'],
 
   // M5: what may be uploaded.
   ['OK      sealed chat media', 'ALLOW', 'ALLOW', ME, `${O}/chat/${CID}/m1.mp4.enc`, 'create', blob, null, groupGet(group())],

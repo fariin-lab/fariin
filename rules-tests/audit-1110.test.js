@@ -1,6 +1,9 @@
 // Release audit 2026-11-10, firestore.rules rows: M14 (a ban never names the owner or an admin),
 // L8 (the profile's Joined date is the server's), L1 (no seeded anonymous accounts) and M6 (a public
-// story mirror only links to the story's own files). Each row runs before and after the change.
+// story mirror only links to the story's own files), and the 10-check rows (M11 tombstone, C2
+// duration, H1 diag TTL). Each row runs before and after the change. Pass LF
+// copies of the rules: a Windows CRLF checkout is over the 262,144 byte source cap. Also run
+// admin-delete-1018.test.js: a restricted member's send sits near the 1,000 expression limit.
 // Story document rows for M6 are in story-freeze.test.js.
 //
 //   git show 8997387cb:firestore.rules > before-audit-1110.rules
@@ -43,6 +46,16 @@ const own = (f) => `https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%
 const mirror = (over = {}) => ({ authorUid: me, createdAt: REQ_TIME, expiresAt: REQ_TIME, mediaUrl: own('photo.jpg'),
   thumbUrl: '', type: 'image', caption: '', duration: 0, allowsReplies: true, ...over });
 const mirrorPath = `${D}/users/${me}/publicStories/${SID}`;
+const msgPath = `${convPath}/messages/file1`;
+const plainFile = { authorId: MEMBER, createdAt: REQ_TIME, text: '', type: 'file',
+  fileUrl: 'https://x/y.pdf', fileName: 'y.pdf', fileSize: 10 };
+const sealedFile = { ...plainFile, fileName: 'Document.pdf', fileNameEnc: 'enc1:name' };
+const tomb = { authorId: MEMBER, createdAt: REQ_TIME, text: '', type: 'text', deleted: true };
+const send = (over) => [MEMBER, `${convPath}/messages/new1`, 'create',
+  { authorId: MEMBER, createdAt: REQ_TIME, text: 'enc1:x', ...over }, null, convMocks(g)];
+const diagPath = `${D}/users/${me}/diag/d1`;
+const diag = (over = {}) => ({ text: 'log', build: '1', ios: '18', at: REQ_TIME, ...over });
+const inDays = (n) => new Date(Date.parse(REQ_TIME) + n * 86400e3).toISOString();
 
 // [name, before, after, uid, path, method, newData, oldData, mocks, provider]
 const cases = [
@@ -68,6 +81,23 @@ const cases = [
     mirror({ mediaUrl: 'https://evil.example/x.jpg' }), null, []],
   ['FIX     my mirror links to another story\'s file', 'ALLOW', 'DENY', me, mirrorPath, 'create',
     mirror({ mediaUrl: own('photo.jpg').replace(SID, 'other1') }), null, []],
+  // M11 check: Delete for Everyone on a document whose real name is sealed in `fileNameEnc`
+  ['FIX     my tombstone drops the sealed file name', 'DENY', 'ALLOW', MEMBER, msgPath, 'update',
+    tomb, sealedFile, convMocks(g)],
+  ['FIX     my tombstone keeps the sealed file name', 'ALLOW', 'DENY', MEMBER, msgPath, 'update',
+    { ...tomb, fileNameEnc: 'enc1:name' }, sealedFile, convMocks(g)],
+  ['OK      my tombstone of a plain-name document', 'ALLOW', 'ALLOW', MEMBER, msgPath, 'update',
+    tomb, plainFile, convMocks(g)],
+  // C2 check: every kind's duration is a real length (a voice note's still at most 1,900 s).
+  ['OK      a message with a 30 s duration', 'ALLOW', 'ALLOW', ...send({ duration: 30 })],
+  ['FIX     a message with a 1e300 duration', 'ALLOW', 'DENY', ...send({ duration: 1e300 })],
+  ['FIX     a message with a negative duration', 'ALLOW', 'DENY', ...send({ duration: -5 })],
+  ['OK      a 25 minute voice note', 'ALLOW', 'ALLOW', ...send({ type: 'audio', duration: 1500, audioUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/chat%2Fx' })],
+  ['GUARD   a 40 minute voice note', 'DENY', 'DENY', ...send({ type: 'audio', duration: 2400, audioUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/chat%2Fx' })],
+  // H1 check: the diag upload may carry its TTL stamp.
+  ['FIX     a diag upload with expireAt', 'DENY', 'ALLOW', me, diagPath, 'create', diag({ expireAt: inDays(30) }), null, []],
+  ['OK      a diag upload without expireAt', 'ALLOW', 'ALLOW', me, diagPath, 'create', diag(), null, []],
+  ['GUARD   a diag upload kept for a year', 'DENY', 'DENY', me, diagPath, 'create', diag({ expireAt: inDays(365) }), null, []],
 ];
 
 async function run(t, source, [, , , uid, p, method, after, before, mocks, provider], expectation) {

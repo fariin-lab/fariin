@@ -13943,7 +13943,9 @@ struct MessageBubble: View, Equatable {
     }
 
     private func albumVideoDuration(_ s: Double) -> String {
-        let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
+        // Clamped (audit C2 check): a chat cached by an older build can hold 1e300 here, and a bare
+        // `Int(...)` of that traps.
+        let t = MediaDuration.whole(s, rounded: true); return String(format: "%d:%02d", t / 60, t % 60)
     }
 
     // Tap an album photo → open the full-screen viewer paged over EVERY photo in the album (an

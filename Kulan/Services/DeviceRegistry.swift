@@ -454,6 +454,16 @@ final class DeviceRegistry: ObservableObject {
             batch.setData(pushRemovals, forDocument: user.collection("push").document("tokens"), merge: true)
         }
         batch.deleteDocument(ref)
+        // 2026-09-25: and its saved-account one-tap key (DeviceSessionKeys), so that phone asks for
+        // the password next time instead of signing straight back in. FIRST, and retried (audit M10
+        // check): sent once after the commit, a failed call left the removed phone able to sign
+        // itself back in. If it cannot be revoked nothing is removed, and the person tries again.
+        var revoked = false
+        for attempt in 0..<3 where !revoked {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000) }
+            revoked = await DeviceSessionKeys.revoke(deviceIds: [deviceId])
+        }
+        guard revoked else { throw DeviceSignOutError.keyNotRevoked }
         do {
             try await batch.commit()
         } catch let e as NSError where e.domain == FirestoreErrorDomain
@@ -461,9 +471,6 @@ final class DeviceRegistry: ObservableObject {
             // The server's 24-hour rule (our clock may have said otherwise).
             throw DeviceSignOutError.tooNew(nil)
         }
-        // 2026-09-25: and its saved-account one-tap key (DeviceSessionKeys), so that phone asks for
-        // the password next time instead of signing straight back in.
-        await DeviceSessionKeys.revoke(deviceIds: [deviceId])
         SecurityCheckup.settingChanged()
     }
 
@@ -568,9 +575,13 @@ enum DeviceSignOutError: LocalizedError {
     /// This sign-in is under 24 hours old (`DeviceRegistry.freshSessionWindow`). The time left
     /// when known; nil when only the server said so.
     case tooNew(TimeInterval?)
+    /// The other phone's one-tap key could not be ended (offline, say), so nothing was removed.
+    case keyNotRevoked
 
     var errorDescription: String? {
         switch self {
+        case .keyNotRevoked:
+            return "That device could not be logged out right now. Check your connection and try again."
         case .tooNew(let left):
             let base = "For your security, a device logged in less than 24 hours ago can't log out other devices. Use a device you have been logged in on longer"
             guard let left, left > 0 else { return base + ", or try again later." }

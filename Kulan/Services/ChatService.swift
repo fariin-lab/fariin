@@ -595,9 +595,9 @@ enum ChatService {
         // In the image cache before the group says its new address, so every avatar shows it at once
         // instead of downloading the photo this phone just sent (owner 2026-10-29).
         if let ui = UIImage(data: data) { DiskImageCache.shared.store(ui, data: data, for: url, owned: true) }
+        // No `updatedAt` (audit H4 follow-up): see setGroupPermission.
         try await db.collection("conversations").document(cid).updateData([
             "avatarUrl": url,
-            "updatedAt": FieldValue.serverTimestamp(),
         ])
         return url
     }
@@ -958,9 +958,9 @@ enum ChatService {
     /// What members may send (owner 2026-10-19): the whole `memberSend` map in one write, and the
     /// group told in one line when a mode was picked (`notice`), as Announcement mode is.
     static func setMemberSend(cid: String, _ send: [String: Bool], notice: String? = nil) async throws {
+        // No `updatedAt` (audit H4 follow-up): the notice below, when there is one, stamps it.
         try await db.collection("conversations").document(cid).updateData([
             "memberSend": send,
-            "updatedAt": FieldValue.serverTimestamp(),
         ])
         if let notice { try await writeSystemMessage(cid: cid, text: "\(myName()) \(notice)") }
     }
@@ -968,7 +968,8 @@ enum ChatService {
     /// One kind only (audit 2026-10-20): a field-path write, so two admins flipping different kinds
     /// at once do not overwrite each other. Photos/videos also drop the old `media` key.
     static func setMemberSendKind(cid: String, _ kind: String, _ on: Bool, pair: (String, Bool)? = nil) async throws {
-        var data: [String: Any] = ["memberSend.\(kind)": on, "updatedAt": FieldValue.serverTimestamp()]
+        // No `updatedAt` (audit H4 follow-up): see setGroupPermission.
+        var data: [String: Any] = ["memberSend.\(kind)": on]
         // The old `media` key goes; `pair` keeps the other of photos/videos what it said.
         if let pair {
             data["memberSend.\(pair.0)"] = pair.1
@@ -1038,18 +1039,20 @@ enum ChatService {
 
     /// Toggle a member permission (admin): "membersCanAdd" or "membersCanEditInfo".
     static func setGroupPermission(cid: String, key: String, _ value: Bool) async throws {
+        // No `updatedAt` (audit H4 follow-up): a setting change is not a message. Bumping it moved the
+        // group up the list and turned the sender's read ticks grey until everyone opened it again.
+        // The list tick reads `lastRead` against `updatedAt`, so only a write that adds a message stamps it.
         try await db.collection("conversations").document(cid).updateData([
             key: value,
-            "updatedAt": FieldValue.serverTimestamp(),
         ])
     }
 
     /// Set the group description / "about" (admin). No system message (low-signal change).
     static func setGroupDescription(cid: String, text: String) async throws {
         let desc = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(AppLimits.shared.groupDescMax))
+        // No `updatedAt` (audit H4 follow-up): see setGroupPermission.
         try await db.collection("conversations").document(cid).updateData([
             "desc": desc,
-            "updatedAt": FieldValue.serverTimestamp(),
         ])
     }
 
@@ -1075,8 +1078,7 @@ enum ChatService {
             "adminRights.\(promoted)": rights,
             "adminBy.\(promoted)": uid,
             "adminEdit": ["uid": promoted, "by": uid],
-            "updatedAt": FieldValue.serverTimestamp(),
-        ]
+        ]   // no `updatedAt` (audit H4 follow-up): see setGroupPermission
         // An admin is never restricted: clear any lingering mute so a later demote can't silently
         // re-apply a stale "forever" restriction. Only someone who may lift restrictions writes
         // these (the rules want Remove members for them); for anyone else they stay, harmlessly,
@@ -1102,8 +1104,7 @@ enum ChatService {
             "adminRights.\(demoted)": FieldValue.delete(),
             "adminBy.\(demoted)": FieldValue.delete(),
             "adminEdit": ["uid": demoted, "by": uid],
-            "updatedAt": FieldValue.serverTimestamp(),
-        ])
+        ])   // no `updatedAt` (audit H4 follow-up): see setGroupPermission
         // Owner 2026-10-23: as with a promotion, no line for the group; only I am told.
         await MainActor.run { ToastNotice.show("\(name) is no longer an admin") }
     }
@@ -1114,8 +1115,7 @@ enum ChatService {
         try await db.collection("conversations").document(cid).updateData([
             "adminRights.\(target)": rights,
             "adminEdit": ["uid": target, "by": uid],
-            "updatedAt": FieldValue.serverTimestamp(),
-        ])
+        ])   // no `updatedAt` (audit H4 follow-up): see setGroupPermission
     }
 
     /// owner 2026-10-18: LET A REMOVED PERSON BACK (Removed Users). Takes them off `bannedUids`, so
@@ -1124,8 +1124,7 @@ enum ChatService {
     static func unbanGroupMember(cid: String, uid target: String) async throws {
         try await db.collection("conversations").document(cid).updateData([
             "bannedUids": FieldValue.arrayRemove([target]),
-            "updatedAt": FieldValue.serverTimestamp(),
-        ])
+        ])   // no `updatedAt` (audit H4 follow-up): see setGroupPermission
     }
 
     /// owner 2026-10-25: TRANSFER OWNERSHIP IS THE SERVER'S (groups:transferGroupOwnership). The
@@ -2036,8 +2035,7 @@ enum ChatService {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
             ensureConv = Task {
-                try await convRef.setData(["users": [uid, other],
-                                           "updatedAt": FieldValue.serverTimestamp()], merge: true)
+                try await convRef.setData(["users": [uid, other]], merge: true)   // no `updatedAt` until the message lands (audit H4)
             }
         }
         let encDone = Date()
@@ -2177,7 +2175,7 @@ enum ChatService {
         // so a ten-photo album wrote the same two fields ten times.
         if members == nil {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            try await convRef.setData(["users": [uid, other]], merge: true)   // no `updatedAt` until the message lands (audit H4)
         }
         // Immutable snapshots for the concurrent tiles: `members` is a `var` and `msgRef` is a
         // Firebase reference, and neither can be captured by them.
@@ -2366,7 +2364,7 @@ enum ChatService {
         // bytes being sealed; it is the 1:1 conversation existing, which is true once for the album.
         if members == nil {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            try await convRef.setData(["users": [uid, other]], merge: true)   // no `updatedAt` until the message lands (audit H4)
         }
 
         // IMMUTABLE SNAPSHOTS, taken before the tiles below start running together. `members` is a
@@ -2471,7 +2469,7 @@ enum ChatService {
                         "width": t.width, "height": t.height]
             }
             return ["kind": "video", "imageUrl": t.imageUrl, "enc": t.imageEnc.asDict,
-                    "videoUrl": vurl, "videoEnc": venc.asDict, "duration": t.duration,
+                    "videoUrl": vurl, "videoEnc": venc.asDict, "duration": MediaDuration.clean(t.duration) ?? 0,
                     "width": t.width, "height": t.height]
         }
         let videoCount = tiles.filter { $0.videoUrl != nil }.count
@@ -2569,7 +2567,7 @@ enum ChatService {
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            try await convRef.setData(["users": [uid, other]], merge: true)   // no `updatedAt` until the message lands (audit H4)
         }
 
         // One fixed address, as text (bug search 2026-11-01): an offline send and its auto-retry each
@@ -2613,7 +2611,8 @@ enum ChatService {
             // A one-time note carries NO waveform, the same instinct as the view-once photo
             // skipping its blurhash: the preview machinery must not keep a shape of something
             // meant to exist for one listen.
-            "type": "audio", "duration": duration, "waveform": viewOnce ? [] : waveform,
+            // Cleaned (audit C2 check): the rules now refuse a duration that is not a real length.
+            "type": "audio", "duration": MediaDuration.clean(duration) ?? 0, "waveform": viewOnce ? [] : waveform,
             "enc": meta.asDict, "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
             "clientTs": clientTs, "audioUrl": url,
         ]
@@ -2688,8 +2687,7 @@ enum ChatService {
             (thCipher, thMeta) = try await Crypto.shared.encryptBytes(cid, poster)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
             ensureConv = Task {
-                try await convRef.setData(["users": [uid, other],
-                                           "updatedAt": FieldValue.serverTimestamp()], merge: true)
+                try await convRef.setData(["users": [uid, other]], merge: true)   // no `updatedAt` until the message lands (audit H4)
             }
         }
         // The poster is a few KB and it is the only upload standing between the tap and the bubble
@@ -2703,7 +2701,8 @@ enum ChatService {
         var msg: [String: Any] = [
             "type": "video",
             "thumbUrl": thumbUrl, "thumbEnc": thMeta.asDict,
-            "duration": duration, "width": width, "height": height,
+            // Cleaned (audit C2 check): the rules now refuse a duration that is not a real length.
+            "duration": MediaDuration.clean(duration) ?? 0, "width": width, "height": height,
             "text": captionCipher, "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
             "clientTs": clientTs, "uploading": true,
         ]
@@ -2819,8 +2818,7 @@ enum ChatService {
             (thCipher, thMeta) = try await Crypto.shared.encryptBytes(cid, thumbnail)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
             ensureConv = Task {
-                try await convRef.setData(["users": [uid, other],
-                                           "updatedAt": FieldValue.serverTimestamp()], merge: true)
+                try await convRef.setData(["users": [uid, other]], merge: true)   // no `updatedAt` until the message lands (audit H4)
             }
         }
         let msgRef = convRef.collection("messages").document()
@@ -2859,7 +2857,8 @@ enum ChatService {
         var msg: [String: Any] = [
             "type": "video", "enc": vidMeta.asDict,
             "thumbUrl": thumbUrl, "thumbEnc": thMeta.asDict,
-            "duration": duration, "width": width, "height": height,
+            // Cleaned (audit C2 check): the rules now refuse a duration that is not a real length.
+            "duration": MediaDuration.clean(duration) ?? 0, "width": width, "height": height,
             "text": captionCipher, "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
             "clientTs": clientTs, "uploading": true,
         ]
@@ -2936,16 +2935,19 @@ enum ChatService {
         // `fileNameEnc`; `fileName` keeps only "Document" and the extension, for builds that do not
         // read the sealed one yet (they still open the file with the right type). Groups are not
         // end-to-end encrypted and keep the plain name. Sealed before any upload starts.
+        // Held back behind `sealsFileNames` until the Android app reads the sealed name.
         var plainName = fileName
         var sealedName: String?
         if let members {
             (cipher, meta) = try await Crypto.shared.sealBytesForGroup(rawData, members: members, cid: cid)
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, rawData)
-            sealedName = try await Crypto.shared.encryptForConversation(cid, fileName)
-            plainName = Self.fileNameStandIn(fileName)
+            if Self.sealsFileNames {
+                sealedName = try await Crypto.shared.encryptForConversation(cid, fileName)
+                plainName = Self.fileNameStandIn(fileName)
+            }
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            try await convRef.setData(["users": [uid, other]], merge: true)   // no `updatedAt` until the message lands (audit H4)
         }
         let msgRef = convRef.collection("messages").document()
         // reference-style document preview (owner's reference): a PDF's first page — or an image
@@ -3064,7 +3066,7 @@ enum ChatService {
         let convRef = db.collection("conversations").document(cid)
         if members == nil {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            try await convRef.setData(["users": [uid, other]], merge: true)   // no `updatedAt` until the message lands (audit H4)
         }
         let msgRef = convRef.collection("messages").document()
         let batch = db.batch()
@@ -3272,7 +3274,7 @@ enum ChatService {
                             clipFile = f
                         }
                         let clip = try Data(contentsOf: clipFile, options: .alwaysMapped)
-                        return (idx, .video(clip, thumbnail: poster, duration: it.duration,
+                        return (idx, .video(clip, thumbnail: poster, duration: MediaDuration.clean(it.duration) ?? 0,
                                             width: it.width, height: it.height))
                     }
                     started += 1
@@ -3768,6 +3770,9 @@ enum ChatService {
                     }
                     // Bold spans go too; only when present, so rules without `fmt` still pass.
                     if snap.data()?["fmt"] != nil { strip["fmt"] = FieldValue.delete() }
+                    // A 1:1 document's sealed real name (audit M11) goes with the file. Only when
+                    // present, so rules from before `fileNameEnc` was on the tombstone list still pass.
+                    if snap.data()?["fileNameEnc"] != nil { strip["fileNameEnc"] = FieldValue.delete() }
                     // 2026-09-24 feature-audit: a group admin (the "Delete messages" right) deleting
                     // someone else's message signs it, so the author's bubble does not claim "You
                     // deleted this message". Never written on my own message, so an own delete stays
@@ -4172,6 +4177,13 @@ enum ChatService {
             return false
         }
     }
+
+    /// ⛔ OFF UNTIL THE ANDROID APP READS `fileNameEnc` (audit M11 check). Android reads only the
+    /// plain `fileName`, so with this on every document sent from here showed there as
+    /// "Document.pdf", and an Android forward passed that stand-in on as the name. The reader in
+    /// Message.init and the tombstone strip are already in; switch this on once Android seals and
+    /// reads the name too, and the firestore.rules tombstone lists naming `fileNameEnc` are live.
+    static let sealsFileNames = false
 
     /// The plain name a sealed 1:1 document shows on builds that cannot read `fileNameEnc`:
     /// "Document" plus the real extension, so the file still opens in the right app.

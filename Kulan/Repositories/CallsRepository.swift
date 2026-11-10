@@ -130,8 +130,8 @@ struct AdhocCallInfo: Hashable {
 }
 
 // Aggregates call records across all of my conversations into one history list.
-// Each per-conversation query is an equality filter (type == "call"), which uses the
-// automatic single-field index — no composite index to deploy. Sorted client-side.
+// Each per-conversation query is an equality filter (type == "call"), newest 100 by createdAt
+// (composite index (type, createdAt desc), see `callRows`). Sorted client-side.
 @Observable
 final class CallsRepository {
     static let shared = CallsRepository()
@@ -333,8 +333,7 @@ final class CallsRepository {
                     let group = c.isGroup
                     let label = Self.label(c, me: me)
                     let other = label.other, name = label.name, photo = label.photo
-                    guard let snap = try? await database.collection("conversations").document(c.id)
-                        .collection("messages").whereField("type", isEqualTo: "call").getDocuments()
+                    guard let snap = try? await Self.callRows(database.collection("conversations").document(c.id))
                     else { return (c.id, c.updatedAtMillis, nil) }
                     return (c.id, c.updatedAtMillis,
                             Self.entries(snap.documents, cid: c.id, name: name, photo: photo, other: other,
@@ -385,6 +384,21 @@ final class CallsRepository {
         if again { await load(force: true) }
     }
 
+    /// The newest call rows of one chat (audit H10 check). Every call row a chat ever had was read
+    /// whenever the chat moved. Newest first and capped, which needs the (type, createdAt desc)
+    /// index in firestore.indexes.json; until that index is live the server refuses the ordered
+    /// query, and the old unordered read is used instead, so nothing breaks before the deploy.
+    private static let callRowsLimit = 100
+    private static func callRows(_ conv: DocumentReference) async throws -> QuerySnapshot {
+        let base = conv.collection("messages").whereField("type", isEqualTo: "call")
+        do {
+            return try await base.order(by: "createdAt", descending: true).limit(to: callRowsLimit).getDocuments()
+        } catch let e as NSError where e.domain == FirestoreErrorDomain
+                                    && e.code == FirestoreErrorCode.failedPrecondition.rawValue {
+            return try await base.getDocuments()
+        }
+    }
+
     /// One chat's call rows as history entries (shared by the full load and the post-call refresh).
     private static func entries(_ docs: [QueryDocumentSnapshot], cid: String,
                                 name: String, photo: String?, other: String,
@@ -428,8 +442,7 @@ final class CallsRepository {
         }
         guard let known else { await load(force: true); return }
         let myGeneration = await MainActor.run { generation }
-        guard let snap = try? await db.collection("conversations").document(cid)
-            .collection("messages").whereField("type", isEqualTo: "call").getDocuments() else { return }
+        guard let snap = try? await Self.callRows(db.collection("conversations").document(cid)) else { return }
         // A group's rows stay group rows (audit 2026-10-23: group calls refresh through here too).
         let fresh = Self.entries(snap.documents, cid: cid, name: known.name,
                                  photo: known.photoUrl, other: known.otherUid,
@@ -548,6 +561,13 @@ enum CallLogDiskCache {
                 })
             guard let data = try? JSONEncoder().encode(file) else { return }
             try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            // Out of iCloud and computer backups (audit H10 check): names, photos and call times of
+            // this account's calls, like the other decrypted stores. An atomic write replaces the
+            // file, so the flag is set again after each one.
+            var marked = url
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? marked.setResourceValues(values)
         }
     }
 

@@ -585,7 +585,10 @@ final class ProfileStore {
     /// grace period is allowed, which is how the standard messengers do it.
     /// `reason`: owner 2026-10-18, the optional answer from the delete page (a fixed slug the server
     /// checks against its own list; empty = not answered). Stored by the server with no uid.
-    func scheduleDeletion(reasonCode: String = "", reasonText: String = "") async throws {
+    /// `appleAuthorizationCode` (audit H2): the code from the Apple re-verify, so the server can
+    /// revoke this account's Sign in with Apple token (functions-account apple-revoke.js).
+    func scheduleDeletion(reasonCode: String = "", reasonText: String = "",
+                          appleAuthorizationCode: String? = nil) async throws {
         guard Auth.auth().currentUser != nil else { throw AuthFlowError.notSignedIn }
         // 2026-09-24 decision D6: the server sets the date (its own now + 30 days) and `isHidden`;
         // the rules refuse this phone writing `deletionScheduledFor` itself. See
@@ -597,6 +600,7 @@ final class ProfileStore {
         if !reasonCode.isEmpty { payload["reasonCode"] = reasonCode }
         let text = reasonText.trimmingCharacters(in: .whitespacesAndNewlines)
         if reasonCode == "other", !text.isEmpty { payload["reasonText"] = String(text.prefix(255)) }
+        if let code = appleAuthorizationCode, !code.isEmpty { payload["appleAuthorizationCode"] = code }
         let d = try await AccountCall.run("scheduleAccountDeletion", payload)
         let raw = d["deleteAt"] ?? d["due"]
         if let ms = (raw as? NSNumber)?.doubleValue {

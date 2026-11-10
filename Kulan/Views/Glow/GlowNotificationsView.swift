@@ -110,6 +110,7 @@ struct GlowNotificationsView: View {
                 Text("Check your connection and try again.")
             } actions: {
                 Button("Try Again") { Task { await events.load() } }.buttonStyle(.borderedProminent)
+                    .tint(Color.fariinAction).foregroundStyle(Color.onFariinAction)   // not white on white at night (audit M22 check)
             }
         case .loaded(let all):
             let rows = all.filter(matches)

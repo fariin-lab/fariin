@@ -139,7 +139,28 @@ final class DiskImageCache {
     }
 
     private func key(_ url: String) -> String {
-        SHA256.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined()
+        let h = SHA256.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined()
+        return Self.isStoryURL(url) ? Self.storyPrefix + h : h
+    }
+
+    // STORY FILES ARE NAMED APART (audit M19 check). The story row keeps card and cover bytes here,
+    // and a plain Sign Out keeps this cache for the received chat photos, so the leaving account's
+    // stories (close-friends ones included) stayed on the phone. A story url (its card key "url#600"
+    // too) is stored as "s-<hash>", which `removeStoryEntries` can find without a list of urls.
+    // Files cached under the old plain name are simply not found again and age out with the trim.
+    private static let storyPrefix = "s-"
+    private static func isStoryURL(_ url: String) -> Bool { url.contains("/o/stories%2F") }
+
+    /// Sign-out (audit M19 check): every story file, and the memory tier, which cannot be searched by
+    /// key and refills from disk. Synchronous, like `wipeEverything`.
+    func removeStoryEntries() {
+        mem.removeAllObjects()
+        let fm = FileManager.default
+        for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.hasPrefix(Self.storyPrefix) {
+            try? fm.removeItem(at: dir.appendingPathComponent(name))
+            indexRemove((name as NSString).deletingPathExtension)
+        }
+        io.async { [weak self] in self?.cacheBytes = nil }   // the total lives on `io`
     }
     // TWO KINDS OF FILE IN ONE DIRECTORY, told apart by extension.
     //
