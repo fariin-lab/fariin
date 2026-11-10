@@ -77,8 +77,22 @@ final class LocationBubbleView: UIView {
 
 // ── The OG card inside a text bubble ──
 
+/// ⛔ A QUOTE STILL LOADING SHOWS SKELETONS, NOT WORDS (owner 2026-11-10: "fix this loading, give
+/// skeletons, posts appear after, don't show loading text"). The builder hands the layout this
+/// two-line stand-in so the card keeps the size of a short quote; the view draws grey bars over the
+/// title and text rects instead of printing it.
+enum QuoteSkeleton {
+    static let title = "Channel post"
+    static let desc = "Loading\nLoading"
+    static func isLoading(_ p: BubbleBody.LinkPreview) -> Bool {
+        p.url.hasPrefix("fariin-quote://") && p.title == title && p.desc == desc
+    }
+}
+
 final class LinkPreviewBubbleView: UIView {
     private let backing = UIView()
+    /// The loading quote's bars: photo, name, two lines of text (`QuoteSkeleton`).
+    private let skeletonBars = (0..<4).map { _ in UIView() }
     private let hero = RowImageView(frame: .zero)
     /// A quoted album's pictures (owner 2026-11-08): the hero's rect and corners, clipped as one,
     /// with up to 4 tiles inside it (`LinkPreviewPlan.heroTiles`).
@@ -150,6 +164,11 @@ final class LinkPreviewBubbleView: UIView {
         backing.addSubview(buttonLabel)
         backing.addSubview(glyphCircle)
         glyphCircle.addSubview(glyphIcon)
+        for b in skeletonBars {
+            b.isHidden = true
+            b.layer.cornerCurve = .continuous
+            backing.addSubview(b)
+        }
         // Last, so it lies over everything the card draws; it follows the card's size.
         pressDim.alpha = 0
         pressDim.isUserInteractionEnabled = false
@@ -157,6 +176,46 @@ final class LinkPreviewBubbleView: UIView {
         backing.addSubview(pressDim)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// A loading quote: the photo, name and text hide and grey bars pulse in their places. `nil` puts
+    /// the card back to normal (a reused cell, or the answer landed).
+    private func applySkeleton(_ plan: LinkPreviewPlan?, tint: UIColor) {
+        guard let plan else {
+            for b in skeletonBars where !b.isHidden {
+                b.isHidden = true
+                b.layer.removeAnimation(forKey: "pulse")
+            }
+            return
+        }
+        title.isHidden = true
+        subtitle.isHidden = true
+        var rects: [(CGRect, CGFloat)] = []   // rect, corner radius
+        if let a = plan.avatar, !avatar.isHidden {
+            avatar.isHidden = true
+            rects.append((a, a.width * 0.3))
+        }
+        let t = plan.title
+        rects.append((CGRect(x: t.minX, y: t.midY - 6, width: max(60, t.width * 0.45), height: 12), 6))
+        if let s = plan.subtitle {
+            let line = s.height / 2
+            rects.append((CGRect(x: s.minX, y: s.minY + line / 2 - 5, width: s.width * 0.9, height: 10), 5))
+            rects.append((CGRect(x: s.minX, y: s.minY + line * 1.5 - 5, width: s.width * 0.55, height: 10), 5))
+        }
+        for (i, b) in skeletonBars.enumerated() {
+            guard i < rects.count else { b.isHidden = true; b.layer.removeAnimation(forKey: "pulse"); continue }
+            b.frame = rects[i].0
+            b.layer.cornerRadius = rects[i].1
+            b.backgroundColor = tint.withAlphaComponent(0.12)
+            b.isHidden = false
+            if b.layer.animation(forKey: "pulse") == nil, !UIAccessibility.isReduceMotionEnabled {
+                let a = CABasicAnimation(keyPath: "opacity")
+                a.fromValue = 1; a.toValue = 0.45
+                a.duration = 0.8; a.autoreverses = true; a.repeatCount = .infinity
+                a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                b.layer.add(a, forKey: "pulse")
+            }
+        }
+    }
 
     /// ⛔ THE CARD ANSWERS THE FINGER — owner 2026-10-15: "when I tap a link preview there is no
     /// animation, it does not feel tappable; add a small one like the reference". The reference
@@ -329,6 +388,8 @@ final class LinkPreviewBubbleView: UIView {
         } else {
             subtitle.isHidden = true
         }
+
+        applySkeleton(QuoteSkeleton.isLoading(p) ? plan : nil, tint: tint)
 
         if let rect = plan.host, let attr = plan.hostAttr {
             host.isHidden = false
