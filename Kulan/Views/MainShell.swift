@@ -2197,7 +2197,11 @@ struct ChatsView: View {
     // left is gone (Select Chats lives in the filter menu, which took its place). This opens the
     // same Find Channels page the empty list's button does; the Chats tab is the one way in.
     private var exploreButton: some View {
-        Button { showFindChannelsFromEmpty = true } label: { Image(systemName: "safari") }
+        // Owner 2026-11-10 "sometimes the tap misses": the whole 44 pt circle takes the tap, not
+        // only the glyph's own box.
+        Button { showFindChannelsFromEmpty = true } label: {
+            Image(systemName: "safari").frame(width: 44, height: 44).contentShape(Circle())
+        }
             .accessibilityLabel("Explore")
     }
     // The two right items: the filter menu, then compose at the trailing edge (owner, 2026-09-25;
@@ -3457,8 +3461,9 @@ struct ChatsView: View {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 showFindChannelsFromEmpty = true
             }
-            .sheet(isPresented: $showFindChannelsFromEmpty) {
-                // A channel opens behind the sheet, as from New chat.
+            // Full screen (owner 2026-11-10: "open fully, now it's only a sub sheet"); its X closes it.
+            .fullScreenCover(isPresented: $showFindChannelsFromEmpty) {
+                // A channel opens behind the cover, as from New chat.
                 DiscoverChannelsView(onOpen: { cid, handle in
                     showFindChannelsFromEmpty = false
                     path.append(PublicGroupTarget(cid: cid, name: handle))
