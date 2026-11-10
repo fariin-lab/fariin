@@ -41,6 +41,8 @@ struct ChannelApiKeyView: View {
     @State private var error: String?
     @State private var confirmNew = false
     @State private var confirmRevoke = false
+    @State private var running: String?
+    @State private var done = 0
 
     private var example: String {
         "POST \(ChannelApiKey.endpoint)\nX-Api-Key: <your key>\nContent-Type: application/json\n\n{\"action\":\"post\",\"text\":\"Hello\"}"
@@ -80,9 +82,10 @@ struct ChannelApiKeyView: View {
                         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     Button {
                         UIPasteboard.general.string = freshKey
-                        copied = true
+                        withAnimation(.snappy) { copied = true }
                     } label: {
                         Label(copied ? "Copied" : "Copy Key", systemImage: copied ? "checkmark" : "doc.on.doc")
+                            .contentTransition(.symbolEffect(.replace))
                     }
                 } else if hasKey {
                     HStack {
@@ -98,6 +101,7 @@ struct ChannelApiKeyView: View {
                         Spacer()
                         Text("••••\(hint ?? "")").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
                         Circle().fill(Color.green).frame(width: 8, height: 8)
+                            .transition(.scale.combined(with: .opacity))
                     }
                 } else {
                     Label("No key yet", systemImage: "key").foregroundStyle(.secondary)
@@ -106,14 +110,24 @@ struct ChannelApiKeyView: View {
                     Button {
                         if hasKey { confirmNew = true } else { run("create") }
                     } label: {
-                        Label(hasKey ? "New Key" : "Create Key", systemImage: hasKey ? "arrow.clockwise" : "plus")
+                        HStack {
+                            Label(hasKey ? "New Key" : "Create Key", systemImage: hasKey ? "arrow.clockwise" : "plus")
+                                .contentTransition(.symbolEffect(.replace))
+                            Spacer()
+                            if running == "create" { ProgressView().transition(.opacity) }
+                        }
                     }
                     .disabled(busy)
                     if hasKey {
                         Button(role: .destructive) { confirmRevoke = true } label: {
-                            Label("Revoke Key", systemImage: "trash")
+                            HStack {
+                                Label("Revoke Key", systemImage: "trash")
+                                Spacer()
+                                if running == "revoke" { ProgressView().transition(.opacity) }
+                            }
                         }
                         .disabled(busy)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
             } header: {
@@ -133,7 +147,7 @@ struct ChannelApiKeyView: View {
                 Section("Connect") {
                     Button {
                         UIPasteboard.general.string = ChannelApiKey.endpoint
-                        addressCopied = true
+                        withAnimation(.snappy) { addressCopied = true }
                     } label: {
                         HStack {
                             Label {
@@ -144,6 +158,7 @@ struct ChannelApiKeyView: View {
                             } icon: { Image(systemName: "link") }
                             Spacer()
                             Image(systemName: addressCopied ? "checkmark" : "doc.on.doc")
+                            .contentTransition(.symbolEffect(.replace))
                         }
                     }
                     HStack {
@@ -178,9 +193,10 @@ struct ChannelApiKeyView: View {
                         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     Button {
                         UIPasteboard.general.string = example
-                        exampleCopied = true
+                        withAnimation(.snappy) { exampleCopied = true }
                     } label: {
                         Label(exampleCopied ? "Copied" : "Copy Example", systemImage: exampleCopied ? "checkmark" : "doc.on.doc")
+                            .contentTransition(.symbolEffect(.replace))
                     }
                 } header: {
                     Text("Example")
@@ -190,6 +206,14 @@ struct ChannelApiKeyView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .animation(.snappy(duration: 0.35), value: hasKey)
+        .animation(.snappy(duration: 0.35), value: freshKey)
+        .animation(.snappy(duration: 0.25), value: running)
+        .animation(.snappy(duration: 0.35), value: loading)
+        .sensoryFeedback(.success, trigger: done)
+        .sensoryFeedback(.selection, trigger: copied)
+        .sensoryFeedback(.selection, trigger: exampleCopied)
+        .sensoryFeedback(.selection, trigger: addressCopied)
         .navigationTitle("API Key")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
@@ -235,6 +259,7 @@ struct ChannelApiKeyView: View {
 
     private func run(_ action: String) {
         busy = true
+        running = action
         Task {
             do {
                 let d = try await ChannelApiKey.call(cid, action)
@@ -252,9 +277,11 @@ struct ChannelApiKeyView: View {
                         createdAt = nil
                     }
                     busy = false
+                    running = nil
+                    done += 1
                 }
             } catch {
-                await MainActor.run { self.error = error.localizedDescription; busy = false }
+                await MainActor.run { self.error = error.localizedDescription; busy = false; running = nil }
             }
         }
     }
