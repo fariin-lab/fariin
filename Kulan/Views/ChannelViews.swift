@@ -237,8 +237,9 @@ struct DiscoverChannelsView: View {
             // name + tick + follower count, a solid Follow pill that turns grey "Following".
             // No card, no descriptions, a search field under the title.
             .listStyle(.plain)
-            // The chat list's own search bar: `.searchable` at its defaults (owner 2026-11-10).
-            .searchable(text: $query, prompt: "Search")
+            // ⛔ AT THE TOP, ALWAYS SHOWN (owner 2026-11-10, his mockup): the grey field under the title,
+            // as the chat list's and Add People's, not iOS 26's default bar at the bottom.
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
             .navigationTitle("Find Channels")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
