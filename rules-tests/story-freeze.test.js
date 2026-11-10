@@ -68,7 +68,7 @@ const cases = [
     { ...fresh, mediaUrl: 'https://evil.example/illegal.jpg' }],
   ['first fill points at another story\'s file', 'DENY', fresh,
     { ...fresh, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fother%2Fphoto.jpg?alt=media&token=t' }],
-  ['swap the thumbnail on a posted video for an outside link', 'DENY', freshVideo,
+  ['fill the video thumbnail with an outside link', 'DENY', freshVideo,
     { ...freshVideo, thumbUrl: 'https://evil.example/t.jpg' }],
 
   // THE OTHER HALF. If any of these deny, posting a story is broken and this is an outage.
