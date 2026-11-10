@@ -72,6 +72,9 @@ struct MessageRowContext {
     /// The quoted message was sent while I had its author blocked: never shown, so a reply to it
     /// says "Not available" instead of the copy of its words the reply carries.
     var quoteHiddenByBlock: (String) -> Bool = { _ in false }
+    /// The quoted message was sealed before this phone's keys existed (owner 2026-11-10): the chat
+    /// leaves it out, so the reply says "Original message not available" and shows no thumbnail.
+    var quoteBeforeThisDevice: (String) -> Bool = { _ in false }
     /// Is this story still live? A reply to one that has expired shows "Story unavailable" rather
     /// than an empty frame, and the card stops being a door.
     var storyIsLive: (_ storyId: String, _ author: String) -> Bool = { _, _ in true }
@@ -418,12 +421,14 @@ enum MessageRowModelBuilder {
             // Deleted for everyone, seen or not in the list (audit H5): the words it carries are a
             // copy of the deleted message, so they are not drawn.
             let gone = ctx.quoteDeleted(reply.id)
+            let oldSeal = ctx.quoteBeforeThisDevice(reply.id)
             quote = QuoteChrome(
                 targetId: reply.id,
                 authorLine: reply.authorId == ctx.me ? "You" : ctx.nameFor(reply.authorId),
                 snippet: blocked ? "Not available"
-                    : (gone ? "This message was deleted" : replyLabel(reply: reply, original: original)),
-                thumb: blocked || gone ? .none : replyThumb(original),
+                    : (gone ? "This message was deleted"
+                        : (oldSeal ? "Original message not available" : replyLabel(reply: reply, original: original))),
+                thumb: blocked || gone || oldSeal ? .none : replyThumb(original),
                 isStatus: false)
         }
 

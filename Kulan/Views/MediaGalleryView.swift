@@ -1012,6 +1012,7 @@ struct MediaGalleryView: View {
     /// tab until the server's purge).
     static func isGone(_ m: Message) -> Bool {
         HiddenMessages.isHidden(m.id) || (m.expiresAt.map { $0 <= Date() } ?? false)
+            || m.predatesThisDevice   // sealed before this phone's keys: never opens here (owner 2026-11-10)
     }
     /// The real message behind a tile. A text message's id is its client id, a UUID full of
     /// dashes, so "before the first dash" is only right for an album child, whose id is not a

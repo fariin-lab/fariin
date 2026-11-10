@@ -424,7 +424,7 @@ struct GroupInfoView: View {
                 saveChoice = AutoSaveToPhotos.choice(for: cid)
                 if let local = ThreadMessageCache.shared.messages(for: cid) {
                     let localMedia = local
-                        .filter { $0.isImage || $0.isVideo || $0.isAlbum }
+                        .filter { ($0.isImage || $0.isVideo || $0.isAlbum) && !$0.predatesThisDevice }   // owner 2026-11-10
                         .reversed()
                         .flatMap { $0.expandedGalleryItems(cid: cid) }
                     if !localMedia.isEmpty { media = Array(localMedia) }

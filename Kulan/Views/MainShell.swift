@@ -4594,9 +4594,18 @@ struct ChatRow: View, Equatable {
             let text = Crypto.shared.decryptGroupCached(conv.lastMessageCipher, cid: conv.id, authorId: conv.lastSender)   // memoized
             // A channel never shows an admin's wallpaper line (owner 2026-11-07); older builds still write one.
             if conv.isChannel, ThreadRepository.isWallpaperNotice(text) { return "" }
-            return text
+            return oldSealPreview(text)
         }
-        return Crypto.shared.decryptCached(conv.lastMessageCipher, cid: conv.id)   // memoized: no re-decrypt per render
+        return oldSealPreview(Crypto.shared.decryptCached(conv.lastMessageCipher, cid: conv.id))   // memoized: no re-decrypt per render
+    }
+    /// ⛔ NO LOCK IN THE LIST FOR HISTORY FROM BEFORE THIS PHONE (owner 2026-11-10). A newest message
+    /// sealed before this phone's keys existed never opens here (`Crypto.predatesThisDevice`); the row
+    /// stays and says so in plain words. A lock on a newer message can still heal and is left as it was.
+    static let olderNotOnThisDevice = "Older messages aren't on this device"
+    private func oldSealPreview(_ text: String) -> String {
+        guard text == "🔒", conv.updatedAtMillis > 0,
+              Crypto.shared.predatesThisDevice(Date(timeIntervalSince1970: conv.updatedAtMillis / 1000)) else { return text }
+        return Self.olderNotOnThisDevice
     }
     /// Group-only per-member hide check for every OTHER preview surface, the same test
     /// `decodedLast` above already runs for the group text preview (2026-09-26 block rebuild). A
@@ -5061,6 +5070,9 @@ struct ChatRow: View, Equatable {
                 .onAppear { ChatService.repairBlankSummary(conv.id) }
         } else if conv.lastMessageCipher.isEmpty {
             previewRow("hand.wave.fill", "Say hello")
+        } else if decodedLast == Self.olderNotOnThisDevice {
+            // Not the sender's words, so no "Name: " in front (owner 2026-11-10, see `oldSealPreview`).
+            Text(decodedLast).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
         } else if decodedLast.isEmpty {
             // A hidden-by-block last message (audit L17): there IS a message, just not one this
             // row may show, so it gets an empty preview line, not "Say hello" — that text belongs

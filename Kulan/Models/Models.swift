@@ -512,6 +512,16 @@ struct Message: Identifiable, Equatable, Codable {
     /// end-to-end group). It was sealed only for the members of that moment, so it can never be read
     /// here; the chat leaves it out, as the big apps do with history from before you joined.
     var notForMe: Bool = false
+    /// ⛔ A SEAL THE KEYS ON THIS PHONE CANNOT OPEN (owner 2026-11-10): the text, or for media with no
+    /// caption the file key, came back as the lock outcome with every key present. nil = readable
+    /// (Optional so chat caches written before this still decode). Whether it is hidden as "from
+    /// before this device" is decided by date when the list is drawn: `predatesThisDevice`.
+    var sealUnreadable: Bool? = nil
+    /// Sealed for another phone's keys, before this phone's own keys existed: never readable here,
+    /// so the chat leaves it out behind one notice (ThreadRepository.refreshItems) instead of a lock.
+    var predatesThisDevice: Bool {
+        sealUnreadable == true && sendState == nil && Crypto.shared.predatesThisDevice(createdAt)
+    }
     /// 2026-09-24 feature-audit (delete-message): set only when a group admin deleted someone else's
     /// message, so its author is not told "You deleted this message". Nil = the author did it.
     var deletedBy: String? = nil
@@ -898,6 +908,7 @@ struct Message: Identifiable, Equatable, Codable {
         case callerUid, callOutcome, callVideo, callDuration, callJoinedUids, callRungUids
         case quoteId, bubbleStyle, bubbleDecor, boldSpans
         case countsStore   // a channel post's views, reactions and quotes (owner 2026-11-06)
+        case sealUnreadable   // owner 2026-11-10: a cold open must hide old locks on its first frame too
         case edited, deleted, deletedBy, forwarded, forwardSource, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
         case stickerPack, stickerId, stickerEmoji, stickerAnimated   // 2026-10-17 chat stickers, all optional
@@ -1120,6 +1131,17 @@ struct Message: Identifiable, Equatable, Codable {
         if let ts = data["expiresAt"] as? Timestamp { self.expiresAt = ts.dateValue() }
         if let ms = (data["clientTs"] as? NSNumber)?.doubleValue {
             self.clientTs = Date(timeIntervalSince1970: ms / 1000)
+        }
+        // Sealed for keys this phone does not hold (owner 2026-11-10, see `sealUnreadable`). The text
+        // answers for most messages; a photo, video, voice note or file without a caption is asked
+        // about its file key. A group message with no wrap for me is `notForMe`, a different case.
+        // A sticker is not: its art is a plain pack reference and still draws.
+        if !notForMe, !deleted, type != "sticker" {
+            if decrypted == "🔒" {
+                self.sealUnreadable = true
+            } else if decrypted.isEmpty, crypto.fileSealUnreadable(enc ?? album.first?.enc ?? thumbEnc, cid: cid) {
+                self.sealUnreadable = true
+            }
         }
         // A released key just arrived for one of this message's files: a photo or clip marked
         // "sent before you joined" can open now, so its permanent failure is lifted.

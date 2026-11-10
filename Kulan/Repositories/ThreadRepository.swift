@@ -817,6 +817,15 @@ final class ThreadRepository {
                 || (m.notForMe && (cuts.joined.map { m.createdAt < $0.addingTimeInterval(5) } ?? true))
                 || (group && m.deleted && !m.isCall)
         }
+        // ⛔ SEALED BEFORE THIS PHONE HAD ITS KEYS (owner 2026-11-10: signed in on another phone, the
+        // old messages were a wall of locks). They can never open here (`Message.predatesThisDevice`),
+        // so they are left out and one notice stands where the newest of them was.
+        var newestOldSeal: Date?
+        merged.removeAll { m in
+            guard m.predatesThisDevice else { return false }
+            if newestOldSeal.map({ m.createdAt > $0 }) ?? true { newestOldSeal = m.createdAt }
+            return true
+        }
         // ⛔ A CHANNEL'S NOTICES ARE FOR ITS OWNER AND ADMINS (owner 2026-11-06): wallpaper changed,
         // verified, pinned, "X joined" and the other activity lines are not shown to followers or
         // visitors as messages. (Deleted posts already go, above.)
@@ -828,6 +837,13 @@ final class ThreadRepository {
         if let start = cuts.start {
             let cut = start.addingTimeInterval(-2)
             merged.removeAll { $0.createdAt < cut }
+            if let at = newestOldSeal, at < cut { newestOldSeal = nil }   // the chat starts later anyway
+        }
+        if let at = newestOldSeal {
+            // One id for the chat, so the list keeps the same row as older pages load.
+            let notice = Message(localNotice: Self.oldDeviceHistoryNotice, symbol: "lock",
+                                 id: "local-device-history", at: at)
+            merged.insert(notice, at: merged.firstIndex { $0.createdAt > at } ?? merged.count)
         }
 
         // ROW IDS MUST BE UNIQUE. `rowId` is `clientId ?? id`, and the list feeds it straight into a
@@ -2279,6 +2295,16 @@ final class ThreadRepository {
         myChatClearedAtMillis = ms
         refreshHistoryStart(record: false)
         rebuild()
+    }
+
+    /// The notice that stands in for messages sealed before this phone's keys existed.
+    static let oldDeviceHistoryNotice =
+        "Messages from before you signed in on this device aren't available here. They're end-to-end encrypted."
+
+    /// Is `id` a loaded message sealed before this phone's keys existed (owner 2026-11-10)? A reply
+    /// quoting one says "Original message not available", and a pin to one leaves the bar.
+    func isFromBeforeThisDevice(id: String) -> Bool {
+        byId[id]?.predatesThisDevice ?? false
     }
 
     /// Is `id` a message the block window hides? A reply quoting one shows "Not available" and its

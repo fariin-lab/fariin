@@ -3349,7 +3349,15 @@ struct ThreadView: View {
                 && repo.items.first(where: { $0.id == id })?.deleted != true
                 && repo.pinnedPreviews[id]?.deleted != true
                 && !(repo.pinnedPreviews[id].map(repo.isClearedForMe) ?? false)   // Clear Chat
+                && !pinPredatesThisDevice(id)
         }
+    }
+
+    /// A pin to a message sealed before this phone's keys (owner 2026-11-10): the chat leaves it
+    /// out, so the bar does too. Its own function so the filter above stays easy on the type checker.
+    private func pinPredatesThisDevice(_ id: String) -> Bool {
+        if repo.isFromBeforeThisDevice(id: id) { return true }
+        return repo.pinnedPreviews[id]?.predatesThisDevice ?? false
     }
 
     /// Unpin: gone from the bar at once, the shared write behind it, and a refusal said out loud.
@@ -4139,6 +4147,8 @@ struct ThreadView: View {
                 // A quoted original found deleted turns the quote's words into "This message was
                 // deleted" (audit H5), and nothing else on this row moves when that happens.
                 if let r = m.replyTo, !r.isStatus, repo.quoteOriginalDeleted(r.id) { linkTok += ":QD" }
+                // Same for an original sealed before this phone's keys (owner 2026-11-10).
+                if let r = m.replyTo, !r.isStatus, repo.isFromBeforeThisDevice(id: r.id) { linkTok += ":QO" }
                 // Bold spans: an edit may change only them.
                 if let b = m.boldSpans { linkTok += ":B\(b.hashValue)" }
                 out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.replyFaces.hashValue)|\(m.repliesOff(channelDefault: chanRepliesOff))|\(quotesTok)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
@@ -4318,6 +4328,7 @@ struct ThreadView: View {
             resolveOriginal: { id in loadedMessage(id: id) },   // owner audit 2026-10-06 chat #45
             quoteDeleted: { repo.quoteOriginalDeleted($0) },   // audit H5
             quoteHiddenByBlock: { repo.isHiddenByBlock(id: $0) },
+            quoteBeforeThisDevice: { repo.isFromBeforeThisDevice(id: $0) },   // owner 2026-11-10
             storyIsLive: { storyId, author in
                 // Unknown until the stories repo has loaded: assume live, so a reply does not flash
                 // "unavailable" on the way in and then correct itself.
@@ -5967,6 +5978,8 @@ struct ThreadView: View {
         // ⛔ Sent while I had its author blocked — owner, 2026-10-04: say "Not available", never
         // fetch or show it. It stays hidden after the unblock, as it always has.
         if repo.isHiddenByBlock(id: id) { showJumpToast("Not available"); return }
+        // Sealed before this phone's keys (owner 2026-11-10): left out of the chat, nothing to reach.
+        if repo.isFromBeforeThisDevice(id: id) { showJumpToast("Original message not available"); return }
         // owner audit 2026-10-06 chat #10: the down arrow (or a newer jump) bumps `jumpSeq` while
         // this pages; the stale jump then neither scrolls nor toasts.
         jumpSeq += 1
@@ -5977,6 +5990,7 @@ struct ThreadView: View {
                 guard seq == jumpSeq else { return }
                 if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
                 else if repo.isHiddenByBlock(id: id) { showJumpToast("Not available") }
+                else if repo.isFromBeforeThisDevice(id: id) { showJumpToast("Original message not available") }
                 else { showJumpToast("Original message isn't loaded") }
             }
         }

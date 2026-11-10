@@ -3396,6 +3396,7 @@ enum ChatService {
                 // Never a view-once item (bug search 2026-11-01): the gallery has always left them out,
                 // this strip did not, and a tap here opened one without spending it.
                 .filter { ($0.isImage || $0.isVideo || $0.isAlbum) && !$0.viewOnce }
+                .filter { !$0.predatesThisDevice }   // sealed before this phone's keys (owner 2026-11-10)
                 .filter { $0.createdAt.timeIntervalSince1970 * 1000 > clearedMs }   // Clear Chat
                 .flatMap { $0.expandedGalleryItems(cid: cid) }
             await MainActor.run {

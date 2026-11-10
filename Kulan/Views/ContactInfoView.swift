@@ -2482,7 +2482,7 @@ struct ContactInfoView: View {
             // items INSIDE each album, so the strip visibly reshuffled when the server pass —
             // which keeps album order — replaced this one a beat later.
             let localMedia = local
-                .filter { $0.isImage || $0.isVideo || $0.isAlbum }
+                .filter { ($0.isImage || $0.isVideo || $0.isAlbum) && !$0.predatesThisDevice }   // owner 2026-11-10
                 .reversed()                       // cache is oldest-first; this strip is newest-first
                 .flatMap { $0.expandedGalleryItems(cid: cid) }
             if !localMedia.isEmpty { media = Array(localMedia) }

@@ -284,6 +284,9 @@ final class Crypto {
                 throw NSError(domain: "Crypto", code: 3,
                               userInfo: [NSLocalizedDescriptionKey: "identity key could not be stored"])
             }
+            // A brand-new keypair: nothing sealed before this moment was sealed for it (see
+            // `keysHeldSince`). Overwrites any date a lost earlier key of this account left behind.
+            setKeysHeldSince(Date(), uid: uid)
         }
         // Single lock-guarded write (memory barrier); the keypair is immutable after this.
         lock.withLock { mySecretKey = skBytes; myPublicKey = pkBytes; pubCache[uid] = pkBytes }
@@ -365,6 +368,7 @@ final class Crypto {
             pubCache = [:]
             readyTask = nil
             didWarm = false
+            keysSinceCache = nil   // the next account reads its own date
         }
         // ⛔ AND THE DECRYPTED PREVIEWS. `previewCache` holds up to 500 plaintext message texts in a
         // process-lifetime singleton, and nothing cleared it — so after sign-out the previous
@@ -395,7 +399,90 @@ final class Crypto {
         Keychain.delete(Self.pkKeychainKey(uid))
         Keychain.delete(Self.legacySkKey)
         Keychain.delete(Self.legacyPkKey)
+        Keychain.delete(Self.sinceKeychainKey(uid))
         wipeIdentity()
+    }
+
+    // MARK: - History from before this phone's keys (owner 2026-11-10)
+    //
+    // ⛔ SIGNED IN ON ANOTHER PHONE, OLD MESSAGES WERE A WALL OF LOCKS. The secret key lives in this
+    // phone's Keychain only (ThisDeviceOnly) and there is no key backup, so a new phone makes its
+    // own keypair and nothing sealed before that moment can ever open here: those were sealed for
+    // the old phone's key. The chat now leaves such messages out and shows one notice instead, as
+    // the reference app does with history a new device cannot read.
+    //
+    // The signal is WHEN THIS PHONE'S KEYPAIR WAS MADE. A seal that will not open (the "🔒" outcome,
+    // never the "…" of keys still loading) on a message the server dated before that moment was
+    // sealed for a key this phone never had. A seal that fails on a message dated after it can still
+    // heal (a stale peer key is refetched, see `refreshKeyAfterFailure`), so it keeps the old
+    // behaviour. Kept in the Keychain beside the key, so a reinstall that keeps the key keeps the date.
+
+    private static func sinceKeychainKey(_ uid: String) -> String { "fariin_keys_since_v1.\(uid)" }
+    /// The date for the signed-in account (server ms), read from the Keychain once. Guarded by `lock`.
+    private var keysSinceCache: (uid: String, ms: Double?)?
+
+    /// When this phone's keypair for the signed-in account was made, or nil when unknown (a key made
+    /// by a build before this one and not yet dated, see `noteDeviceSignedIn`). Unknown hides nothing.
+    func keysHeldSince() -> Date? {
+        guard let uid = currentUid() else { return nil }
+        let ms: Double? = lock.withLock {
+            if let c = keysSinceCache, c.uid == uid { return c.ms }
+            let read = Keychain.lookup(Self.sinceKeychainKey(uid))
+            let v = read.value.flatMap { Double($0) }
+            // "Could not read right now" (before first unlock) is not cached: the next call asks again.
+            if v != nil || read.notFound { keysSinceCache = (uid, v) }
+            return v
+        }
+        return ms.map { Date(timeIntervalSince1970: $0 / 1000) }
+    }
+
+    /// Was a message of this date sealed before this phone's keys existed?
+    func predatesThisDevice(_ date: Date) -> Bool {
+        guard let since = keysHeldSince() else { return false }
+        return date < since
+    }
+
+    private func setKeysHeldSince(_ date: Date, uid: String) {
+        let ms = (date.timeIntervalSince1970 * 1000).rounded()
+        guard Keychain.set(Self.sinceKeychainKey(uid), String(Int64(ms))) else { return }
+        lock.withLock { keysSinceCache = (uid, ms) }
+    }
+
+    /// A key made by an earlier build carries no date. The first time this phone registered for the
+    /// account (`DeviceRegistry`, the server's `createdAt` on its device record) is when that key was
+    /// made in practice: both happen at sign-in. Used only while no date is stored, never over one.
+    func noteDeviceSignedIn(_ date: Date, uid: String) {
+        guard uid == currentUid(),
+              Keychain.lookup(Self.sinceKeychainKey(uid)).notFound,
+              Keychain.get(Self.skKeychainKey(uid)) != nil else { return }
+        setKeysHeldSince(date, uid: uid)
+        // Rows already drawn with the lock redraw with the new rule.
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .cryptoIdentityReady, object: nil) }
+    }
+
+    /// A message's FILE key will not open with the keys this phone holds, though they are all here
+    /// (never "not loaded yet"). For a photo, video, voice note or file with no sealed caption, which
+    /// is otherwise the only sign it was sealed for another phone's key. Synchronous, from memory.
+    func fileSealUnreadable(_ meta: EncMeta?, cid: String) -> Bool {
+        guard let meta, !meta.isPlain, meta.v == 1 else { return false }
+        warmIfNeeded()
+        guard let sk = lock.withLock({ mySecretKey }) else { return false }
+        if let wraps = meta.w, let author = meta.a {
+            // Group: no wrap of mine is "sent before I joined" (`notForMe`), not this.
+            guard let me = currentUid(), let myWrap = wraps[me],
+                  let authorPub = lock.withLock({ pubCache[author] }) else { return false }
+            if Self.isGroupCid(cid), releasedKey(meta.n) != nil { return false }
+            let wp = myWrap.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+            guard wp.count == 2, let wk = Data(base64Encoded: wp[0]), let kn = Data(base64Encoded: wp[1]) else { return true }
+            return openFrom(author, current: authorPub, box: Bytes(wk), nonce: Bytes(kn), sk: sk) == nil
+        }
+        let other = otherUid(cid)
+        guard let otherPub = lock.withLock({ pubCache[other] }) else { return false }
+        guard let wk = Data(base64Encoded: meta.k), let kn = Data(base64Encoded: meta.kn) else { return true }
+        guard openFrom(other, current: otherPub, box: Bytes(wk), nonce: Bytes(kn), sk: sk) == nil else { return false }
+        // Same once-per-item refetch the text path makes, so a stale peer key still heals.
+        refreshKeyAfterFailure(other, item: meta.kn)
+        return true
     }
 
     /// My identity public key (Curve25519), for the safety-number screen. nil until

@@ -185,6 +185,12 @@ final class DeviceRegistry: ObservableObject {
         } catch {
             existing = try? await ref.getDocument()   // offline: fall through and write as before
         }
+        // A key made by a build before 2026-11-10 carries no date, and the chat needs one to tell
+        // history from before this phone apart (Crypto `keysHeldSince`). This phone's first sign-in
+        // for the account is that date in practice; Crypto ignores it once a date is stored.
+        if let first = (existing?.data()?["createdAt"] as? Timestamp)?.dateValue() {
+            Crypto.shared.noteDeviceSignedIn(first, uid: uid)
+        }
 
         // First sign-in on this device sets the date it started. Written only when the record
         // is new, so "signed in on" keeps meaning the first time, not the last launch.
