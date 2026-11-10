@@ -439,7 +439,7 @@ struct WallpaperPickerSheet: View {
                 } else if hasCustom {
                     Menu {
                         if canResetColor || canResetStyle {
-                            Button { resetColorOnly() } label: { Label("Reset Chat Color", systemImage: "paintpalette") }
+                            Button { resetColorOnly() } label: { Label("Reset Bubble Color", systemImage: "paintpalette") }
                         }
                         if canResetWallpaper {
                             Button { resetWallpaperOnly() } label: { Label("Reset Wallpaper", systemImage: "photo") }
@@ -500,7 +500,7 @@ struct WallpaperPickerSheet: View {
         dismiss()
     }
 
-    /// "Reset Chat Color": this chat's bubbles go back to the app's default BLUE. A wallpaper being
+    /// "Reset Bubble Color": this chat's bubbles go back to the app's default BLUE. A wallpaper being
     /// tried is dropped, and the one the chat had is put back as it was (its own, or following Settings).
     ///
     /// ⛔ BLUE, NOT AUTO — owner, 2026-09-28: "when the user resets the chat colour, use blue, the
@@ -510,7 +510,7 @@ struct WallpaperPickerSheet: View {
         committed = true
         colorStore.set(ChatColors.presets.first, for: cid)
         // The default bubble, no picture style. Not in a shared group: its sheet has no bubble row,
-        // so "Reset Chat Color" there resets the colour only and leaves the chat's style alone.
+        // so "Reset Bubble Color" there resets the colour only and leaves the chat's style alone.
         if !globalOnly && !sharedGroup { chatStyleId = BubbleStyles.noneId }
         if sharedGroup { store.endGroupEdit(cid) }   // drop the tried wallpaper; the group's stays
         else if hadOwnWallpaper { store.set(original, for: cid) } else { store.clearOverride(for: cid) }
@@ -660,7 +660,7 @@ struct WallpaperPickerSheet: View {
                 .overlay(Circle().strokeBorder(isAuto ? Color.primary : .clear, lineWidth: 3))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Auto chat color")
+        .accessibilityLabel("Auto bubble color")
     }
 
     private func colorCircle(_ p: ChatColorSpec) -> some View {

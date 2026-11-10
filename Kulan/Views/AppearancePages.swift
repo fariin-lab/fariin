@@ -127,11 +127,11 @@ struct AppearanceResetMenu: ViewModifier {
                                 Label("Reset Wallpaper", systemImage: "photo")
                             }
                             Button(role: .destructive) { confirmBoth = true } label: {
-                                Label("Reset Wallpaper and Chat Color", systemImage: "arrow.counterclockwise")
+                                Label("Reset Wallpaper and Bubble Color", systemImage: "arrow.counterclockwise")
                             }
                         case .chatColor:
                             Button { resetColor() } label: {
-                                Label("Reset Chat Color", systemImage: "paintpalette")
+                                Label("Reset Bubble Color", systemImage: "paintpalette")
                             }
                             Button(role: .destructive) { confirmBoth = true } label: {
                                 Label("Reset Chat Color and Wallpaper", systemImage: "arrow.counterclockwise")
