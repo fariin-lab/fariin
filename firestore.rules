@@ -2430,18 +2430,24 @@ service cloud.firestore {
         // `pollMulti` is in the clear on every poll. Links and locations: a link card, or a
         // plain-text group message (an end-to-end encrypted group's text cannot be read here, so
         // there the app alone holds links, polls and locations back).
+        // `restrictedIn` is asked once here, not once per flag (2026-11-10): its admin, owner and
+        // time checks are the same for every flag, and seven copies of them pushed a restricted
+        // member's send past the engine's 1,000 expressions (admin-delete-1018.test.js).
         function groupSendRestrictOk() {
           let c = convData();
           let d = request.resource.data;
           let t = d.get('type', '');
+          let f = c.get('restrictedFlags', {}).get(request.auth.uid, []);
           return !(request.auth.uid in c.get('restrictedFlags', {}))
-            || ((!restrictedIn(c, 'sendText') || leaveNotice())
-            && (!(t in ['image', 'album', 'video', 'file'] || 'linkPreview' in d) || !restrictedIn(c, 'sendMedia'))
-            && (!(t in ['image', 'album', 'video']) || !restrictedIn(c, 'sendPhotos'))
-            && (t != 'file' || !restrictedIn(c, 'sendFiles'))
-            && (!('linkPreview' in d) || !restrictedIn(c, 'sendLinks'))
-            && (t != 'audio' || !restrictedIn(c, 'sendVoice'))
-            && (!(t in ['gif', 'sticker']) || !restrictedIn(c, 'sendStickers')));
+            || request.auth.uid in c.get('admins', []) || request.auth.uid == c.get('createdBy', '')
+            || !(c.get('restrictedUntil', {}).get(request.auth.uid, 0) > request.time.toMillis())
+            || ((!('sendText' in f) || leaveNotice())
+            && (!(t in ['image', 'album', 'video', 'file'] || 'linkPreview' in d) || !('sendMedia' in f))
+            && (!(t in ['image', 'album', 'video']) || !('sendPhotos' in f))
+            && (t != 'file' || !('sendFiles' in f))
+            && (!('linkPreview' in d) || !('sendLinks' in f))
+            && (t != 'audio' || !('sendVoice' in f))
+            && (!(t in ['gif', 'sticker']) || !('sendStickers' in f)));
         }
         function memberSendOk() {
           let d = request.resource.data;
