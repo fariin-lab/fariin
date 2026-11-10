@@ -206,6 +206,12 @@ struct GroupSettingsView: View {
             if conv?.isChannel == true {
                 chatSection
                 channelPostsSection
+                // owner 2026-11-10: the channel's API key, on @v / @kream as the channel's owner only.
+                if ChannelApiKey.shows(conv, me: me) {
+                    Section {
+                        NavigationLink { ChannelApiKeyView(cid: cid) } label: { Text("API Key") }
+                    }
+                }
             } else {
                 permissionsSection
                 chatSection
