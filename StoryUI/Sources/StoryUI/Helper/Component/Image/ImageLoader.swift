@@ -74,6 +74,9 @@ enum StoryMemoryCache {
 
     static func image(for url: URL) -> UIImage? { cache.object(forKey: url.absoluteString as NSString) }
 
+    /// Sign-out (see `StoryStorage.removeAll`).
+    static func removeAll() { cache.removeAllObjects() }
+
     static func store(_ img: UIImage, for url: URL) {
         let cost = Int(img.size.width * img.size.height * img.scale * img.scale * 4)
         cache.setObject(img, forKey: url.absoluteString as NSString, cost: cost)

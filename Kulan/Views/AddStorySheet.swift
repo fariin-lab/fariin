@@ -833,6 +833,10 @@ struct StoryLibraryPicker: View {
                 if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
             }
             .buttonStyle(.borderedProminent)
+            // Audit M21: the app's tint is `.primary`, so on this dark sheet the default prominent
+            // pill was a white fill under its white label. The action colour pair, as GroupStatsView uses.
+            .tint(Color.fariinAction)
+            .foregroundStyle(Color.onFariinAction)
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

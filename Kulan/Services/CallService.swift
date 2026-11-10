@@ -427,7 +427,15 @@ final class CallService: NSObject {
         // Merged, and keyed by role, so the two sides land in one document without racing each
         // other. Failures are ignored: a measurement must never be able to disturb a live call.
         db.collection("callTiming").document(id)
-            .setData([isCaller ? "caller" : "callee": payload], merge: true)
+            .setData([isCaller ? "caller" : "callee": payload, "expireAt": Self.timingExpiry()], merge: true)
+    }
+
+    /// Audit L7: a timing record says who called whom and how it went, so it must not outlive its
+    /// use. Every write stamps a top-level `expireAt` 30 days out, for a Firestore TTL policy on
+    /// `callTiming.expireAt` to delete it. The rules let no phone delete one, so this is the only
+    /// way the record goes. Records written before this have no field and need a one-time sweep.
+    static func timingExpiry() -> Timestamp {
+        Timestamp(date: Date().addingTimeInterval(30 * 86_400))
     }
     /// EITHER side accepted this call (callee: the tap; caller: the acceptedAt signal). The standard messengers'
     /// record rule, adopted on his order: an accepted call that then FAILS logs as a plain call,
@@ -3960,7 +3968,7 @@ final class CallService: NSObject {
                     self.db.collection("callTiming").document(id).setData([role: [
                         "audio5s": ["txBytes": tx, "rxBytes": rx, "unitOn": unitOn, "sessionUp": sessionUp,
                                     "muted": self.isMuted],
-                    ]], merge: true)
+                    ], "expireAt": Self.timingExpiry()], merge: true)
                     // ⛔ NOTHING WENT OUT AT ALL while not muted (owner 2026-10-24, @v: 0 bytes after
                     // another app's call took the mic; only a restart brought it back). Rebuild the
                     // audio now instead of leaving a silent call; logged so we know how often.
@@ -3977,7 +3985,8 @@ final class CallService: NSObject {
                             rtc.isAudioEnabled = false
                             rtc.isAudioEnabled = true
                         }
-                        self.db.collection("callTiming").document(id).setData([role: ["audioKick": true]], merge: true)
+                        self.db.collection("callTiming").document(id).setData([role: ["audioKick": true],
+                                                                               "expireAt": Self.timingExpiry()], merge: true)
                     }
                 }
             }

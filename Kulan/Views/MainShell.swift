@@ -168,7 +168,9 @@ struct MainShell: View {
             Task.detached(priority: .utility) {
                 let fm = FileManager.default
                 let tmp = fm.temporaryDirectory
-                let rules: [(String, TimeInterval)] = [("voice-once-page-", 600), ("pick-", 1800), ("story-up-", 86_400)]
+                // "voice-once-" covers both one-time voice copies: the player's "voice-once-<id>"
+                // and the page's "voice-once-page-<id>" (audit L22: only the page's was swept).
+                let rules: [(String, TimeInterval)] = [("voice-once-", 600), ("pick-", 1800), ("story-up-", 86_400)]
                 for name in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? [] {
                     guard let age = rules.first(where: { name.hasPrefix($0.0) })?.1 else { continue }
                     let url = tmp.appendingPathComponent(name)

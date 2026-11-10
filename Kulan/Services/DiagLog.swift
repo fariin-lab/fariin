@@ -22,6 +22,8 @@ enum DiagLog {
     private static let queue = DispatchQueue(label: "DiagLog")
     private static let maxBytes = 60_000
     private static let pendingKey = "diagLog.uploadPending"
+    /// The uid whose session the file belongs to (audit M3). Set by the first upload attempt.
+    private static let ownerKey = "diagLog.owner"
     @MainActor private static var uploading = false
 
     private static var fileURL: URL? {
@@ -128,6 +130,15 @@ enum DiagLog {
     /// probe; a failure (offline, rule not live yet) keeps the file and the flag for next time.
     @MainActor static func uploadIfPending(uid: String) {
         guard UserDefaults.standard.bool(forKey: pendingKey), !uploading else { return }
+        // Audit M3: a file written under another account is never sent under this one. The sign-out
+        // wipe normally removes it first; this covers a path that ended a session without the wipe.
+        let d = UserDefaults.standard
+        if let owner = d.string(forKey: ownerKey), owner != uid {
+            wipe()
+            d.set(uid, forKey: ownerKey)
+            return
+        }
+        d.set(uid, forKey: ownerKey)
         uploading = true
         queue.async {
             // The tail only: the file may be up to twice `maxBytes` between trims, and the rule caps
@@ -158,6 +169,15 @@ enum DiagLog {
                 }
             }
         }
+    }
+
+    /// Sign-out and account deletion (audit M3): the log and its upload flag go with the account, so
+    /// one account's trail is never sent under the next one's uid. Queued behind every line already
+    /// added, so nothing written before the wipe lands after it.
+    static func wipe() {
+        UserDefaults.standard.removeObject(forKey: pendingKey)
+        UserDefaults.standard.removeObject(forKey: ownerKey)
+        queue.async { if let url = fileURL { try? FileManager.default.removeItem(at: url) } }
     }
 
     /// Waits until every line added so far is on disk. For the moment before the process ends.

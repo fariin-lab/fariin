@@ -609,15 +609,22 @@ enum MediaFetch {
         return await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: enc)
     }
 
-    /// A chat photo: decrypt, bound for display, and store as an OWNED file (the mailman model may
-    /// delete the server copy, so this is the phone's only one).
+    /// A chat photo: decrypt, bound for display, and store in the image cache.
+    ///
+    /// Audit M18: stored as CACHE, not owned. The encrypted server copy stays (as for videos, see
+    /// `videoFinisher`; the server deletes only view-once media), so a downloaded photo can be
+    /// fetched and opened again, and owned files had no limit at all: busy groups grew the app by
+    /// gigabytes, and Keep Media and Clear Cache could not touch them. As cache it sits under the
+    /// image budget, Keep Media and Clear Cache, and downloads again when it is next shown. Photos
+    /// already stored as owned by earlier builds stay owned: some of their server copies may be
+    /// gone, so they are never put at risk. This phone's own sent photos stay owned too.
     static func photoFinisher(url: String, enc: EncMeta?, cid: String) -> MediaDownloads.Finisher {
         { file in
             guard let clear = await clearBytes(file, enc: enc, cid: cid),
                   let raw = UIImage(data: clear) else { return false }
             let bounded = raw.boundedForDisplay()
             let ready = (bounded === raw ? raw.preparingForDisplay() : bounded) ?? raw
-            DiskImageCache.shared.store(ready, data: clear, for: url, owned: true)
+            DiskImageCache.shared.store(ready, data: clear, for: url, owned: false)
             return true
         }
     }

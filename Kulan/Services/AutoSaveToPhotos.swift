@@ -19,7 +19,37 @@ enum AutoSaveToPhotos {
     /// The UserDefaults key the Settings toggle binds to, so there is one spelling of it.
     static let defaultsKey = "chats.saveToPhotos"
     private static let doneKey = "chats.saveToPhotos.done"
-    private static let doneCap = 600   // ids remembered, so a long-lived install stops growing
+    // Audit L24: the ledger is id -> when it was claimed, kept for `ledgerKeep`. That outlives the
+    // `window` below, so a message is remembered for as long as it could be offered again, and a
+    // reopened chat never saves it twice (the old 600-id list forgot, then saved old media again).
+    private static let doneCap = 3000
+    private static let ledgerKeep: TimeInterval = 8 * 86_400
+    /// Only media sent in the last 7 days is ever offered, so a phone back after a long time away
+    /// does not pour a backlog into the roll.
+    private static let window: TimeInterval = 7 * 86_400
+    /// When the Settings switch was turned on (seconds since 1970). Media sent before it is history
+    /// and stays out of the roll (audit L24: turning it on saved the whole chat history).
+    static let sinceKey = defaultsKey + ".since"
+    /// A chat set to Always keeps its own start, beside its choice (so the prefix wipe takes it too).
+    private static func chatSinceKey(_ cid: String) -> String { chatKeyPrefix + cid + ".since" }
+
+    /// The Settings switch was turned on: saving starts now.
+    static func noteTurnedOn() {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: sinceKey)
+    }
+
+    /// From when this chat saves. A switch that was on before this build has no stamp yet; it
+    /// starts counting from the first look, so it never reaches back into the history.
+    private static func since(cid: String) -> Date {
+        let d = UserDefaults.standard
+        let key = choice(for: cid) == .always ? chatSinceKey(cid) : sinceKey
+        var t = d.double(forKey: key)
+        if t <= 0 {
+            t = Date().timeIntervalSince1970
+            d.set(t, forKey: key)
+        }
+        return Date(timeIntervalSince1970: t)
+    }
 
     /// OFF by default. Writing into someone's camera roll is not a thing to assume.
     static var isOn: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
@@ -35,8 +65,16 @@ enum AutoSaveToPhotos {
         ChatChoice(rawValue: UserDefaults.standard.string(forKey: chatKeyPrefix + cid) ?? "") ?? .standard
     }
     static func setChoice(_ c: ChatChoice, for cid: String) {
+        let was = choice(for: cid)
         if c == .standard { UserDefaults.standard.removeObject(forKey: chatKeyPrefix + cid) }
         else { UserDefaults.standard.set(c.rawValue, forKey: chatKeyPrefix + cid) }
+        // Switching to Always starts saving now; picking Always again keeps its start; any other
+        // choice has no start of its own (audit L24).
+        if c == .always {
+            if was != .always { UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: chatSinceKey(cid)) }
+        } else {
+            UserDefaults.standard.removeObject(forKey: chatSinceKey(cid))
+        }
     }
     /// What this chat does in the end: its own choice, else the Settings switch.
     static func savesMedia(cid: String) -> Bool {
@@ -59,20 +97,30 @@ enum AutoSaveToPhotos {
     // so a failure retries next time but two passes cannot both save the same message.
     private static let lock = NSLock()
 
+    /// The ledger as stored. The old build kept a plain list of ids under the same key; that reads
+    /// as empty here, which is safe because `since` keeps everything older than the upgrade out.
+    private static func ledger() -> [String: Double] {
+        (UserDefaults.standard.dictionary(forKey: doneKey) as? [String: Double]) ?? [:]
+    }
+
     private static func claim(_ id: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        var ids = UserDefaults.standard.stringArray(forKey: doneKey) ?? []
-        guard !ids.contains(id) else { return false }
-        ids.append(id)
-        if ids.count > doneCap { ids.removeFirst(ids.count - doneCap) }
+        var ids = ledger()
+        guard ids[id] == nil else { return false }
+        let now = Date().timeIntervalSince1970
+        ids = ids.filter { now - $0.value < ledgerKeep }
+        ids[id] = now
+        if ids.count > doneCap {
+            for (old, _) in ids.sorted(by: { $0.value < $1.value }).prefix(ids.count - doneCap) { ids[old] = nil }
+        }
         UserDefaults.standard.set(ids, forKey: doneKey)
         return true
     }
 
     private static func release(_ id: String) {
         lock.lock(); defer { lock.unlock() }
-        var ids = UserDefaults.standard.stringArray(forKey: doneKey) ?? []
-        ids.removeAll { $0 == id }
+        var ids = ledger()
+        ids[id] = nil
         UserDefaults.standard.set(ids, forKey: doneKey)
     }
 
@@ -83,12 +131,23 @@ enum AutoSaveToPhotos {
         guard savesMedia(cid: cid), !m.viewOnce else { return }   // the chat's own choice first (2026-10-18)
         guard m.authorId != (AuthService.shared.uid ?? "") else { return }   // incoming only
         guard m.isImage || m.isVideo || m.isAlbum else { return }
+        // Audit L24: new media only. Nothing sent before saving was switched on, nothing older than
+        // the window, so turning it on (or opening an old chat) never pours history into the roll.
+        guard m.createdAt >= max(since(cid: cid), Date().addingTimeInterval(-window)) else { return }
         guard claim(m.id) else { return }
         Task.detached(priority: .utility) {
             // DISABLE SHARING › NO SAVING (owner, 2026-10-03; the reference's "can't save media from
             // this chat to their device gallery automatically"). The id stays claimed, so switching
             // the restriction off later does not pour the chat's old media into the roll.
-            if await MainActor.run(body: { ChatRestrictions.isOn(.noSaving, cid: cid) }) { return }
+            // Audit L24: nor from a message request nobody has accepted. A stranger's pictures do
+            // not go into the roll before the chat is accepted; claimed, so accepting later does not
+            // pour them in either.
+            let skip = await MainActor.run(body: { () -> Bool in
+                if ChatRestrictions.isOn(.noSaving, cid: cid) { return true }
+                guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return false }
+                return MessageRequests.isUnansweredRequest(c)
+            })
+            if skip { return }
             // PERMISSION FIRST, bytes second. The other order downloads and decrypts the whole
             // photo and only then discovers the library is off limits — and since a refusal
             // releases the id so it can retry if you grant access later, that would re-download

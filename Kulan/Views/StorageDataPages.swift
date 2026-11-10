@@ -239,8 +239,9 @@ struct UseLessDataPage: View {
     }
 }
 
-// Manage Storage: true numbers, honest buttons. Videos/voice are ONLY-copies (the
-// server deletes its copy after delivery) — Clear Media says so before deleting.
+// Manage Storage: true numbers, honest buttons. Audit M18: videos and voice notes are NOT the only
+// copies any more (the server keeps its encrypted copy; only view-once media is deleted there), so
+// Clear Media says they download again, and only what the server no longer has is gone for good.
 struct ManageStoragePage: View {
     @AppStorage("keepMediaDays") private var keepDays = 0   // 0 = forever
     @State private var photoBytes = 0
@@ -276,7 +277,7 @@ struct ManageStoragePage: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { refresh() }
                 }
             } footer: {
-                Text("Older photos are removed and download again when needed. Videos and voice notes are kept.")
+                Text("Downloaded photos and other cached media older than this are removed from this phone and download again when you open them. Videos and voice notes are kept.")
             }
 
             Section {
@@ -291,7 +292,7 @@ struct ManageStoragePage: View {
         .task { refresh() }
         .alert("Clear media?", isPresented: $confirmMedia) {
             Button("Cancel", role: .cancel) {}
-            Button("Delete Forever", role: .destructive) {
+            Button("Clear", role: .destructive) {
                 // Off the main thread (audit 2026-09-24): deleting a phone's worth of videos froze
                 // the page until the last file was gone.
                 Task {
@@ -303,7 +304,7 @@ struct ManageStoragePage: View {
                 }
             }
         } message: {
-            Text("Deletes the videos and voice notes on this phone. They can't be downloaded again.")
+            Text("Removes the videos and voice notes saved on this phone. They download again when you play them, unless they are no longer on the server.")
         }
         .alert("Clear cache?", isPresented: $confirmCache) {
             Button("Cancel", role: .cancel) {}

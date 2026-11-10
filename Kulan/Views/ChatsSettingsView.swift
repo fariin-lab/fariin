@@ -58,6 +58,7 @@ struct ChatsSettingsView: View {
                 Toggle("Save to Photos", badge: "chats.saveToPhotos", isOn: Binding(get: { saveToPhotos }, set: { on in
                     saveToPhotos = on
                     guard on else { return }
+                    AutoSaveToPhotos.noteTurnedOn()   // audit L24: from now on, not the history
                     Task { @MainActor in
                         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
                         guard status != .authorized, status != .limited else { return }

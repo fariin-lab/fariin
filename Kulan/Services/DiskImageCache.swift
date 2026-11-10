@@ -41,7 +41,9 @@ final class DiskImageCache {
     // grey placeholders. Nothing was being re-downloaded; the reads were just single-file.
     private let read = DispatchQueue(label: "DiskImageCache.read", qos: .userInitiated,
                                      attributes: .concurrent)
-    private let maxBytes = 250 * 1024 * 1024   // 250 MB budget
+    // 500 MB, up from 250 when received chat photos joined the cache tier (audit M18): they share
+    // the budget with avatars, stickers and previews, and the oldest download again when needed.
+    private let maxBytes = 500 * 1024 * 1024
 
     /// What a decoded image holds in memory: its pixels times four bytes.
     private static func cost(_ img: UIImage) -> Int {
@@ -57,7 +59,7 @@ final class DiskImageCache {
         mem.totalCostLimit = 120 * 1024 * 1024
         // Application Support, NOT Caches: iOS reclaims Caches under storage pressure, which was making
         // cached photos/avatars re-download after the OS purged them. Application Support is permanent
-        // (secure messengers store media here); the 250 MB LRU below bounds growth ourselves. Excluded
+        // (secure messengers store media here); the LRU budget below bounds growth ourselves. Excluded
         // from iCloud backup + file-protected at rest.
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         dir = base.appendingPathComponent("MediaCache", isDirectory: true)
@@ -232,7 +234,7 @@ final class DiskImageCache {
         io.async { [weak self] in
             try? bytes.write(to: f, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             self?.indexInsert(k)
-            self?.trimIfNeeded()
+            self?.trimIfNeeded(added: bytes.count)
         }
     }
 
@@ -298,7 +300,7 @@ final class DiskImageCache {
             // on a locked phone read nil, concluded "not cached", and re-downloaded.
             try? bytes.write(to: f, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             self?.indexInsert(k)
-            self?.trimIfNeeded()
+            self?.trimIfNeeded(added: owned ? 0 : bytes.count)   // owned files are not the budget's
         }
     }
 
@@ -349,6 +351,7 @@ final class DiskImageCache {
                     self.indexRemove(u.deletingPathExtension().lastPathComponent)
                 }
             }
+            self.cacheBytes = nil   // recounted on the next write
         }
     }
 
@@ -394,6 +397,7 @@ final class DiskImageCache {
                 indexRemove(u.deletingPathExtension().lastPathComponent)
             }
         }
+        io.async { [weak self] in self?.cacheBytes = nil }   // the total lives on `io`
     }
 
     /// Wipe both tiers (Settings → Clear Cache).
@@ -410,11 +414,26 @@ final class DiskImageCache {
                     self.indexRemove(u.deletingPathExtension().lastPathComponent)
                 }
             }
+            self.cacheBytes = nil   // recounted on the next write
         }
     }
 
+    /// Running total of the `.img` files, so a write does not list the whole folder (audit L25: every
+    /// write stat'ed every file, and photos loaded slower as the folder grew). Only touched on `io`.
+    /// nil = not known: the next write counts the folder once. The removals that empty many files
+    /// (clear, sweep, wipe) set it back to nil; a single removal leaves it as it is. Either way a
+    /// stale total can only run HIGH (a removed file is still in it, a file written twice is added
+    /// twice), and a high total only brings the next real count forward; it can never let the
+    /// folder grow past the budget.
+    private var cacheBytes: Int?
+
     // Drop the oldest files once the budget is exceeded (LRU by modification date).
-    private func trimIfNeeded() {
+    private func trimIfNeeded(added: Int) {
+        if let known = cacheBytes {
+            let total = known + added
+            cacheBytes = total
+            guard total > maxBytes else { return }
+        }
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { return }
@@ -425,6 +444,7 @@ final class DiskImageCache {
             return (u, size, date)
         }
         var total = files.reduce(0) { $0 + $1.1 }
+        defer { cacheBytes = total }
         guard total > maxBytes else { return }
         files.sort { $0.2 < $1.2 }   // oldest first
         for (u, size, _) in files where total > maxBytes {

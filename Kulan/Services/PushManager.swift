@@ -36,11 +36,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // its AVPlayer both read URLCache.shared first). It was left at the tiny iOS default, so warmed
         // story images/videos were evicted between launches and re-downloaded. A 100 MB memory / 1 GB
         // disk store keeps story media on disk across relaunches. Set FIRST, before any URLSession runs.
+        var storyCacheDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("URLCache", isDirectory: true)
         let storyCache = URLCache(memoryCapacity: 100 * 1024 * 1024,
                                   diskCapacity: 1024 * 1024 * 1024,
-                                  directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                                      .appendingPathComponent("URLCache", isDirectory: true))
+                                  directory: storyCacheDir)
         URLCache.shared = storyCache
+        // Audit M19: re-downloadable story media, up to 1 GB, has no place in the iCloud backup.
+        // The folder is made here if URLCache has not made it yet, so the flag can be set on it.
+        try? FileManager.default.createDirectory(at: storyCacheDir, withIntermediateDirectories: true)
+        var noBackup = URLResourceValues()
+        noBackup.isExcludedFromBackup = true
+        try? storyCacheDir.setResourceValues(noBackup)
 
         // 2026-09-24 fix-all #161: App Check provider, installed before configure (see AppCheckSetup).
         AppCheckSetup.install()

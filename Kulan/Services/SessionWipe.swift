@@ -2,6 +2,7 @@ import Foundation
 import UserNotifications
 import FirebaseAuth
 import FirebaseFirestore
+import StoryUI
 
 /// Every piece of account-scoped state that lives on this DEVICE, wiped in one place.
 /// Called on sign-out and account deletion — the singletons otherwise outlive the
@@ -132,7 +133,8 @@ enum SessionWipe {
         // Save to Photos and its saved-list are this account's choice, not the phone's.
         UserDefaults.standard.removeObject(forKey: AutoSaveToPhotos.defaultsKey)
         UserDefaults.standard.removeObject(forKey: AutoSaveToPhotos.defaultsKey + ".done")
-        AutoSaveToPhotos.removeChatChoices()   // the per-chat overrides (2026-10-18)
+        UserDefaults.standard.removeObject(forKey: AutoSaveToPhotos.sinceKey)   // audit L24
+        AutoSaveToPhotos.removeChatChoices()   // the per-chat overrides (2026-10-18), their start dates too
         ChatService.clearSharedMediaCache()
         ConversationsRepository.shared.reset()
         StoriesRepository.shared.reset()
@@ -236,6 +238,19 @@ enum SessionWipe {
         // and the resume-at-launch path would hand them to whoever signs in next, under their
         // credentials, retrying forever because a job that cannot finish is kept for the next launch.
         PendingUploadStore.removeAll()
+        // Audit H9: the Add files page keeps plain copies of every file this account sent, and
+        // opening, sending, retrying, sharing and exporting leave plain copies in tmp. None of them
+        // is the only copy of anything, and none is the next account's.
+        FileRecents.wipeAll()
+        removeTempCopies()
+        // Audit M3: the diagnostic log is this account's trail, never to be uploaded under the next.
+        DiagLog.wipe()
+        // Audit M19: the stories the leaving account could see, close-friends ones included: the
+        // 1 GB URLCache the viewer reads first, its own photo and clip folders, and the decoded
+        // photos and frames in memory. All re-downloadable, so a plain Sign Out takes them too.
+        URLCache.shared.removeAllCachedResponses()
+        StoryStorage.removeAll()
+        StoryVideoFrames.clearAll()
         AppRouter.shared.pendingChatId = nil
         AppRouter.shared.pendingChatName = nil
         AppRouter.shared.pendingChatPhoto = nil
@@ -270,6 +285,21 @@ enum SessionWipe {
         // Deletion and revocation pass nil and take every copy, as before.
         ConversationsDiskCache.shared.wipeAll(keeping: keptUid)
         Crypto.shared.wipeIdentity()            // fresh keypair for the next account
+    }
+
+    /// Audit H9: the plain copies of files in tmp, by the names their writers give them: a document
+    /// opened ("open-"), sent ("sent-file-"), waiting for Resend ("pending-file-", "pending-video-"),
+    /// shared ("share-"), exported from Photos ("photo-files"), a one-time voice note ("voice-once-")
+    /// and the account's data export ("FariinExport"). Upload staging is left to `PendingUploadStore`.
+    private static func removeTempCopies() {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory
+        let prefixes = ["open-", "sent-file-", "pending-file-", "pending-video-", "share-",
+                        "photo-files", "voice-once-", "FariinExport"]
+        for name in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? []
+        where prefixes.contains(where: { name.hasPrefix($0) }) {
+            try? fm.removeItem(at: tmp.appendingPathComponent(name))
+        }
     }
 
     nonisolated private static let keptMediaKey = "session.keptMediaFor"

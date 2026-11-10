@@ -119,6 +119,22 @@ public enum StoryStorage {
     /// cannot get back without deleting the app.
     private static let ceiling = 300 * 1024 * 1024
 
+    /// Sign-out and account deletion (audit M19): every story photo and clip on this phone goes,
+    /// and the decoded photos in memory with them. The stories the leaving account could see,
+    /// close-friends ones included, are not the next account's. The directories themselves stay,
+    /// because `directory(_:)` hands out their URLs from memory for the rest of the process.
+    /// Synchronous, like the other sign-out wipes: a queued delete can be lost to a kill.
+    public static func removeAll() {
+        let fm = FileManager.default
+        for name in ["StoryImageCache", "VideoCache"] {
+            let dir = directory(name)
+            for u in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] {
+                try? fm.removeItem(at: u)
+            }
+        }
+        StoryMemoryCache.removeAll()
+    }
+
     public static func purgeExpired() {
         let names = ["StoryImageCache", "VideoCache"]
         DispatchQueue.global(qos: .utility).async {

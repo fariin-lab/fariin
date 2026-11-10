@@ -451,7 +451,7 @@ struct MediaApprovalView: View {
                         ZStack(alignment: .bottomLeading) {
                             Group {
                                 if let t = item.thumb {
-                                    Image(uiImage: t).resizable().scaledToFill()
+                                    RailThumbImage(image: t)
                                 } else {
                                     Rectangle().fill(.gray.opacity(0.3))
                                         .overlay { Image(systemName: "video.fill").font(.system(size: 14)).foregroundStyle(.white) }
@@ -638,6 +638,49 @@ struct MediaApprovalView: View {
 
     private func fmt(_ s: Double) -> String {
         let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
+/// A rail tile's picture at tile size (audit H7). Drawing the full camera photo into a 48pt tile
+/// decoded every picked photo at full size (48 to 96 MB each), so a big pick asked for gigabytes and
+/// iOS killed the app. This draws a copy cut down to the tile, made off the main thread, and the
+/// full photo is decoded only by the page that shows it. An edit (crop, pen) is a new image object,
+/// so the task runs again and the tile follows it.
+private struct RailThumbImage: View {
+    let image: UIImage
+    @State private var small: UIImage?
+
+    /// 48pt at 3x, the shortest side, so the tile's aspect fill still has pixels to crop.
+    private static let side: CGFloat = 144
+
+    var body: some View {
+        Group {
+            if let small {
+                Image(uiImage: small).resizable().scaledToFill()
+            } else {
+                Rectangle().fill(.gray.opacity(0.3))
+            }
+        }
+        .task(id: ObjectIdentifier(image)) {
+            small = await Self.thumbnail(of: image)
+        }
+    }
+
+    private static func thumbnail(of image: UIImage) async -> UIImage? {
+        let w = image.size.width * image.scale, h = image.size.height * image.scale
+        guard w > 0, h > 0 else { return nil }
+        let f = side / min(w, h)
+        guard f < 1 else { return image }   // already tile-sized
+        let target = CGSize(width: max(1, floor(w * f)), height: max(1, floor(h * f)))
+        if let t = await image.byPreparingThumbnail(ofSize: target) { return t }
+        // Not every image can be thumbnailed by UIKit (a CIImage-backed one, say): draw it small.
+        return await Task.detached(priority: .userInitiated) { () -> UIImage in
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            return UIGraphicsImageRenderer(size: target, format: format).image { _ in
+                image.draw(in: CGRect(origin: .zero, size: target))
+            }
+        }.value
     }
 }
 

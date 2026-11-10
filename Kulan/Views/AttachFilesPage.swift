@@ -26,13 +26,38 @@ enum FileRecents {
     static let maxBytes = 25 * 1024 * 1024
 
     private static var uid: String { AuthService.shared.uid ?? "none" }
-    private static var key: String { "files.recent.v1.\(uid)" }
+    private static let keyPrefix = "files.recent.v1."
+    private static var key: String { keyPrefix + uid }
+
+    /// The folder that holds every account's copies.
+    private static var root: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("RecentFiles", isDirectory: true)
+    }
 
     static var dir: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let d = base.appendingPathComponent("RecentFiles/\(uid)", isDirectory: true)
+        let d = root.appendingPathComponent(uid, isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        // Audit H9: plain copies of sent files do not belong in the iCloud backup. Set on the root
+        // so every account's folder under it is covered, including ones made by earlier builds.
+        // Once per launch (and again after a wipe made the folder anew), not on every lookup.
+        if !rootMarked {
+            var r = root
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            if (try? r.setResourceValues(values)) != nil { rootMarked = true }
+        }
         return d
+    }
+    private static var rootMarked = false
+
+    /// Sign-out and account deletion (audit H9): every account's copies and lists go. Nothing here
+    /// is the only copy of anything; the files went out in their messages.
+    static func wipeAll() {
+        try? FileManager.default.removeItem(at: root)
+        rootMarked = false
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix(keyPrefix) { d.removeObject(forKey: k) }
     }
 
     static func url(_ r: RecentFile) -> URL { dir.appendingPathComponent(r.file) }

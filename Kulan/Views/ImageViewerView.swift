@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import Photos
+import ImageIO
 
 // Direction-locked pan gesture recognizer. Fariin-local copy so the
 // app target can use it (the StoryUI package has its own). Only begins in the allowed direction.
@@ -155,7 +156,8 @@ struct ImageViewerView: View {
     @State private var confirmDelete = false
     @State private var deleteFailed = false     // the server refused — say so, like the bubble delete does
     @State private var shareItems: [Any]?
-    @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image
+    @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image (near pages only, see trimLoaded)
+    @State private var stripThumbs: [String: UIImage] = [:]   // page id -> small filmstrip copy (audit H8)
     @State private var pageZoom: CGFloat = 1              // current page's zoom (1 == fit); gates drag-close
     /// Which page the ±1 render window is centred on. Deliberately BEHIND `current` — it catches up
     /// once a swipe has settled, so no page is built or torn down while a finger is still dragging.
@@ -417,6 +419,7 @@ struct ImageViewerView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 guard token == settleToken else { return }   // superseded by a newer swipe
                 windowIndex = currentIndex
+                trimLoaded()   // after the settle, like the window: no state churn mid-swipe
             }
         }
         .task {
@@ -683,13 +686,75 @@ struct ImageViewerView: View {
     }
 
     @ViewBuilder private func thumbImage(_ m: Message) -> some View {
-        // Same warm-cache fallback as the pages, so the filmstrip isn't a row of grey boxes on open.
-        if let img = loaded[m.id] ?? m.imageUrl.flatMap({ DiskImageCache.shared.memoryImage($0) }) {
-            Image(uiImage: img).resizable().scaledToFill()
+        // Audit H8: the strip draws a SMALL copy of each photo, kept in `stripThumbs`. It used to
+        // load every thumb's full picture into `loaded` and keep it there, so paging through a chat
+        // with hundreds of photos grew memory until iOS killed the app.
+        if let small = stripThumbs[m.id] {
+            Image(uiImage: small).resizable().scaledToFill()
         } else {
-            Color.white.opacity(0.15)
-                .task { await load(m) }   // strip thumbs load lazily like pages
+            Group {
+                // Same warm-cache fallback as the pages, so the filmstrip isn't a row of grey boxes
+                // on open; the small copy replaces it a moment later.
+                if let img = loaded[m.id] ?? m.imageUrl.flatMap({ DiskImageCache.shared.memoryImage($0) }) {
+                    Image(uiImage: img).resizable().scaledToFill()
+                } else {
+                    Color.white.opacity(0.15)
+                }
+            }
+            .task { await loadThumb(m) }   // strip thumbs load lazily like pages
         }
+    }
+
+    /// The filmstrip's small copy of one photo. The full picture is read from wherever it already is
+    /// (or fetched by the page loader, as before) and cut down; the full one is then kept only if
+    /// its page is near the one on screen.
+    private func loadThumb(_ m: Message) async {
+        guard stripThumbs[m.id] == nil else { return }
+        var source = cachedImage(m)
+        if source == nil, let u = m.imageUrl, !u.isEmpty { source = await DiskImageCache.shared.image(for: u) }
+        if source == nil {
+            await load(m)
+            source = loaded[m.id]
+        }
+        guard let source, let small = await Self.stripThumb(source) else { return }
+        stripThumbs[m.id] = small
+        if !isNearCurrent(m.id), !m.viewOnce { loaded[m.id] = nil }
+    }
+
+    /// About 3x the strip's 38pt tile on its shortest side, off the main thread.
+    private static func stripThumb(_ image: UIImage) async -> UIImage? {
+        let w = image.size.width * image.scale, h = image.size.height * image.scale
+        guard w > 0, h > 0 else { return nil }
+        let f: CGFloat = 120 / min(w, h)
+        guard f < 1 else { return image }
+        return await image.byPreparingThumbnail(ofSize: CGSize(width: max(1, floor(w * f)), height: max(1, floor(h * f))))
+    }
+
+    /// How far from the current page `loaded` keeps a full picture: the still window and a page of
+    /// margin, so nothing the pager may draw is ever dropped.
+    private static let keepWindow = stillWindow + 2
+
+    private func isNearCurrent(_ id: String) -> Bool {
+        let map = indexById
+        guard let i = map[id], let c = map[current] else { return false }
+        return abs(i - c) <= Self.keepWindow
+    }
+
+    /// Audit H8: `loaded` held a full decoded photo for every page ever visited and never let go.
+    /// Run once a swipe has settled: pages far from the current one give theirs back (the memory
+    /// cache or the disk serves them again if they come back into reach), and the strip keeps its
+    /// small copies only for a stretch around it.
+    private func trimLoaded() {
+        let map = indexById
+        guard let c = map[current] else { return }
+        // A one-time photo is never let go: it cannot be fetched a second time.
+        let farLoaded = loaded.keys.filter { id in
+            guard let i = map[id] else { return true }
+            return abs(i - c) > Self.keepWindow && !gallery[i].viewOnce
+        }
+        for id in farLoaded { loaded[id] = nil }
+        let farThumbs = stripThumbs.keys.filter { id in map[id].map { abs($0 - c) > 60 } ?? true }
+        for id in farThumbs { stripThumbs[id] = nil }
     }
 
     // Bottom toolbar: 48px real Liquid Glass circle buttons — Share · Pen (draw on it + re-send) ·
@@ -790,7 +855,17 @@ struct ImageViewerView: View {
         if let url = URL(string: u), let meta = m.enc,
            let (cipher, _) = try? await MediaSession.shared.data(from: url),
            let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) {
-            loaded[m.id] = UIImage(data: dec)
+            // Audit H8: decoded off the main thread and bounded to display size, like every cache
+            // read, instead of a full-size bitmap per page. And kept in the image cache (never a
+            // one-time photo), so a page that `trimLoaded` let go reads from disk when it comes
+            // back instead of downloading again.
+            let img = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                guard let raw = UIImage(data: dec) else { return nil }
+                let bounded = raw.boundedForDisplay()
+                return (bounded === raw ? raw.preparingForDisplay() : bounded) ?? raw
+            }.value
+            loaded[m.id] = img
+            if let img, !m.viewOnce { DiskImageCache.shared.store(img, data: dec, for: u) }
             // A view-once photo from someone else is spent on the server now, with the picture
             // already in hand, not when this viewer closes.
             if m.viewOnce, m.authorId != AuthService.shared.uid, !Task.isCancelled {
@@ -834,46 +909,85 @@ struct ImageViewerView: View {
         guard !savingLocked else { return }
         let pages = albumSiblings
         Task {
-            var images: [UIImage] = []
+            // Audit L23: each photo's original bytes where this phone has them, the picture on
+            // screen otherwise (the old behaviour).
+            // In album order: each entry is the original bytes or, failing that, the picture.
+            var items: [(original: Data?, image: UIImage?)] = []
             for m in pages {
+                if let d = await Self.originalBytes(m) { items.append((d, nil)); continue }
                 if let img = await MainActor.run(body: { loaded[m.id] ?? cachedImage(m) }) {
-                    images.append(img); continue
+                    items.append((nil, img)); continue
                 }
                 await load(m)
-                if let img = await MainActor.run(body: { loaded[m.id] }) { images.append(img) }
+                if let img = await MainActor.run(body: { loaded[m.id] }) { items.append((nil, img)) }
             }
-            guard !images.isEmpty else { await MainActor.run { saveError = true }; return }
+            let found = items.count
+            guard found > 0 else { await MainActor.run { saveError = true }; return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard status == .authorized || status == .limited else { await MainActor.run { saveError = true }; return }
             do {
+                let toSave = items
                 try await PHPhotoLibrary.shared().performChanges {
-                    for img in images { PHAssetChangeRequest.creationRequestForAsset(from: img) }
+                    for item in toSave {
+                        if let d = item.original {
+                            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: d, options: nil)
+                        } else if let img = item.image {
+                            PHAssetChangeRequest.creationRequestForAsset(from: img)
+                        }
+                    }
                 }
                 await MainActor.run {
                     // A page that could not be decrypted is reported, not skipped silently.
-                    if images.count < pages.count { saveError = true } else { withAnimation { saved = true } }
-                    UINotificationFeedbackGenerator().notificationOccurred(images.count < pages.count ? .warning : .success)
+                    if found < pages.count { saveError = true } else { withAnimation { saved = true } }
+                    UINotificationFeedbackGenerator().notificationOccurred(found < pages.count ? .warning : .success)
                 }
             } catch { await MainActor.run { saveError = true } }
         }
     }
 
+    /// Audit L23: the photo exactly as it arrived (the sender's file, decrypted), for Save to
+    /// Photos. The bytes kept at send for my own photo, else the image cache's stored copy, which
+    /// holds the original file rather than the display-bounded picture. nil when neither is on this
+    /// phone, or the bytes are not an image Photos can take.
+    private static func originalBytes(_ m: Message) async -> Data? {
+        if let d = m.localImageData, isImageData(d) { return d }
+        guard let u = m.imageUrl, !u.isEmpty, let d = await DiskImageCache.shared.rawData(for: u),
+              isImageData(d) else { return nil }
+        return d
+    }
+
+    private static func isImageData(_ d: Data) -> Bool {
+        guard !d.isEmpty, let src = CGImageSourceCreateWithData(d as CFData, nil) else { return false }
+        return CGImageSourceGetType(src) != nil && CGImageSourceGetCount(src) > 0
+    }
+
     private func save() {
         guard !savingLocked else { return }
         Task {
+            let shown = gallery.first(where: { $0.id == current })
+            // Audit L23: the photo as it arrived, not the display copy (bounded to 2048 px and
+            // re-encoded by Photos). nil falls back to the picture on screen, as before.
+            var found: Data?
+            if let shown { found = await Self.originalBytes(shown) }
+            let original = found
+            var resolved = currentImage
             // Last resort: a page still decrypting has neither, so fetch it before giving up rather
             // than reporting a failure the user can see is wrong.
-            var resolved = currentImage
-            if resolved == nil, let m = gallery.first(where: { $0.id == current }) {
+            if original == nil, resolved == nil, let m = shown {
                 await load(m)
                 resolved = loaded[current]
             }
-            guard let image = resolved else { await MainActor.run { saveError = true }; return }
+            guard original != nil || resolved != nil else { await MainActor.run { saveError = true }; return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard status == .authorized || status == .limited else { await MainActor.run { saveError = true }; return }
             do {
+                let image = resolved
                 try await PHPhotoLibrary.shared().performChanges {
-                    PHAssetChangeRequest.creationRequestForAsset(from: image)
+                    if let original {
+                        PHAssetCreationRequest.forAsset().addResource(with: .photo, data: original, options: nil)
+                    } else if let image {
+                        PHAssetChangeRequest.creationRequestForAsset(from: image)
+                    }
                 }
                 await MainActor.run {
                     withAnimation { saved = true }

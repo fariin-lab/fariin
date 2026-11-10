@@ -494,7 +494,8 @@ final class StoryCoverUIView: UIView {
 
         // First frame from memory, exactly as `StoryImage.init` does — a fresh instance drawing one
         // skeleton frame over bytes we already hold is the card flash he filmed while scrolling.
-        if let warm = DiskImageCache.shared.memoryImage(url) {
+        // The card-size copy first (audit M24), then a full one some other screen already decoded.
+        if let warm = DiskImageCache.shared.memoryImage(Self.cardKey(url)) ?? DiskImageCache.shared.memoryImage(url) {
             show(warm, animated: false)
         } else {
             show(nil, animated: false)
@@ -543,10 +544,36 @@ final class StoryCoverUIView: UIView {
         }
     }
 
+    /// Audit M24: the card draws a copy decoded at card size, off the main thread, as `StoryImage`
+    /// does for its cards. It decoded the full story photo instead: `UIImage(data:)` on the main
+    /// thread is lazy, so the full-size decode landed on the first draw, mid-scroll, and every card
+    /// held a full bitmap. Longest side in pixels: a row card is about 106 x 155 pt, so 600 covers
+    /// it at 3x with room for the fill crop.
+    private nonisolated static let cardPixels: CGFloat = 600
+    private static func cardKey(_ url: String) -> String { "\(url)#\(Int(cardPixels))" }
+
+    /// Off the main thread: the small decode, and its JPEG for the disk copy.
+    private nonisolated static func cardImage(_ data: Data) -> (UIImage, Data?)? {
+        guard let img = StoryImage.decode(data, maxPixels: cardPixels) else { return nil }
+        return (img, img.jpegData(compressionQuality: 0.85))
+    }
+
     private func load(_ target: String) async {
-        if let cached = await DiskImageCache.shared.image(for: target) {
+        let key = Self.cardKey(target)
+        if let cached = await DiskImageCache.shared.image(for: key) {
             guard !Task.isCancelled, url == target else { return }
             show(cached, animated: true)
+            return
+        }
+        // The full bytes already on this phone (a card from an earlier build kept them under the
+        // plain url, or the viewer has them): cut down, no download.
+        if let (small, jpeg) = await Task.detached(priority: .userInitiated, operation: { () -> (UIImage, Data?)? in
+            guard let d = DiskImageCache.shared.bytesSync(target) ?? StoryBytes.data(for: target) else { return nil }
+            return Self.cardImage(d)
+        }).value {
+            DiskImageCache.shared.store(small, data: jpeg, for: key)
+            guard !Task.isCancelled, url == target else { return }
+            show(small, animated: true)
             return
         }
         guard let u = URL(string: target), !target.isEmpty else { return }
@@ -554,10 +581,14 @@ final class StoryCoverUIView: UIView {
         for delay in delays {
             if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
             if Task.isCancelled || url != target { return }
-            if let (data, _) = try? await MediaSession.shared.data(from: u), let img = UIImage(data: data) {
-                DiskImageCache.shared.store(img, data: data, for: target)
+            if let (data, _) = try? await MediaSession.shared.data(from: u),
+               let (small, jpeg) = await Task.detached(priority: .userInitiated, operation: { Self.cardImage(data) }).value {
+                // The full bytes stay on disk where they always went (bytes only, nothing decoded),
+                // so opening the story or another screen's card needs no second download.
+                DiskImageCache.shared.storeBytes(data, for: target)
+                DiskImageCache.shared.store(small, data: jpeg, for: key)
                 guard !Task.isCancelled, url == target else { return }
-                show(img, animated: true)
+                show(small, animated: true)
                 return
             }
         }
