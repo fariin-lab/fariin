@@ -65,6 +65,9 @@ struct WallpaperPickerSheet: View {
     private var showsBubbleRow: Bool { !globalOnly && !sharedGroup && !channel && BubbleStyles.shown }
     /// What the Bubble Styles row adds to the sheet's fixed height.
     private static let bubbleRowHeight: CGFloat = 100
+    /// What the Bubble Color row takes: its label (20) + 8 + the 52pt circles with 2 above and below
+    /// (56) + the body's 16pt spacing above it.
+    private static let colorRowHeight: CGFloat = 100
     // The wallpaper/colour in use when the sheet OPENED — must be @State: the live preview writes to the
     // observed store, which re-creates this struct, and a plain `let` re-captured the PREVIEWED value as
     // "original" (hasPendingChange went false → no Apply button, closes acted like auto-apply).
@@ -281,7 +284,10 @@ struct WallpaperPickerSheet: View {
         // note records.
         // One height now: the in-chat sheet has no second row under Apply (see the button block).
         // The Bubble Styles row (in a chat only) adds its own height.
-        .presentationDetents([.height(355 + (showsBubbleRow ? Self.bubbleRowHeight : 0) + Self.bottomInset)])
+        // A channel has no Bubble Color row (see the body), so its height comes off too (owner
+        // 2026-11-10: an empty band sat between the wallpapers and the button).
+        .presentationDetents([.height(355 - (channel ? Self.colorRowHeight : 0)
+                                      + (showsBubbleRow ? Self.bubbleRowHeight : 0) + Self.bottomInset)])
         .presentationDragIndicator(.visible)
         // ⛔ CLEAR — owner, 2026-09-11: "Chat Wallpaper sheet looks different colors top header and
         // bottom ... that sheet make clear". The system's glass sheet was tinting the two bar bands
