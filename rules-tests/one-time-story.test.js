@@ -34,7 +34,7 @@ const oneTimeStory = {
   recipientUids: [B],
   mediaPath: `stories/${SID}/photo.jpg`,
   type: 'image',
-  mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/real.jpg',
+  mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fphoto.jpg?alt=media&token=t',
   thumbUrl: '',
   caption: '',
   replyCount: 0,

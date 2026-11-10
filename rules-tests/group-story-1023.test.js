@@ -79,9 +79,9 @@ const cases = [
   ['FIX     groupId naming a 1:1 chat', 'ALLOW', 'DENY', OWNER, storyPath, 'create', gs(OWNER, { groupId: DM }), null, storyMocks(OWNER)],
   // A posted story keeps its group.
   ['FIX     the author moves a story into a group', 'ALLOW', 'DENY', OWNER, storyPath, 'update',
-    gs(OWNER, { mediaUrl: 'https://x/y.jpg' }), story(OWNER), storyMocks(OWNER)],
+    gs(OWNER, { mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fphoto.jpg?alt=media&token=t' }), story(OWNER), storyMocks(OWNER)],
   ['OK      the author fills in the media url', 'ALLOW', 'ALLOW', OWNER, storyPath, 'update',
-    gs(OWNER, { mediaUrl: 'https://x/y.jpg' }), gs(OWNER), storyMocks(OWNER)],
+    gs(OWNER, { mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fphoto.jpg?alt=media&token=t' }), gs(OWNER), storyMocks(OWNER)],
   // The switch is the owner's.
   ['OK      the owner turns admin stories off', 'ALLOW', 'ALLOW', OWNER, convPath, 'update', off, g, convMocks(convPath, g)],
   ['OK      the owner turns them back on', 'ALLOW', 'ALLOW', OWNER, convPath, 'update', g, off, convMocks(convPath, off)],

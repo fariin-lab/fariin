@@ -130,7 +130,7 @@ const cases = [
   // The mirror is what a stranger reads instead: media only, no audience.
   { name: 'S1 stranger reads the public MIRROR', expect: 'ALLOW', uid: C, method: 'get',
     path: `${D}/users/${A}/publicStories/${SID}`,
-    before: { authorUid: A, mediaUrl: 'https://x/y.jpg', type: 'image' }, mocks: mocksFor(C) },
+    before: { authorUid: A, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fphoto.jpg?alt=media&token=t', type: 'image' }, mocks: mocksFor(C) },
   // ⚠️ THIS PAYLOAD IS THE ONE THE APP ACTUALLY WRITES, field for field, and it has to stay that
   // way. It used to be the nine fields below without `blurThumb`, so when the app started sending a
   // tenth this test kept passing while EVERY REAL MIRROR WRITE WAS DENIED — `hasOnly` fails the
@@ -138,7 +138,7 @@ const cases = [
   // green rules suite over a payload nobody sends is worth nothing.
   { name: 'S1 author writes their own mirror', expect: 'ALLOW', uid: A, method: 'create',
     path: `${D}/users/${A}/publicStories/${SID}`,
-    after: { authorUid: A, createdAt: NOW, expiresAt: SOON, mediaUrl: 'https://x/y.jpg',
+    after: { authorUid: A, createdAt: NOW, expiresAt: SOON, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fphoto.jpg?alt=media&token=t',
              thumbUrl: '', type: 'image', caption: '', duration: 0, allowsReplies: true,
              blurThumb: '/9j/4AAQSkZJRg==' },
     mocks: mocksFor(A) },
@@ -149,7 +149,7 @@ const cases = [
     mocks: mocksFor(C) },
   { name: 'S1 the mirror cannot smuggle recipientUids back in', expect: 'DENY', uid: A,
     method: 'create', path: `${D}/users/${A}/publicStories/${SID}`,
-    after: { authorUid: A, createdAt: NOW, expiresAt: SOON, mediaUrl: 'https://x/y.jpg',
+    after: { authorUid: A, createdAt: NOW, expiresAt: SOON, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fphoto.jpg?alt=media&token=t',
              thumbUrl: '', type: 'image', caption: '', duration: 0, allowsReplies: true,
              recipientUids: [B] },
     mocks: mocksFor(A) },

@@ -15,7 +15,11 @@ const adminRows = { [OWNER]: { role: 'owner' }, [SENDER]: { perms: ['send'] }, [
 const fsMocks = (fn) => Object.keys(adminRows).flatMap((u) => [
   { function: fn('exists'), args: [{ exactValue: `${D}/admins/${u}` }], result: { value: true } },
   { function: fn('get'), args: [{ exactValue: `${D}/admins/${u}` }], result: { value: { data: adminRows[u] } } },
-]).concat([{ function: fn('exists'), args: [{ anyValue: {} }], result: { value: false } }]);
+]).concat([
+  // L10 (release audit 2026-11-10): a story already saved by ostorySave.
+  { function: fn('exists'), args: [{ exactValue: `${D}/officialStories/saved1` }], result: { value: true } },
+  { function: fn('exists'), args: [{ anyValue: {} }], result: { value: false } },
+]);
 
 const story = { kind: 'image', caption: 'hi', deleted: false };
 const F = `${D}/officialStories/abc123`;
@@ -50,6 +54,11 @@ const scases = [
   ['admin uploads 51 MB video', 'DENY', OWNER, P('media.mp4'), 'create', mp4(51 * 1024 * 1024), null],
   ['admin uploads into a sub-folder', 'DENY', OWNER, `${O}/officialStories/abc123/x/media.jpg`, 'create', jpg(), null],
   ['admin deletes media.jpg', 'DENY', OWNER, P('media.jpg'), 'delete', null, jpg()],
+  // L10 (release audit 2026-11-10): an admin row without `send` may not upload, and nobody may
+  // replace the files of a story that is already saved.
+  ['moderator (no send) uploads media.jpg', 'DENY', MOD, P('media.jpg'), 'create', jpg(), null],
+  ['sender overwrites the media of a saved story', 'DENY', SENDER, `${O}/officialStories/saved1/media.jpg`, 'update', jpg(600000), jpg()],
+  ['owner uploads into a saved story', 'DENY', OWNER, `${O}/officialStories/saved1/thumb.jpg`, 'create', jpg(), null],
 ];
 
 async function ask(t, file, content, testCase) {

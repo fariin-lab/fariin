@@ -97,7 +97,10 @@ service firebase.storage {
     // as application/octet-stream (NOT an image). Don't require an image content
     // type (that was rejecting every encrypted photo + voice note); just auth + size.
     match /chat/{cid}/{file} {
-      allow read: if request.auth != null;
+      // Release audit 2026-11-10 M8: a member reads (a removed member no longer does), and so do
+      // the people the Firestore message rule lets read the chat: a channel's followers and anyone
+      // reading a public, not encrypted group from outside. See `chatReader`.
+      allow read: if request.auth != null && chatReader(cid);
 
       // ⚠️ THIS RULE USED TO CHECK ONE THING: are you signed in. Nothing else. Not whether you are
       // in that chat, not whether the file already existed, not what kind of file it was.
@@ -147,8 +150,12 @@ service firebase.storage {
       //     message can be sent, so the lookup always has something to read.
       // ⚠️ The group half depends on firestore.get() working from Storage rules in this project (the
       // warning above). Emulator or one real group photo right after deploying, before trusting it.
-      allow write: if request.auth != null
+      // Release audit 2026-11-10 M5: no anonymous uploader, and only what both apps write here: a
+      // sealed `.enc` file named after its message, sent as application/octet-stream.
+      allow write: if uploader()
         && request.resource.size < 64 * 1024 * 1024
+        && request.resource.contentType == 'application/octet-stream'
+        && file.matches('[A-Za-z0-9_-]{1,128}([.][a-z0-9]{1,12})?[.]enc')
         && (resource == null || sameBytesRetry())   // 2026-09-24 fix-all: a lost-answer retry
         && chatMember(cid);
 
@@ -264,6 +271,44 @@ service firebase.storage {
             && request.auth.uid in firestore.get(/databases/(default)/documents/conversations/$(cid)).data.users);
     }
 
+    // Release audit 2026-11-10 M8: who may READ a chat's media, the Firestore message read rule's
+    // people. A 1:1 from its id, as `chatMember`. A group or channel from its doc: a member; a
+    // channel follower the channel has not banned (`follows` in firestore.rules); or anyone, when the
+    // group is public and not encrypted (`publicPreviewRead`). One doc plus one `exists`, so two
+    // lookups at most.
+    function chatReader(cid) {
+      return (cid.matches('.*_.*') && request.auth.uid in cid.split('_'))
+        || (!cid.matches('.*_.*')
+            && (request.auth.uid in groupDoc(cid).data.get('users', [])
+                || (groupDoc(cid).data.get('channel', false) == true
+                    && !(request.auth.uid in groupDoc(cid).data.get('bannedUids', []))
+                    && groupDoc(cid).data.get('archivedAt', null) == null
+                    && firestore.exists(/databases/(default)/documents/conversations/$(cid)/followers/$(request.auth.uid)))
+                || (groupDoc(cid).data.get('isPublic', false) == true
+                    && groupDoc(cid).data.get('e2ee', true) == false
+                    && !(request.auth.uid in groupDoc(cid).data.get('bannedUids', [])))));
+    }
+
+    // Release audit 2026-11-10 M5: an uploader is a real account. An anonymous session can be made
+    // by anybody against the Auth REST API, and Firestore already refuses them (`signedIn`).
+    function uploader() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    // An admin row (admins/{uid}), any rights.
+    function isAdminUser() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid));
+    }
+
+    // Release audit 2026-11-10 L10: an admin who may post Official Stories, firestore.rules
+    // `adminCan('send')`: the owner, or `send` in the row's `perms`.
+    function officialPoster() {
+      return request.auth != null
+        && (firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.get('role', '') == 'owner'
+            || 'send' in firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.get('perms', []));
+    }
+
     function chatMessage(cid, file) {
       return firestore.get(/databases/(default)/documents/conversations/$(cid)/messages/$(file.split('[.-]')[0]));
     }
@@ -305,9 +350,12 @@ service firebase.storage {
       // 50 MB (was 25, 2026-10-12): story video is 720p HEVC at the clip's own frame rate now
       // (`StoryVideoEncoder`), up to 90 seconds. A 90 second 60 fps segment at ~4.5 Mbps is about
       // 50 MB, so the encoder sizes against 47 MB. The 25 MB cap is what forced the old 540p.
-      allow write: if request.auth != null
+      // Release audit 2026-11-10 M5: a cap per file, not 50 MB for each. Pictures are encoded to
+      // about 1.5 MB by both apps (`StoryPhoto.budget`), so 10 MB is far above any real one; only the
+      // video keeps 50 MB. No anonymous uploader.
+      allow write: if uploader()
         && (resource == null || sameBytesRetry())   // 2026-09-24 fix-all: a lost-answer retry
-        && request.resource.size < 50 * 1024 * 1024
+        && request.resource.size < (file == 'video.mp4' ? 50 : 10) * 1024 * 1024
         && (
              (file == 'photo.jpg' && request.resource.contentType.matches('image/.*'))
           || (file == 'thumb.jpg' && request.resource.contentType.matches('image/.*'))
@@ -355,12 +403,12 @@ service firebase.storage {
     }
 
     match /officialStories/{storyId}/{file} {
-      function isAdminUser() {
-        return request.auth != null
-          && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid));
-      }
       allow read: if isAdminUser();
-      allow create, update: if isAdminUser()
+      // Release audit 2026-11-10 L10: only an admin who may post them (the owner, or `send`, the
+      // right ostorySave asks for), and only until the story is saved: ostorySave reads the files
+      // once, on its first save, so after that nothing may replace what phones are shown.
+      allow create, update: if officialPoster()
+        && !firestore.exists(/databases/(default)/documents/officialStories/$(storyId))
         && request.resource.size <= 50 * 1024 * 1024
         && (
              (file == 'media.jpg' && request.resource.contentType == 'image/jpeg')
@@ -375,11 +423,12 @@ service firebase.storage {
     // phone would hold the key.
     match /announcements/{announcementId}/{file} {
       allow read: if request.auth != null;
-      // Same shape as the story rule above, and for the same reason: a firestore.get() here is
-      // unreliable in this project's Storage rules and denies legitimate uploads, so the real gate is
-      // in Firestore. Anybody can put bytes at this path; only an admin can ever publish an
-      // announcement that POINTS at them, and an unreferenced object is never fetched by anything.
-      allow write: if request.auth != null
+      // (History: this once let any signed-in account put bytes here, because a firestore.get() was
+      // thought unreliable in this project's Storage rules.)
+      // Release audit 2026-11-10 M5: only an admin row uploads here, by the same cross-service
+      // admin lookup the Official Stories and sticker rules above have used since 2026-10-16. That
+      // lookup works: the doc is the uploader's own admin row, which always exists.
+      allow write: if isAdminUser()
         && request.resource.size < 10 * 1024 * 1024
         && (resource == null || sameBytesRetry())              // create-only: no overwriting a live announcement's picture
                                                                // (2026-09-24 fix-all: except a same-bytes retry)

@@ -33,7 +33,7 @@ const posted = {
   recipientUids: [B],
   mediaPath: `stories/${SID}/photo.jpg`,
   type: 'image',
-  mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/real.jpg',
+  mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fphoto.jpg?alt=media&token=t',
   thumbUrl: '',
   caption: 'at the wedding',
   replyCount: 0,
@@ -63,13 +63,20 @@ const cases = [
   ['rewrite the caption on a posted story', 'DENY', posted,
     { ...posted, caption: 'something else entirely' }],
   ['blank the picture to re-fill it later', 'DENY', posted, { ...posted, mediaUrl: '' }],
+  // Release audit 2026-11-10 M6: the FIRST fill is held to this story's own files too.
+  ['first fill points at a site we do not host', 'DENY', fresh,
+    { ...fresh, mediaUrl: 'https://evil.example/illegal.jpg' }],
+  ['first fill points at another story\'s file', 'DENY', fresh,
+    { ...fresh, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fother%2Fphoto.jpg?alt=media&token=t' }],
+  ['swap the thumbnail on a posted video for an outside link', 'DENY', freshVideo,
+    { ...freshVideo, thumbUrl: 'https://evil.example/t.jpg' }],
 
   // THE OTHER HALF. If any of these deny, posting a story is broken and this is an outage.
   ['fill in the url right after upload (photo)', 'ALLOW', fresh,
-    { ...fresh, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/real.jpg', caption: 'at the wedding' }],
+    { ...fresh, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fphoto.jpg?alt=media&token=t', caption: 'at the wedding' }],
   ['fill in both urls right after upload (video)', 'ALLOW', freshVideo,
-    { ...freshVideo, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/v.mp4',
-      thumbUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/t.jpg' }],
+    { ...freshVideo, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fvideo.mp4?alt=media&token=t',
+      thumbUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory123%2Fthumb.jpg?alt=media&token=t' }],
   ['count a reply on a posted story', 'ALLOW', posted, { ...posted, replyCount: 3 }],
 
   // Still-pinned fields: these were already immutable before this change and must stay that way.

@@ -66,7 +66,7 @@ const cases = [
   ['CANARY  an ordinary story', 'ALLOW', 'ALLOW', MEMBER, storyPath, 'create',
     story(MEMBER, { groupId: '', audienceLabel: 'friends' }), null, authorMocks(MEMBER)],
   ['FIX     filling in a 2000-member story\'s media', 'DENY', 'ALLOW', OWNER, storyPath, 'update',
-    story(OWNER, { recipientUids: bigList, mediaUrl: 'https://x/y.jpg' }), story(OWNER, { recipientUids: bigList }), authorMocks(OWNER)],
+    story(OWNER, { recipientUids: bigList, mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/kulan/o/stories%2Fstory456%2Fphoto.jpg?alt=media&token=t' }), story(OWNER, { recipientUids: bigList }), authorMocks(OWNER)],
   ['GUARD   widening a big group story after posting', 'DENY', 'DENY', OWNER, storyPath, 'update',
     story(OWNER, { recipientUids: [...bigList, tok('uidNew')] }), story(OWNER, { recipientUids: bigList }), authorMocks(OWNER)],
 
