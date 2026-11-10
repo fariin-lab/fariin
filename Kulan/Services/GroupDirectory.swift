@@ -469,6 +469,32 @@ enum GroupNameCheck: Equatable {
         }
     }
 
+    /// One public group in Explore's Groups tab (owner 2026-11-10, server `discoverGroups`).
+    struct Discovered: Identifiable, Equatable {
+        let cid: String
+        let handle: String
+        let title: String
+        let photoUrl: String?
+        let memberCount: Int
+        let verified: Bool
+        let label: String
+        var id: String { cid }
+    }
+
+    /// The biggest public groups that pass the owner's panel settings, pinned first.
+    static func discover() async throws -> [Discovered] {
+        let r = try await fns.httpsCallable("discoverGroups").call([:] as [String: Any])
+        let rows = (r.data as? [String: Any])?["groups"] as? [[String: Any]] ?? []
+        return rows.compactMap { d in
+            guard let cid = d["cid"] as? String, safeId(cid) else { return nil }
+            let photo = d["photoUrl"] as? String ?? ""
+            return Discovered(cid: cid, handle: d["handle"] as? String ?? "", title: d["title"] as? String ?? "Group",
+                              photoUrl: photo.isEmpty ? nil : photo,
+                              memberCount: (d["memberCount"] as? NSNumber)?.intValue ?? 0,
+                              verified: d["verified"] as? Bool ?? false, label: d["label"] as? String ?? "")
+        }
+    }
+
     enum JoinResult { case joined, requested, already }
 
     static func join(cid: String) async throws -> JoinResult {

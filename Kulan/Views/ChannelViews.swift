@@ -193,6 +193,20 @@ struct DiscoverChannelsView: View {
     @State private var follows = ChannelFollows.shared
 
     @State private var query = ""
+    /// Explore's two tabs (owner 2026-11-10): Channels, then public Groups.
+    enum Tab: String, CaseIterable { case channels = "Channels", groups = "Groups" }
+    @State private var tab: Tab = .channels
+    @State private var groupRows: [GroupDirectory.Discovered] = []
+    @State private var groupsLoading = true
+    @State private var groupsFailed = false
+    @State private var groupsLoaded = false
+    /// Joined from this list, before the chat list has the group.
+    @State private var justJoined: Set<String> = []
+    private var shownGroups: [GroupDirectory.Discovered] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return groupRows }
+        return groupRows.filter { $0.title.localizedCaseInsensitiveContains(q) || $0.handle.localizedCaseInsensitiveContains(q) }
+    }
     /// The loaded channels the search field keeps (name or @handle), in the server's order.
     private var shown: [ChannelService.Discovered] {
         let q = query.trimmingCharacters(in: .whitespaces)
@@ -214,7 +228,16 @@ struct DiscoverChannelsView: View {
 
     private var content: some View {
             List {
-                if loading && rows.isEmpty {
+                // The two tabs, first in the list under the search field (owner 2026-11-10).
+                Picker("Show", selection: $tab) {
+                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+                if tab == .groups {
+                    groupsSection
+                } else if loading && rows.isEmpty {
                     // Rows shaped like the channels on their way, not a spinner (owner 2026-10-31).
                     ForEach(0..<8, id: \.self) { i in
                         DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4])
@@ -240,7 +263,7 @@ struct DiscoverChannelsView: View {
             // ⛔ AT THE TOP, ALWAYS SHOWN (owner 2026-11-10, his mockup): the grey field under the title,
             // as the chat list's and Add People's, not iOS 26's default bar at the bottom.
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
-            .navigationTitle("Find Channels")
+            .navigationTitle("Explore")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if !embedded {
@@ -249,8 +272,10 @@ struct DiscoverChannelsView: View {
                     }
                 }
             }
-            .refreshable { await load() }
+            .refreshable { if tab == .groups { await loadGroups() } else { await load() } }
             .task { await load() }
+            // The Groups tab loads the first time it is shown (owner 2026-11-10).
+            .task(id: tab) { if tab == .groups && !groupsLoaded { await loadGroups() } }
             // The listener has it now: the stand-in goes, so a later unfollow shows Follow again.
             .onChange(of: confirmedIds) { _, ids in if !ids.isEmpty { justFollowed.subtract(ids) } }
             // Left from inside (its page's Leave): back to the list at once, not a chat I no longer follow.
@@ -263,6 +288,107 @@ struct DiscoverChannelsView: View {
             .navigationDestination(item: $openVisitor) { t in
                 PublicGroupSheet(target: t, pushed: true)
             }
+    }
+
+    /// The Groups tab: public groups, round photos (groups are round, channels squircle), "N members",
+    /// Join. Tapping a row opens the group: its chat if I'm in it, else its join page.
+    @ViewBuilder private var groupsSection: some View {
+        if groupsLoading && groupRows.isEmpty {
+            ForEach(0..<8, id: \.self) { i in
+                DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4]).listRowSeparator(.hidden)
+            }
+        } else if groupsFailed && groupRows.isEmpty {
+            Text("Couldn't load groups. Check your connection and try again.")
+                .foregroundStyle(.secondary).listRowBackground(Color.clear).listRowSeparator(.hidden)
+        } else if groupRows.isEmpty {
+            Text("No public groups yet. To list yours, open it, tap its name, then Group Settings > Group Type > Public.")
+                .foregroundStyle(.secondary).listRowBackground(Color.clear).listRowSeparator(.hidden)
+        } else if shownGroups.isEmpty {
+            Text("No groups match \u{201C}\(query.trimmingCharacters(in: .whitespaces))\u{201D}.")
+                .foregroundStyle(.secondary).listRowSeparator(.hidden)
+        } else {
+            ForEach(shownGroups) { groupRow($0) }
+        }
+    }
+
+    private func inGroup(_ cid: String) -> Bool {
+        justJoined.contains(cid)
+            || ConversationsRepository.shared.conversations.contains { $0.id == cid && $0.users.contains(AuthService.shared.uid ?? "") }
+    }
+
+    private func groupRow(_ g: GroupDirectory.Discovered) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                if opensInPlace {
+                    if inGroup(g.cid) {
+                        openFollowed = ChatTarget(id: g.cid, name: g.title, photo: g.photoUrl)
+                    } else {
+                        openVisitor = PublicGroupTarget(cid: g.cid, name: g.handle.isEmpty ? nil : g.handle)
+                    }
+                } else {
+                    onOpen(g.cid, g.handle.isEmpty ? nil : g.handle)
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    AvatarView(name: g.title, photoUrl: g.photoUrl, size: 52)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(g.title).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                                .layoutPriority(1)
+                            GroupVerifiedMark(on: g.verified, size: 14, label: g.label)
+                        }
+                        Text(g.memberCount == 1 ? "1 member" : "\(g.memberCount.formatted()) members")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            joinButton(g)
+        }
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+        .listRowSeparator(.hidden)
+    }
+
+    /// Join at the tap, like Follow: "Joined" at once, a request or a refusal takes it back.
+    @ViewBuilder private func joinButton(_ g: GroupDirectory.Discovered) -> some View {
+        let mine = inGroup(g.cid)
+        Button {
+            guard !mine, !busy.contains(g.cid) else { return }
+            busy.insert(g.cid)
+            justJoined.insert(g.cid)
+            Haptics.notify(.success)
+            Task {
+                do {
+                    if try await GroupDirectory.join(cid: g.cid) == .requested {
+                        justJoined.remove(g.cid)
+                        ToastNotice.show("Request sent. An admin will let you in.")
+                    }
+                } catch {
+                    justJoined.remove(g.cid)
+                    ToastNotice.show(error.localizedDescription)
+                }
+                busy.remove(g.cid)
+            }
+        } label: {
+            Text(mine ? "Joined" : "Join")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(mine ? Color.secondary : Color.onFariinAction)
+                .padding(.horizontal, 16).frame(height: 34)
+                .background(Capsule().fill(mine ? Color(.secondarySystemFill) : Color.fariinAction))
+                .contentShape(Capsule())
+                .animation(.easeOut(duration: 0.15), value: mine)
+        }
+        .buttonStyle(.plain)
+        .disabled(mine)
+    }
+
+    private func loadGroups() async {
+        groupsLoading = true
+        do { groupRows = try await GroupDirectory.discover(); groupsFailed = false; groupsLoaded = true }
+        catch { groupsFailed = true }
+        groupsLoading = false
     }
 
     /// Find Channels pushed from the chat list's compass (owner 2026-11-10: slides in from the right).
