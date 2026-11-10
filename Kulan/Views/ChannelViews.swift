@@ -218,6 +218,7 @@ struct DiscoverChannelsView: View {
                     // Rows shaped like the channels on their way, not a spinner (owner 2026-10-31).
                     ForEach(0..<8, id: \.self) { i in
                         DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4])
+                            .listRowSeparator(.hidden)
                     }
                 } else if failed && rows.isEmpty {
                     Text("Couldn't load channels. Check your connection and try again.")
@@ -236,7 +237,8 @@ struct DiscoverChannelsView: View {
             // name + tick + follower count, a solid Follow pill that turns grey "Following".
             // No card, no descriptions, a search field under the title.
             .listStyle(.plain)
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+            // The chat list's own search bar: `.searchable` at its defaults (owner 2026-11-10).
+            .searchable(text: $query, prompt: "Search")
             .navigationTitle("Find Channels")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -276,7 +278,7 @@ struct DiscoverChannelsView: View {
                 }
             } label: {
                 HStack(spacing: 12) {
-                    AvatarView(name: c.title, photoUrl: c.photoUrl, size: 52)
+                    AvatarView(name: c.title, photoUrl: c.photoUrl, size: 52).avatarSquircle(true)   // channels wear the squircle (owner 2026-11-10)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
                             Text(c.title).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
@@ -305,8 +307,8 @@ struct DiscoverChannelsView: View {
             followButton(c)
         }
         .padding(.vertical, 4)
-        // The line between rows starts under the name, not under the photo (design A).
-        .alignmentGuide(.listRowSeparatorLeading) { _ in 64 }
+        // No lines between rows (owner 2026-11-10).
+        .listRowSeparator(.hidden)
     }
 
     /// Followed, or one of its admins (owner 2026-10-31: tapping his own Fariin News here went to the
