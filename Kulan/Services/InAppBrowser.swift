@@ -37,6 +37,10 @@ final class InAppBrowserViewController: UIViewController {
     // capsule (menu glyph left, the host centred, reload right) and a compass circle (Open in
     // Safari). Forward, Share and Reading List moved into the capsule's menu.
     private let closeGlass = InAppBrowserViewController.glass()
+    /// A file's page only: its title in a glass capsule beside the close circle, as the reference
+    /// app's read page has it (owner 2026-11-10: "top header is empty").
+    private let titleGlass = InAppBrowserViewController.glass()
+    private let titleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
 
     private let backGlass = InAppBrowserViewController.glass()
@@ -186,6 +190,14 @@ final class InAppBrowserViewController: UIViewController {
         closeButton.addAction(UIAction { [weak self] _ in self?.dismiss(animated: true) }, for: .touchUpInside)
         fill(closeGlass, with: closeButton)
         view.addSubview(closeGlass)
+        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        titleLabel.textColor = .label
+        titleLabel.textAlignment = .center
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleGlass.contentView.addSubview(titleLabel)
+        titleGlass.isUserInteractionEnabled = false
+        titleGlass.isHidden = true
+        view.addSubview(titleGlass)
     }
 
     private func buildBottom() {
@@ -308,6 +320,21 @@ final class InAppBrowserViewController: UIViewController {
         closeGlass.transform = CGAffineTransform(scaleX: 1 - 0.35 * f, y: 1 - 0.35 * f)
         closeGlass.alpha = 1 - f
         closeGlass.isUserInteractionEnabled = f < 0.5
+
+        // A file's title capsule: from beside the close circle to the right margin, same height,
+        // shrinking and fading with it. Only while the file's own page is shown.
+        let onFile = document != nil && webView.url?.scheme?.lowercased() != "http" && webView.url?.scheme?.lowercased() != "https"
+        titleGlass.isHidden = !onFile
+        if onFile {
+            let x0 = side + safe.left + control + 8
+            let tw = max(0, w - x0 - side - safe.right)
+            titleGlass.bounds = CGRect(x: 0, y: 0, width: tw, height: control)
+            titleGlass.center = CGPoint(x: x0 + tw / 2, y: closeGlass.center.y)
+            titleGlass.transform = closeGlass.transform
+            titleGlass.alpha = closeGlass.alpha
+            titleLabel.frame = titleGlass.bounds.insetBy(dx: 16, dy: 0)
+            titleLabel.text = document?.title
+        }
 
         // BOTTOM. One row from his picture: circle, capsule, circle, all `toolbarHeight` tall, 32pt
         // margins and a 7pt gap. Collapsing drops the row a little; the circles shrink and fade, the

@@ -339,13 +339,14 @@ enum MarkdownHTML {
     }
 
     /// Serif headings and plain system text, the read-page look of his reference; light and dark
-    /// follow the phone. Room at the top for the sheet's close circle and at the foot for its bar.
+    /// follow the phone. The sheet already insets the page below its header and above its bar, so the
+    /// page adds only a small margin of its own (owner 2026-11-10: a doubled gap left the top empty).
     private static let css = """
     :root{color-scheme:light dark;--fg:#000;--muted:#6b6b70;--line:#e3e3e8;--fill:#f4f4f6;--code:#f2f2f5;--link:#000}
     @media (prefers-color-scheme:dark){:root{--fg:#fff;--muted:#9a9aa0;--line:#2c2c2e;--fill:#1c1c1e;--code:#1c1c1e;--link:#fff}}
     html{-webkit-text-size-adjust:100%}
     body{margin:0;background:transparent;color:var(--fg);font:17px/1.5 -apple-system,system-ui,sans-serif;word-wrap:break-word}
-    article{padding:76px 20px 120px;max-width:720px;margin:0 auto}
+    article{padding:4px 20px 24px;max-width:720px;margin:0 auto}
     h1,h2,h3,h4{font-family:ui-serif,"New York",Georgia,serif;font-weight:700;line-height:1.2;margin:1.1em 0 .5em}
     h1{font-size:30px;margin-top:.2em}h2{font-size:24px}h3{font-size:20px}h4,h5,h6{font-size:17px}
     p{margin:0 0 1em}
