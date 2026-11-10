@@ -2193,6 +2193,7 @@ struct ChatsView: View {
             // "…" on the left (and his photo before that, 2026-09-24: "the is no bussnes to
             // aviator here"). Same menu, new door.
             Image(systemName: "line.3.horizontal.decrease")
+                .modifier(SwipeFade(on: showHeaderIcons))
         }
     }
     // ⛔ EXPLORE IS A ROUND GLASS BUTTON ON THE RIGHT — owner, 2026-11-09. The "Edit" pill on the
@@ -2203,6 +2204,7 @@ struct ChatsView: View {
         // only the glyph's own box.
         Button { showFindChannelsFromEmpty = true } label: {
             Image(systemName: "safari").frame(width: 44, height: 44).contentShape(Circle())
+                .modifier(SwipeFade(on: showHeaderIcons))
         }
             .accessibilityLabel("Explore")
     }
@@ -2217,6 +2219,7 @@ struct ChatsView: View {
         // The opposite of the fill: white on black, black on white (owner 2026-10-31, one colour).
         Button { showNew = true } label: {
             Image(systemName: "square.and.pencil").foregroundStyle(Color.onFariinAction).offset(y: -1.5)
+                .modifier(SwipeFade(on: showHeaderIcons))
         }
             // Where the first-chat tip points (owner 2026-10-18).
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).midX } action: { composeMidX = $0 }
@@ -2278,12 +2281,15 @@ struct ChatsView: View {
             // items to opacity 0 the instant a chat is pushed and brings them back on return.
             // (The deployment target is iOS 26, so there is no pre-26 branch to keep here.)
             // Left: the filter menu's glass circle (owner 2026-11-09, where "Edit" stood).
+            // ⛔ THE MENU IS THE ITEM'S OWN CONTENT (owner 2026-11-10, TF 1145: the menu grew out of
+            // a blob under the button and jumped into place). The fade wrapped the Menu, so the
+            // system morphed from the wrapper instead of the bar button. It sits on the glyph now.
             ToolbarItem(placement: .topBarLeading) {
-                avatarMenu.tint(.primary).modifier(SwipeFade(on: showHeaderIcons))
+                avatarMenu.tint(.primary)
             }
             // Two buttons, not one shared capsule (owner 2026-10-25): a fixed spacer splits the glass.
             ToolbarItem(placement: .topBarTrailing) {
-                exploreButton.tint(.primary).modifier(SwipeFade(on: showHeaderIcons))
+                exploreButton.tint(.primary)
             }
             ToolbarSpacer(.fixed, placement: .topBarTrailing)
             ToolbarItem(placement: .topBarTrailing) {
@@ -2291,7 +2297,6 @@ struct ChatsView: View {
                 // 2026-10-26: the whole button blue, not just the pen; was a glass circle).
                 composeButton.buttonStyle(.glassProminent).tint(Color.fariinAction)
                     .foregroundStyle(Color.onFariinAction)
-                    .modifier(SwipeFade(on: showHeaderIcons))
             }
         }
     }
