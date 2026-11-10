@@ -139,7 +139,7 @@ struct NewCallView: View {
     private var linkRow: some View {
         Button { onCreateLink() } label: {
             HStack(spacing: 12) {
-                Image("ic_link_copy").renderingMode(.template).resizable().scaledToFit()
+                Image(systemName: "link").resizable().scaledToFit()   // a link, not the copy mark (owner 2026-11-10)
                     .frame(width: 22, height: 22)
                     .frame(width: 40, height: 40)
                     .background(Circle().fill(Color(.tertiarySystemFill)))
