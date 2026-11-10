@@ -18,6 +18,8 @@ struct ForwardPicker: View {
     /// PICK ONE CHAT (owner 2026-11-06, Quote): a tap hands the chat back and closes the sheet; no
     /// composer, nothing is sent from here. The same list and the same "can't post there" refusals.
     var onPick: ((Conversation) -> Void)? = nil
+    /// Quote's empty list: Create Channel pushed here (owner 2026-11-10).
+    @State private var showNewChannel = false
 
     /// Quote: choose where a channel post goes.
     init(pickOne onPick: @escaping (Conversation) -> Void) {
@@ -187,8 +189,17 @@ struct ForwardPicker: View {
         NavigationStack {
             Group {
                 if people.isEmpty && onPick != nil {
-                    ContentUnavailableView("No channels or groups", systemImage: "quote.opening",
-                                           description: Text("Quotes go to a channel you post in or a group. Create one to quote into it."))
+                    // A way out, not a dead end (owner 2026-11-10): Create Channel opens the new
+                    // channel screen here; once made, Back lands on this list with it to pick.
+                    ContentUnavailableView {
+                        Label("No channels or groups", systemImage: "quote.opening")
+                    } description: {
+                        Text("Quotes go to a channel you post in or a group. Create one to quote into it.")
+                    } actions: {
+                        Button("Create Channel") { showNewChannel = true }
+                            .buttonStyle(.glassProminent).tint(Color.fariinAction)
+                            .foregroundStyle(Color.onFariinAction)
+                    }
                 } else if people.isEmpty {
                     ContentUnavailableView("No other chats", systemImage: "paperplane",
                                            description: Text("Start another chat to forward into it."))
@@ -215,6 +226,9 @@ struct ForwardPicker: View {
             // and a button that leads nowhere is worse than none. The greyed "Send" that used to
             // sit there went with the preview; Send is the composer's, beside the text.
             .navigationTitle(onPick == nil ? "Send to" : "Quote in")
+            .navigationDestination(isPresented: $showNewChannel) {
+                NewChannelView(onOpen: { _ in showNewChannel = false }, embedded: true)
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
