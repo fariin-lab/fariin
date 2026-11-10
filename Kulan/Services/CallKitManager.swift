@@ -708,6 +708,13 @@ extension CallKitManager: CXProviderDelegate {
         // mic to one call). Answering is refused until that call is ended or put on hold.
         if Self.otherCallActive(excluding: live) {
             action.fail()
+            // Release audit L21: a failed answer closes the system call, but `activeUUID` and the
+            // service's ring stayed up, so every new ring here read as busy until the ring timed
+            // out. Both are closed now, the way a ring iOS refused to show is closed: on this phone
+            // only (the doc stays ringing for my other devices; the caller's ring-out ends it).
+            let callId = activeCallId
+            reportEnded(.failed)
+            if let callId { CallService.shared.endRingLocally(callId: callId) }
             Task { @MainActor in GroupCallService.presentOverTop(Self.otherCallNotice) }
             return
         }

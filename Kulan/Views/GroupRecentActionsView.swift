@@ -212,12 +212,14 @@ struct GroupRecentActionsView: View {
                 .disabled(events.isEmpty)
             }
         }
+        .task { if events.isEmpty { await load(more: false) } }
+        .refreshable { await load(more: false) }
+        // Release audit L26: BELOW `.refreshable`. A sheet attached inside it inherits its refresh
+        // action, so the filter sheet's list got pull to refresh and pulling it down reloaded this page.
         .sheet(isPresented: $showFilter) {
             RecentActionsFilterSheet(people: filterPeople, kinds: kinds, actors: actors,
                                      name: name, photo: photo, channel: isChannel) { k, a in kinds = k; actors = a }
         }
-        .task { if events.isEmpty { await load(more: false) } }
-        .refreshable { await load(more: false) }
     }
 
     // MARK: Pieces

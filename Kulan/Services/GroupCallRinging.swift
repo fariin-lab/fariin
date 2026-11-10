@@ -760,9 +760,14 @@ enum GroupCallKitAudio {
         try? AudioManager.shared.setEngineAvailability(.none)
     }
 
+    /// Release audit M15: no `.mixWithOthers`. With it, music or a podcast in another app kept
+    /// playing under a group call answered from the lock screen. A call takes the audio for itself,
+    /// as the 1:1 call does (`CallService.applyCallAudioCategory`).
+    private static let options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+
     static func activated(_ session: AVAudioSession, speaker: Bool) {
         try? session.setCategory(.playAndRecord, mode: speaker ? .videoChat : .voiceChat,
-                                 options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
+                                 options: options)
         try? AudioManager.shared.setEngineAvailability(.default)
         route(speaker: speaker)
     }
@@ -788,8 +793,7 @@ enum GroupCallKitAudio {
     private static func setMode(_ session: AVAudioSession, speaker: Bool) {
         let mode: AVAudioSession.Mode = speaker ? .videoChat : .voiceChat
         guard session.category != .playAndRecord || session.mode != mode else { return }
-        try? session.setCategory(.playAndRecord, mode: mode,
-                                 options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
+        try? session.setCategory(.playAndRecord, mode: mode, options: options)
     }
 
     /// The call is over: back to what every in-app group call expects.

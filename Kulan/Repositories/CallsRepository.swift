@@ -175,6 +175,30 @@ final class CallsRepository {
     }
     @ObservationIgnored private var chatCache: [String: ChatCalls] = [:]
     @ObservationIgnored private var lastFullAt: Date?
+    /// Release audit H10: the disk copy of `chatCache` is read once per account, on the first load.
+    @ObservationIgnored private var restoredFromDisk = false
+    /// When the running load began (release audit M23, see `load`).
+    @ObservationIgnored private var loadStartedAt: Date?
+    /// How often every chat's calls are read again, whether or not the chat moved. Was 10 minutes,
+    /// which made most returns to the app a full read of the whole log (release audit H10). Rows that
+    /// can still change (ringing, ongoing, the last two hours) are read on every load anyway.
+    static let fullEvery: TimeInterval = 6 * 3600
+
+    /// The chat's name, photo and other person, as its call rows show them.
+    static func label(_ c: Conversation, me: String) -> (name: String, photo: String?, other: String) {
+        if c.isGroup { return (name: c.title.isEmpty ? "Group" : c.title, photo: c.avatarUrl, other: "") }
+        return (name: c.name(for: me), photo: c.photoUrl(for: me), other: c.otherUid(me))
+    }
+
+    /// A cached row with the chat's current name and photo.
+    static func relabel(_ e: CallEntry, name: String, photo: String?, other: String) -> CallEntry {
+        var r = CallEntry(
+            id: e.id, cid: e.cid, name: name, photoUrl: photo, otherUid: other,
+            callerUid: e.callerUid, outcome: e.outcome, video: e.video,
+            durationSec: e.durationSec, date: e.date)
+        r.groupCid = e.groupCid
+        return r
+    }
 
     /// A chat's calls are read again when the chat moved since (a new call record bumps `updatedAt`),
     /// when one of its calls may still close (ringing / ongoing: the close does not bump the chat),
@@ -190,6 +214,8 @@ final class CallsRepository {
         generation &+= 1
         chatCache = [:]
         lastFullAt = nil
+        restoredFromDisk = false
+        CallLogDiskCache.remove()   // H10: the disk copy is the previous account's too
         calls = []
         hasLoaded = false
         loadFailed = false
@@ -206,10 +232,18 @@ final class CallsRepository {
         // Atomically claim the load so two concurrent calls can't both fan out N queries.
         let proceed = await MainActor.run { () -> Bool in
             if loading {
-                if force { reloadRequested = true }   // audit M-090: run again after, never drop it
-                return false
+                // Release audit M23: the safety net below no longer clears `loading`, so a load
+                // still running after 30 s counts as stuck, and a forced one (Try Again, pull to
+                // refresh) retires it (`generation`) and reads again instead of waiting on it.
+                if force, let started = loadStartedAt, Date().timeIntervalSince(started) > 30 {
+                    generation &+= 1
+                } else {
+                    if force { reloadRequested = true }   // audit M-090: run again after, never drop it
+                    return false
+                }
             }
             loading = true
+            loadStartedAt = Date()
             return true
         }
         guard proceed else { return }
@@ -223,8 +257,14 @@ final class CallsRepository {
             .whereField("members", arrayContains: me).getDocuments()
 
         // Safety net: never leave the shimmer skeleton up forever if a query stalls on bad network.
+        // Release audit M23: it only changes what the tab shows. `loading` stays true, because this
+        // load is still running and will publish when its reads land; clearing it let the next tab
+        // switch start a second full read alongside. It also leaves a newer account's list alone.
         Task { try? await Task.sleep(nanoseconds: 8_000_000_000)
-            await MainActor.run { if !self.hasLoaded { self.hasLoaded = true; self.loading = false; self.loadFailed = true } } }
+            await MainActor.run {
+                guard self.generation == myGeneration, !self.hasLoaded else { return }
+                self.hasLoaded = true; self.loadFailed = true
+            } }
 
         // audit M-090, 2026-10-07: a thrown query is NOT an empty history. `try?` made the two the
         // same, so a weak network published "No calls", zeroed the badge, and the 30 s TTL then
@@ -256,16 +296,32 @@ final class CallsRepository {
         var failedCids: Set<String> = []
         // Full audit 05-calls F3 (2026-10-23): every foreground re-downloaded every call row of every
         // chat. Now a chat is read again only when it can have changed (see `needsRead`); the rest
-        // reuse what the last read of that chat found. Every 10 minutes the whole log is read anyway.
+        // reuse what the last read of that chat found. Every `fullEvery` the whole log is read anyway.
+        // Release audit H10: the per-chat cache now also lives on disk (`CallLogDiskCache`), so a cold
+        // launch reads only the chats that moved instead of every call row the account ever had.
+        let needDisk = await MainActor.run { !self.restoredFromDisk && self.chatCache.isEmpty }
+        let stored = needDisk ? CallLogDiskCache.read(uid: me) : nil
         let (cache, fullDue) = await MainActor.run { () -> ([String: ChatCalls], Bool) in
-            (self.chatCache, self.lastFullAt.map { Date().timeIntervalSince($0) > 600 } ?? true)
+            if self.generation == myGeneration, !self.restoredFromDisk {
+                self.restoredFromDisk = true
+                if let stored, self.chatCache.isEmpty {
+                    self.chatCache = stored.chats
+                    self.lastFullAt = stored.lastFullAt
+                }
+            }
+            return (self.chatCache, self.lastFullAt.map { Date().timeIntervalSince($0) > Self.fullEvery } ?? true)
         }
         var reused: [String: ChatCalls] = [:]
         var toRead: [Conversation] = []
         for c in convs {
             if !fullDue, let hit = cache[c.id], !Self.needsRead(hit, updatedAtMillis: c.updatedAtMillis) {
-                reused[c.id] = hit
-                all.append(contentsOf: hit.entries)
+                // The rows keep the chat's current name and photo, not the ones from the last read.
+                let label = Self.label(c, me: me)
+                let rows = hit.entries.map {
+                    Self.relabel($0, name: label.name, photo: label.photo, other: label.other)
+                }
+                reused[c.id] = ChatCalls(updatedAtMillis: hit.updatedAtMillis, entries: rows, readAt: hit.readAt)
+                all.append(contentsOf: rows)
             } else {
                 toRead.append(c)
             }
@@ -275,9 +331,8 @@ final class CallsRepository {
             for c in toRead {
                 group.addTask {
                     let group = c.isGroup
-                    let other = group ? "" : c.otherUid(me)
-                    let name = group ? (c.title.isEmpty ? "Group" : c.title) : c.name(for: me)
-                    let photo = group ? c.avatarUrl : c.photoUrl(for: me)
+                    let label = Self.label(c, me: me)
+                    let other = label.other, name = label.name, photo = label.photo
                     guard let snap = try? await database.collection("conversations").document(c.id)
                         .collection("messages").whereField("type", isEqualTo: "call").getDocuments()
                     else { return (c.id, c.updatedAtMillis, nil) }
@@ -323,6 +378,7 @@ final class CallsRepository {
                 self.lastLoadedAt = Date()
                 if wasFull { self.lastFullAt = Date() }
             }
+            CallLogDiskCache.write(uid: me, chats: newCache, lastFullAt: self.lastFullAt)   // H10
             defer { self.reloadRequested = false }
             return self.reloadRequested
         }
@@ -410,6 +466,97 @@ final class CallsRepository {
         await MainActor.run {
             for id in ids { HiddenCalls.hide(id) }
             calls.removeAll { ids.contains($0.id) }
+        }
+    }
+}
+
+/// Release audit H10: `CallsRepository.chatCache` kept on disk, one file for the signed-in account.
+/// Without it every cold launch read every call row of every chat. Anything unexpected (no file, a
+/// half-written one, another account's, an older format) reads as "no cache" and the load simply
+/// reads every chat, as it always did. Only 1:1 and group chat rows live here; multi-person rows are
+/// read fresh on every load.
+enum CallLogDiskCache {
+    private static let version = 1
+    private static let io = DispatchQueue(label: "fariin.calls.cache", qos: .utility)
+
+    private struct Row: Codable {
+        let id, cid, name, otherUid, callerUid, outcome: String
+        let photoUrl: String?
+        let video: Bool
+        let durationSec: Int
+        let date: Date
+        let groupCid: String?
+    }
+    private struct Chat: Codable {
+        let updatedAtMillis: Double
+        let readAt: Date
+        let rows: [Row]
+    }
+    struct Stored {
+        let chats: [String: CallsRepository.ChatCalls]
+        let lastFullAt: Date?
+    }
+    private struct File: Codable {
+        let version: Int
+        let uid: String
+        let lastFullAt: Date?
+        let chats: [String: Chat]
+    }
+
+    /// Application Support, like the chat list's disk cache: Caches can be evicted under pressure.
+    private static var fileURL: URL? {
+        (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                      appropriateFor: nil, create: true))?
+            .appendingPathComponent("callslog.json")
+    }
+
+    /// Synchronous; called from `CallsRepository.load`, off the main thread (a nonisolated async func).
+    static func read(uid: String) -> Stored? {
+        guard !uid.isEmpty, let url = fileURL, let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(File.self, from: data),
+              file.version == version, file.uid == uid else { return nil }
+        let chats = file.chats.mapValues { chat in
+            CallsRepository.ChatCalls(
+                updatedAtMillis: chat.updatedAtMillis,
+                entries: chat.rows.map { r in
+                    var e = CallEntry(
+                        id: r.id, cid: r.cid, name: r.name, photoUrl: r.photoUrl, otherUid: r.otherUid,
+                        callerUid: r.callerUid, outcome: r.outcome, video: r.video,
+                        durationSec: r.durationSec, date: r.date)
+                    e.groupCid = r.groupCid
+                    return e
+                },
+                readAt: chat.readAt)
+        }
+        return Stored(chats: chats, lastFullAt: file.lastFullAt)
+    }
+
+    static func write(uid: String, chats: [String: CallsRepository.ChatCalls], lastFullAt: Date?) {
+        guard !uid.isEmpty else { return }
+        io.async {
+            guard let url = fileURL else { return }
+            let file = File(
+                version: version, uid: uid, lastFullAt: lastFullAt,
+                chats: chats.mapValues { c in
+                    Chat(updatedAtMillis: c.updatedAtMillis, readAt: c.readAt,
+                         rows: c.entries.filter { $0.adhoc == nil }.map { e in
+                             Row(id: e.id, cid: e.cid, name: e.name, otherUid: e.otherUid,
+                                 callerUid: e.callerUid, outcome: e.outcome, photoUrl: e.photoUrl,
+                                 video: e.video, durationSec: e.durationSec, date: e.date,
+                                 groupCid: e.groupCid)
+                         })
+                })
+            guard let data = try? JSONEncoder().encode(file) else { return }
+            try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
+    /// Sign-out and account delete. On the same queue as `write`, so a write queued before it
+    /// cannot bring the file back afterwards.
+    static func remove() {
+        io.async {
+            guard let url = fileURL else { return }
+            try? FileManager.default.removeItem(at: url)
         }
     }
 }
