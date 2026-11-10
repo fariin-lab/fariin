@@ -885,7 +885,7 @@ struct PublicGroupInfoView: View {
         // Leave, Share, Search, Mute. Mute wakes up once following.
         HStack(spacing: 0) {
             Button { undoFollow() } label: { circle("ic_channel_leave", "Leave") }
-            circle("square.and.arrow.up", "Share")
+            circle("ic_share_up", "Share")
             circle("magnifyingglass", "Search").opacity(0.45)   // as the channel page draws it before posts load
             circle("ic_bell_off", "Mute")
         }
@@ -898,10 +898,10 @@ struct PublicGroupInfoView: View {
             // Our own "Share with" sheet first (chats); its corner button opens other apps.
             if let link {
                 Button { shareText = "Follow " + p.title + " on Fariin: " + link.absoluteString } label: {
-                    circle("square.and.arrow.up", "Share")
+                    circle("ic_share_up", "Share")
                 }
             } else {
-                circle("square.and.arrow.up", "Share").opacity(0.45)
+                circle("ic_share_up", "Share").opacity(0.45)
             }
             // Dimmed like the group visitor's Search (owner 2026-10-29 audit U17): it only explains.
             Button { joinNotice = "Follow the channel to search its posts." } label: {

@@ -59,6 +59,12 @@ struct ActivityReactorsSheet: View {
         .task {
             counts = item.rx
             total = item.rx.reduce(0) { $0 + $1.count }
+            // Owner 2026-11-10 "loading takes time": the last answer for this comment shows on the
+            // first frame (kept in memory, or fetched ahead by the Activity page), then refreshes.
+            if let hit = ReactorsCache.get(item.id, "") {
+                people = hit.people; next = hit.next
+                if !hit.counts.isEmpty { counts = hit.counts; total = hit.total }
+            }
             await load(reset: true)
         }
     }
@@ -108,7 +114,8 @@ struct ActivityReactorsSheet: View {
         return Button {
             guard tab != key else { return }
             tab = key
-            people = []   // the old tab's people never stand under the new chip
+            // The old tab's people never stand under the new chip; this tab's last answer may.
+            if let hit = ReactorsCache.get(item.id, key) { people = hit.people; next = hit.next } else { people = [] }
             Task { await load(reset: true) }
         } label: {
             Text(title)
@@ -136,7 +143,25 @@ struct ActivityReactorsSheet: View {
             }
             .frame(maxWidth: .infinity).padding(.top, 40)
         } else if loading && people.isEmpty {
-            ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+            // Skeleton rows in the real rows' shape (owner 2026-11-10: no spinner), as many as the
+            // tab's count says will come, up to a screenful.
+            let n = max(1, min(8, tab.isEmpty ? total : (counts.first { $0.emoji == tab }?.count ?? 1)))
+            VStack(spacing: 0) {
+                ForEach(0..<n, id: \.self) { i in
+                    HStack(spacing: 12) {
+                        SkeletonCircle(size: 48)
+                        VStack(alignment: .leading, spacing: 7) {
+                            SkeletonBlock(width: [130, 100, 160, 115][i % 4], height: 14)
+                            SkeletonBlock(width: [80, 95, 70, 88][i % 4], height: 11)
+                        }
+                        Spacer(minLength: 0)
+                        SkeletonBlock(width: 28, height: 12)
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(height: 68)
+                }
+            }
+            .accessibilityLabel("Loading")
         } else if people.isEmpty {
             Text("No reactions")
                 .font(.system(size: 15)).foregroundStyle(.secondary)
@@ -234,6 +259,7 @@ struct ActivityReactorsSheet: View {
             people = base + found.filter { seen.insert($0.id).inserted }
             failed = false
             gone = false
+            ReactorsCache.put(item.id, tab, .init(people: people, next: next, counts: counts, total: total))
         } catch {
             guard gen == generation else { return }
             // The comment was deleted since the row was written (getReplyReactors: not-found).
@@ -243,5 +269,50 @@ struct ActivityReactorsSheet: View {
             }
             failed = true
         }
+    }
+
+    /// The first page for an item, fetched ahead so the sheet opens filled (ActivityFeedView calls
+    /// this for the few newest "X and N others reacted" rows when the page opens). Errors are
+    /// ignored: the sheet asks again itself.
+    @MainActor
+    static func prefetch(_ item: ActivityItem) async {
+        guard ReactorsCache.get(item.id, "") == nil else { return }
+        let aid = item.mine.aid == item.mine.rid ? "" : item.mine.aid
+        let args: [String: Any] = ["cid": item.cid, "mid": item.mid, "rid": item.mine.rid, "aid": aid,
+                                   "emoji": "", "cursor": ""]
+        guard let res = try? await Functions.functions(region: "me-central1")
+            .httpsCallable("getReplyReactors").call(args) else { return }
+        let d = res.data as? [String: Any] ?? [:]
+        let page: [Person] = (d["people"] as? [[String: Any]] ?? []).map { r in
+            Person(uid: r["u"] as? String ?? "", name: r["n"] as? String ?? "Someone",
+                   photo: r["p"] as? String ?? "", handle: r["h"] as? String ?? "",
+                   emoji: r["e"] as? String ?? "❤️",
+                   at: Date(timeIntervalSince1970: ((r["at"] as? NSNumber)?.doubleValue ?? 0) / 1000))
+        }
+        guard !page.isEmpty else { return }
+        var counts: [ActivityItem.Count] = []
+        if let rx = d["rx"] as? [String: Any] {
+            counts = rx.compactMap { k, v in (v as? NSNumber).map { ActivityItem.Count(emoji: k, count: $0.intValue) } }
+                .filter { $0.count > 0 }.sorted { $0.count > $1.count }
+        }
+        let total = (d["total"] as? NSNumber)?.intValue ?? counts.reduce(0) { $0 + $1.count }
+        ReactorsCache.put(item.id, "", .init(people: page, next: d["next"] as? String ?? "", counts: counts, total: total))
+    }
+}
+
+/// The reactors sheet's last answer per (Activity item, tab), in memory for this launch only.
+@MainActor
+enum ReactorsCache {
+    struct Entry {
+        var people: [ActivityReactorsSheet.Person]
+        var next: String
+        var counts: [ActivityItem.Count]
+        var total: Int
+    }
+    private static var store: [String: Entry] = [:]
+    static func get(_ id: String, _ tab: String) -> Entry? { store[id + "|" + tab] }
+    static func put(_ id: String, _ tab: String, _ e: Entry) {
+        if store.count > 200 { store.removeAll() }
+        store[id + "|" + tab] = e
     }
 }

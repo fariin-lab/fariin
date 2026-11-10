@@ -77,7 +77,7 @@ struct ActivityFeedView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button { Task { await store.markAllRead() } } label: {
-                        Label("Mark All as Read", systemImage: "envelope.open")
+                        Label { Text("Mark All as Read") } icon: { MenuIcon("ic_read_all") }
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -119,6 +119,10 @@ struct ActivityFeedView: View {
         tookSnapshot = true
         unreadAtOpen = Set(store.items.filter { !$0.read }.map(\.id))
         Task { await store.markAllRead() }
+        // The newest few "X and N others reacted" rows fetch who reacted now, so their sheet opens
+        // filled instead of waiting on the server (owner 2026-11-10). Three at most, one at a time.
+        let ahead = store.items.filter { $0.kind == .react && $0.others > 0 }.prefix(3)
+        Task { for it in ahead { await ActivityReactorsSheet.prefetch(it) } }
     }
 
     /// The Replies sheet's Top / Newest chip, at this page's size (the approved mock: 32 pt, 15 pt).
@@ -428,6 +432,12 @@ struct ActivityChatRow: View {
                     Text("Activity")
                         .font(.headline.weight(unread > 0 ? .bold : .semibold))
                         .lineLimit(1)
+                    if ActivityMute.shared.muted {
+                        // Muted (swipe left, Mute): the struck bell after the name, as a muted chat.
+                        Image("ic_bell_off").renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 15, height: 15).foregroundStyle(.secondary)
+                            .accessibilityLabel("Muted")
+                    }
                     Spacer(minLength: 8)
                     Text(ActivityTime.listTime(summary?.lastAtMillis ?? 0))
                         .font(.subheadline)
@@ -449,7 +459,7 @@ struct ActivityChatRow: View {
                             .contentTransition(.numericText())
                             .padding(.horizontal, 5)
                             .frame(minWidth: 20, minHeight: 20)
-                            .background(Theme.accent(dark)).clipShape(Capsule())
+                            .background(ActivityMute.shared.muted ? Color(.systemGray3) : Theme.accent(dark)).clipShape(Capsule())
                     }
                 }
             }

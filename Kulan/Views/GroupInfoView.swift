@@ -639,12 +639,12 @@ struct GroupInfoView: View {
             // or Leave, Share, Search, Mute, the visitor page's order (`PublicGroupSheet`).
             if let name = conv?.publicName, !name.isEmpty {
                 Button { shareGroupText = "Follow " + (conv?.title ?? "this channel") + " on Fariin: https://fariin.com/" + name } label: {
-                    actionIcon("square.and.arrow.up", "Share")
+                    actionIcon("ic_share_up", "Share")
                 }
                 .tint(.primary)
             } else {
                 // No public link: still in its place, faded, as the visitor page draws it.
-                actionIcon("square.and.arrow.up", "Share").opacity(0.45)
+                actionIcon("ic_share_up", "Share").opacity(0.45)
             }
             Button { onSearch?() } label: { actionIcon("magnifyingglass", "Search") }
                 .tint(.primary)
@@ -1009,7 +1009,7 @@ struct GroupInfoView: View {
             if isChannel, let link = inviteLink {
                 Button {
                     if can(.inviteUsers) { shareGroupText = link } else { showMemberLink = true }
-                } label: { actionIcon("square.and.arrow.up", "Share") }
+                } label: { actionIcon("ic_share_up", "Share") }
                     .tint(.primary)
                     .accessibilityLabel("Share")
             }

@@ -1639,10 +1639,18 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     /// The Activity row: not a conversation, so it has its own small builder. Same height and
     /// two-line reserve as a chat row, so the in-place refresh stays safe.
+    /// The Activity row painted again (its muted bell changed).
+    func refreshActivityRow() {
+        for ip in tableView.indexPathsForVisibleRows ?? [] where rowId(at: ip) == ActivityStore.rowId {
+            if let cell = tableView.cellForRow(at: ip) as? ChatListCell { configureActivityCell(cell) }
+        }
+    }
+
     private func configureActivityCell(_ cell: ChatListCell) {
         let summary = host?.parent.activity
         let dark = host?.parent.dark ?? false
         configuredActivity = summary
+        ActivityMute.shared.loadIfNeeded()   // the muted bell (one read per account)
         cell.contentConfiguration = UIHostingConfiguration {
             ActivityChatRow(summary: summary, dark: dark)
         }
@@ -1876,7 +1884,20 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     func tableView(_ tableView: UITableView,
                    trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         // The Activity row: nothing on this side (an empty set, so UIKit adds no default Delete).
-        if rowId(at: indexPath) == ActivityStore.rowId { return UISwipeActionsConfiguration(actions: []) }
+        // Swipe left on it: Mute / Unmute only (owner 2026-11-10), the same bells and colour as a chat's.
+        if rowId(at: indexPath) == ActivityStore.rowId {
+            let muted = ActivityMute.shared.muted
+            let mute = UIContextualAction(style: .normal, title: muted ? "Unmute" : "Mute") { [weak self] _, _, done in
+                ActivityMute.shared.set(!muted)
+                done(true)
+                DispatchQueue.main.async { self?.refreshActivityRow() }
+            }
+            mute.image = ChatListIcon.asset(muted ? "ic_bell" : "ic_bell_off")
+            mute.backgroundColor = .systemIndigo
+            let cfg = UISwipeActionsConfiguration(actions: [mute])
+            cfg.performsFirstActionWithFullSwipe = false
+            return cfg
+        }
         guard let c = conversation(at: indexPath), let p = host?.parent else { return nil }
         let archive = UIContextualAction(style: .normal, title: "Archive") { _, _, done in
             p.onArchive(c); done(true)

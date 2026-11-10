@@ -2103,7 +2103,7 @@ struct ChatsView: View {
                 Label { Text("Select Chats") } icon: { MenuIcon(system: "checkmark.circle") }
             }
             Button { markAllRead() } label: {
-                Label { Text("Mark All as Read") } icon: { MenuIcon(system: "checkmark.bubble") }
+                Label { Text("Mark All as Read") } icon: { MenuIcon("ic_read_all") }
             }
             // ⛔ THE THREE FILTERS ARE A `Picker` NOW, AND THAT IS WHAT LETS THEM CARRY ICONS —
             // owner, 2026-09-11: "add icons to All, Unread, Groups… use my custom icons only".

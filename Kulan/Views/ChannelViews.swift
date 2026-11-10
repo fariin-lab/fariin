@@ -1005,7 +1005,7 @@ struct ChannelAdminCard: View {
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             HStack(spacing: 0) {
-                circle("square.and.arrow.up", "Share") { Task { await share() } }
+                circle("ic_share_up", "Share") { Task { await share() } }
                 if canEdit {
                     circle("pencil", conv.groupDescription.isEmpty ? "Description" : "Edit") { showEdit = true }
                 }

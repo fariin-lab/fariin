@@ -418,3 +418,43 @@ final class ActivityStore {
         r.pendingChatId = item.cid
     }
 }
+
+/// The Activity row's Mute (owner 2026-11-10: swipe the row left, Mute). Muted = no pushes about
+/// replies, reactions or quotes; items and the unread count still come. The switch lives on the
+/// server (`users/{me}/activityMeta/prefs.muted`, written only by groups:setActivityMute, read by
+/// replyPushJob); this mirrors it for the row and the swipe button.
+@MainActor
+@Observable
+final class ActivityMute {
+    static let shared = ActivityMute()
+    private(set) var muted = false
+    private var loadedFor = ""
+
+    /// Reads the switch once per signed-in account.
+    func loadIfNeeded() {
+        guard let uid = Auth.auth().currentUser?.uid, loadedFor != uid else { return }
+        loadedFor = uid
+        muted = false
+        Firestore.firestore().document("users/\(uid)/activityMeta/prefs").getDocument { [weak self] snap, _ in
+            Task { @MainActor in
+                guard let self, Auth.auth().currentUser?.uid == uid else { return }
+                self.muted = snap?.data()?["muted"] as? Bool ?? false
+            }
+        }
+    }
+
+    /// Flips at once; goes back if the server says no.
+    func set(_ on: Bool) {
+        let was = muted
+        muted = on
+        Task {
+            do {
+                _ = try await Functions.functions(region: "me-central1")
+                    .httpsCallable("setActivityMute").call(["muted": on])
+            } catch {
+                await MainActor.run { self.muted = was }
+                DiagLog.add("activity: setActivityMute failed \(error.localizedDescription)")
+            }
+        }
+    }
+}
