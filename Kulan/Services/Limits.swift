@@ -22,7 +22,10 @@ enum Limits {
     /// ⛔ 6,400 IN THE FIELD, 2,500 A BUBBLE (owner 2026-10-29, the reference app's way: "you paste
     /// and send more, but each bubble is 2,500; up to 6,400 is about 3 bubbles"). His newer word
     /// replaces the 08-27 one (65,536) and the same day's flat 2,500. `ThreadView.send` splits.
-    static let messageMaxChars = 6_400
+    /// owner 2026-11-10: 4,096 (was 6,400), the size big messengers use.
+    static let messageMaxChars = 4_096
+    /// A photo's or video's caption (owner 2026-11-10): 1,024, shorter than a message.
+    static let captionMaxChars = 1_024
     static let messageBubbleChars = 2_500
     static let pinnedMessagesPerChat = 3
     /// Photos or videos in one album message. Picking more starts another album rather than hiding the
@@ -91,13 +94,15 @@ enum Limits {
     /// How long a pick may be before we refuse it outright: ten minutes, which at 90s a segment is
     /// seven stories. Past that the split stops being a story and starts being a film.
     static let storyVideoPickSeconds = 600
-    static let storyCaptionChars = 700
+    static let storyCaptionChars = 200   // owner 2026-11-10 (was 700)
 
     // Groups
     static let groupMembers = 1024
     static let groupAdmins = 20
     static let groupNameChars = 100
     static let groupDescChars = 512
+    /// A channel's description (owner 2026-11-10): 255. A group's comes from the panel (group_desc_max).
+    static let channelDescChars = 255
 
     // Profile
     /// ⚠️ MUST MATCH `USERNAME_MIN` in functions-username. The server is the one that counts; this
@@ -114,7 +119,8 @@ enum Limits {
     static let usernameMaxChars = 30
     static let bioChars = 140
     static let profilePhotoBytes = 8 * 1024 * 1024              // 8 MB — storage.rules profiles/
-    static let usernameChangesPer30Days = 2
+    // Username changes: 3 per 24 hours, counted by the server (functions-username MAX_CLAIMS_PER_DAY,
+    // owner 2026-11-10). No copy here: the server's refusal says when to try again.
 
     // Anti-spam (rate limits enforced in Cloud Functions)
     static let reportsPerDay = 10

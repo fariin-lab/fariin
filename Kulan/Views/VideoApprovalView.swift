@@ -570,6 +570,7 @@ struct VideoApprovalView: View {
                 // One line with the keyboard down (owner 2026-11-02); with it up it grows to ~7 lines then scrolls
                 .lineLimit(captionFocused ? 1...7 : 1...1)
                 .foregroundStyle(.primary).focused($captionFocused)
+                    .onChange(of: caption) { _, v in if v.count > Limits.captionMaxChars { caption = String(v.prefix(Limits.captionMaxChars)) } }
                 .padding(.horizontal, 16).padding(.vertical, 9).frame(minHeight: 40)
                 .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
             Button { send() } label: {

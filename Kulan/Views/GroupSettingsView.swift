@@ -1620,9 +1620,13 @@ struct EditGroupView: View {
     private var trimmedDesc: String { desc.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// A group description's ceiling, the size the large messengers give one.
     /// From the admin panel (`group_desc_max`, fallback 150; owner 2026-10-22).
-    private static var descChars: Int { AppLimits.shared.groupDescMax }
+    /// A channel's: 255 (owner 2026-11-10). A group's: the panel's group_desc_max.
+    private var descChars: Int {
+        ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.isChannel == true
+            ? Limits.channelDescChars : AppLimits.shared.groupDescMax
+    }
     private static let descCounterAppearsAt = 20
-    private var descRemaining: Int { max(0, Self.descChars - desc.count) }
+    private var descRemaining: Int { max(0, descChars - desc.count) }
     private var changed: Bool {
         newPhoto != nil || removePhoto || trimmed != title
             || trimmedDesc != description.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1690,13 +1694,13 @@ struct EditGroupView: View {
                     VStack(alignment: .trailing, spacing: 6) {
                         TextField("Description",
                                   text: Binding(get: { desc },
-                                                set: { desc = Limits.oneParagraph($0, max: Self.descChars) }),
+                                                set: { desc = Limits.oneParagraph($0, max: descChars) }),
                                   axis: .vertical)
                             .lineLimit(1...5)
                             .focused($descFocused)
                         // Always "used/limit", as the tag field (owner 2026-10-21: say how many
                         // characters they can write); red at the limit.
-                        Text("\(desc.count)/\(Self.descChars)")
+                        Text("\(desc.count)/\(descChars)")
                             .font(.footnote)
                             .monospacedDigit()
                             .foregroundStyle(descRemaining == 0 ? .red : .secondary)
@@ -1743,7 +1747,7 @@ struct EditGroupView: View {
             }
             .onAppear {
                 if name.isEmpty { name = title }
-                if !descLoaded { desc = Limits.oneParagraph(description, max: Self.descChars); descLoaded = true }
+                if !descLoaded { desc = Limits.oneParagraph(description, max: descChars); descLoaded = true }
                 // A beat after the sheet starts rising, so the field is in a window to take focus.
                 if focusDescription { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { descFocused = true } }
             }

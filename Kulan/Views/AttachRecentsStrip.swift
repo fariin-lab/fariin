@@ -425,6 +425,7 @@ struct AttachRecentsStrip: View {
                     .lineLimit(captionFocused ? 1...7 : 1...1)
                     .foregroundStyle(.primary)
                     .focused($captionFocused)
+                    .onChange(of: caption) { _, v in if v.count > Limits.captionMaxChars { caption = String(v.prefix(Limits.captionMaxChars)) } }
                     .disabled(viewOnce)
                     .padding(.vertical, 9)   // single-line vertical centering; ① stays bottom-aligned
                 // View Once: the "1" toggle inside the caption field, for a single photo.
