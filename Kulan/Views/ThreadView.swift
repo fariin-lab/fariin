@@ -14437,6 +14437,15 @@ final class SingleFilePreviewController: QLPreviewController, QLPreviewControlle
         guard let top = WebLink.topViewController() else { return }
         // A file page already up (or on its way) is never covered by a second one.
         if top is SingleFilePreviewController { return }
+        // ⛔ A .md OR .txt FILE OPENS AS A READ PAGE in our browser sheet (owner 2026-11-10: the
+        // system preview showed the raw "# | **" characters). Too big or unreadable: the preview.
+        if MarkdownHTML.isMarkdown(url) || MarkdownHTML.isPlainText(url) {
+            if top is InAppBrowserViewController { return }
+            if let page = MarkdownHTML.page(for: url) {
+                top.present(InAppBrowserViewController(document: url, html: page.html, title: page.title), animated: true)
+                return
+            }
+        }
         top.present(SingleFilePreviewController(url: url), animated: true)
     }
 }

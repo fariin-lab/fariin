@@ -82,6 +82,17 @@ final class InAppBrowserViewController: UIViewController {
         return v
     }
 
+    /// A file shown as a read page (`MarkdownHTML`): its HTML, its title, and the file itself for
+    /// Share. Nil for a web page.
+    private var document: (html: String, title: String, file: URL)?
+
+    /// ⛔ A .md OR .txt FILE FROM A CHAT (owner 2026-11-10, with the reference app's read page): the
+    /// same sheet and glass as a link, the file's title in the capsule, Share in place of Safari.
+    convenience init(document file: URL, html: String, title: String) {
+        self.init(url: URL(string: "about:blank")!)
+        document = (html, title, file)
+    }
+
     init(url: URL) {
         initialURL = url
         let config = WKWebViewConfiguration()
@@ -143,7 +154,15 @@ final class InAppBrowserViewController: UIViewController {
 
         refreshTitle()
         refreshButtons()
-        webView.load(URLRequest(url: initialURL))
+        if let document {
+            // No base URL: the page can reach nothing on the phone or the web by itself.
+            webView.loadHTMLString(document.html, baseURL: nil)
+            reloadButton.isHidden = true
+            safariButton.setImage(barSymbol("square.and.arrow.up"), for: .normal)
+            safariButton.accessibilityLabel = "Share"
+        } else {
+            webView.load(URLRequest(url: initialURL))
+        }
     }
 
     private func symbol(_ name: String, _ size: CGFloat, _ weight: UIImage.SymbolWeight = .semibold) -> UIImage? {
@@ -214,6 +233,8 @@ final class InAppBrowserViewController: UIViewController {
 
         setUp(safariButton, "safari", "Open in Safari", in: safariGlass) { [weak self] in
             guard let self else { return }
+            // A file's page shares the file itself; a web page opens in Safari.
+            if self.document != nil, self.webView.url?.scheme?.lowercased() == "about" { self.share(); return }
             // Leaving is allowed, but only when asked for by name.
             UIApplication.shared.open(self.webView.url ?? self.initialURL)
         }
@@ -393,6 +414,13 @@ final class InAppBrowserViewController: UIViewController {
     }
 
     private func refreshTitle() {
+        // A file's own page: its title. A link followed from it shows that site, as any page does.
+        if let document, (webView.url == nil || webView.url?.scheme?.lowercased() == "about") {
+            hostLabel.text = document.title
+            addressButton.accessibilityValue = document.title
+            view.setNeedsLayout()
+            return
+        }
         let url = webView.url ?? initialURL
         let host = Self.displayHost(url)
         // No lock glyph in the new design; a plain-http page still says so in words.
@@ -416,6 +444,9 @@ final class InAppBrowserViewController: UIViewController {
 
     private func reload() {
         hideError()
+        if let document, webView.url?.scheme?.lowercased() != "http", webView.url?.scheme?.lowercased() != "https" {
+            webView.loadHTMLString(document.html, baseURL: nil); return
+        }
         if webView.url != nil { webView.reload() } else { webView.load(URLRequest(url: initialURL)) }
     }
 
@@ -443,9 +474,17 @@ final class InAppBrowserViewController: UIViewController {
         let pageLoaded = webView.url != nil
         let shareItem = UIAction(title: "Share", image: UIImage(named: "ic_link_share")?.withRenderingMode(.alwaysTemplate),
                                  attributes: pageLoaded ? [] : .disabled) { [weak self] _ in self?.share() }
-        let copy = UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
-            UIPasteboard.general.url = url
-        }
+        let onFile = document != nil && url.scheme?.lowercased() != "http" && url.scheme?.lowercased() != "https"
+        let copy = onFile
+            ? UIAction(title: "Copy Text", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                // The file's own words, as written (a file page has no link to copy).
+                if let f = self?.document?.file, let d = try? Data(contentsOf: f) {
+                    UIPasteboard.general.string = String(data: d, encoding: .utf8) ?? String(data: d, encoding: .isoLatin1)
+                }
+            }
+            : UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
+                UIPasteboard.general.url = url
+            }
         let find = UIAction(title: "Find on Page", image: UIImage(systemName: "doc.text.magnifyingglass")) { [weak self] _ in
             self?.webView.findInteraction?.presentFindNavigator(showingReplace: false)
         }
@@ -483,6 +522,12 @@ final class InAppBrowserViewController: UIViewController {
     }
 
     private func share() {
+        if let document, webView.url?.scheme?.lowercased() != "http", webView.url?.scheme?.lowercased() != "https" {
+            let sheet = UIActivityViewController(activityItems: [document.file], applicationActivities: nil)
+            sheet.popoverPresentationController?.sourceView = safariButton
+            present(sheet, animated: true)
+            return
+        }
         guard let url = webView.url else { return }
         let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         sheet.popoverPresentationController?.sourceView = menuButton
