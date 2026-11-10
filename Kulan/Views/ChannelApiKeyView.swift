@@ -42,71 +42,150 @@ struct ChannelApiKeyView: View {
     @State private var confirmNew = false
     @State private var confirmRevoke = false
 
+    private var example: String {
+        "POST \(ChannelApiKey.endpoint)\nX-Api-Key: <your key>\nContent-Type: application/json\n\n{\"action\":\"post\",\"text\":\"Hello\"}"
+    }
+    @State private var addressCopied = false
+    @State private var exampleCopied = false
+
     var body: some View {
         List {
+            // 1. What this is (same layout as Android ChannelApiKeyPage).
+            Section {
+                VStack(spacing: 6) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 64, height: 64)
+                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    Text("Channel API").font(.title2.bold()).padding(.top, 6)
+                    Text("Let your own program read and post in this channel, any time.")
+                        .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .listRowBackground(Color.clear)
+            }
+
+            // 2. The key.
             Section {
                 if loading {
                     HStack { Spacer(); ProgressView(); Spacer() }
                 } else if let freshKey {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(freshKey)
-                            .font(.system(.footnote, design: .monospaced))
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button {
-                            UIPasteboard.general.string = freshKey
-                            copied = true
-                        } label: {
-                            Label(copied ? "Copied" : "Copy Key", systemImage: copied ? "checkmark" : "doc.on.doc")
-                        }
+                    Text(freshKey)
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    Button {
+                        UIPasteboard.general.string = freshKey
+                        copied = true
+                    } label: {
+                        Label(copied ? "Copied" : "Copy Key", systemImage: copied ? "checkmark" : "doc.on.doc")
                     }
-                    .padding(.vertical, 4)
                 } else if hasKey {
                     HStack {
-                        Text("Active key")
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Active")
+                                if let createdAt {
+                                    Text("Created \(createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.footnote).foregroundStyle(.secondary)
+                                }
+                            }
+                        } icon: { Image(systemName: "key") }
                         Spacer()
                         Text("••••\(hint ?? "")").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
-                    }
-                    if let createdAt {
-                        HStack {
-                            Text("Created")
-                            Spacer()
-                            Text(createdAt.formatted(date: .abbreviated, time: .shortened)).foregroundStyle(.secondary)
-                        }
+                        Circle().fill(Color.green).frame(width: 8, height: 8)
                     }
                 } else {
-                    Text("No key").foregroundStyle(.secondary)
+                    Label("No key yet", systemImage: "key").foregroundStyle(.secondary)
                 }
+                if !loading {
+                    Button {
+                        if hasKey { confirmNew = true } else { run("create") }
+                    } label: {
+                        Label(hasKey ? "New Key" : "Create Key", systemImage: hasKey ? "arrow.clockwise" : "plus")
+                    }
+                    .disabled(busy)
+                    if hasKey {
+                        Button(role: .destructive) { confirmRevoke = true } label: {
+                            Label("Revoke Key", systemImage: "trash")
+                        }
+                        .disabled(busy)
+                    }
+                }
+            } header: {
+                Text("Key")
             } footer: {
                 if freshKey != nil {
                     Text("Copy it now. Fariin keeps only the last 4 characters, so it can't be shown again.")
+                } else if hasKey {
+                    Text("New Key stops the old key at once. Revoke stops it with no new one.")
                 } else {
-                    Text("A program with this key can read, post, edit, delete and pin posts in this channel. It can't change the channel's settings, admins or owner.")
+                    Text("Only you can see this page. The key works for this channel only.")
                 }
             }
 
             if !loading {
-                Section {
-                    Button(hasKey ? "New Key" : "Create Key") {
-                        if hasKey { confirmNew = true } else { run("create") }
+                // 3. How to connect.
+                Section("Connect") {
+                    Button {
+                        UIPasteboard.general.string = ChannelApiKey.endpoint
+                        addressCopied = true
+                    } label: {
+                        HStack {
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Address").foregroundStyle(.primary)
+                                    Text(ChannelApiKey.endpoint).font(.footnote).foregroundStyle(.secondary)
+                                }
+                            } icon: { Image(systemName: "link") }
+                            Spacer()
+                            Image(systemName: addressCopied ? "checkmark" : "doc.on.doc")
+                        }
                     }
-                    .disabled(busy)
-                    if hasKey {
-                        Button("Revoke Key", role: .destructive) { confirmRevoke = true }
-                            .disabled(busy)
+                    HStack {
+                        Label("Key goes in header", systemImage: "lock")
+                        Spacer()
+                        Text("X-Api-Key").font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
                     }
-                } footer: {
-                    Text("New Key stops the old key at once. Revoke stops it with no new one.")
                 }
 
+                // 4. What the key can do: the plain words, and the action as the program sends it.
                 Section {
-                    Text(ChannelApiKey.endpoint)
-                        .font(.system(.footnote, design: .monospaced))
-                        .textSelection(.enabled)
+                    apiAction("doc.text", "Read posts", "read")
+                    apiAction("textformat", "Post text", "post + text")
+                    apiAction("photo", "Post a photo", "post + image or imageUrl")
+                    apiAction("pencil", "Edit a post", "edit + id + text")
+                    apiAction("trash", "Delete a post", "delete + id")
+                    apiAction("pin", "Pin or unpin", "pin / unpin + id")
                 } header: {
-                    Text("Address")
+                    Text("What it can do")
                 } footer: {
-                    Text("Send the key in the \"X-Api-Key\" header with a JSON body, for example {\"action\":\"post\",\"text\":\"Hello\"}. Actions: read, post, edit, delete, pin, unpin.")
+                    Text("It can't change the channel's settings, admins or owner.")
+                }
+
+                // 5. One example to copy.
+                Section {
+                    Text(example)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    Button {
+                        UIPasteboard.general.string = example
+                        exampleCopied = true
+                    } label: {
+                        Label(exampleCopied ? "Copied" : "Copy Example", systemImage: exampleCopied ? "checkmark" : "doc.on.doc")
+                    }
+                } header: {
+                    Text("Example")
+                } footer: {
+                    Text("Up to 20 changes a minute and 500 a day. Photos: JPEG or PNG, up to 10 MB.")
                 }
             }
         }
@@ -131,6 +210,15 @@ struct ChannelApiKeyView: View {
         } message: {
             Text(error ?? "")
         }
+    }
+
+    private func apiAction(_ icon: String, _ title: String, _ action: String) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(action).font(.system(.footnote, design: .monospaced)).foregroundStyle(.secondary)
+            }
+        } icon: { Image(systemName: icon) }
     }
 
     private func load() async {
