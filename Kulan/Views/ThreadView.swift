@@ -4019,7 +4019,7 @@ struct ThreadView: View {
         // A channel's reactions (2026-10-29): my picks live apart from the posts, so they key too.
         let chanRx = conversation?.isChannel == true
         let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.countOverrides[cid]?.count ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
-        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(groupCardTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")|\(conversation?.repliesOff == true)|\(conversation?.bubbleStylesOff == true)"   // 2026-09-24 feature-audit: edit clock; replies switch 2026-11-06
+        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(groupCardTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")|\(conversation?.repliesOff == true)|\(conversation?.bubbleStylesOff == true)|\(conversation?.quotesOff == true)"   // 2026-09-24 feature-audit: edit clock; replies switch 2026-11-06; quotes switch 2026-11-10
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -4107,6 +4107,10 @@ struct ThreadView: View {
                 // recompute at all; this token is what makes the right row differ.)
                 // The Replies / Quotes bar (owner 2026-11-06): its counts and the channel's replies switch.
                 let chanRepliesOff = conversation?.repliesOff == true
+                // The quotes switch takes the "N Quotes" part off every post's bar, and with no
+                // replies the whole bar (MessageRowModelBuilder.postBar): a height change the row
+                // models already key on, so the rows' values must move with it too (2026-11-10).
+                let quotesTok = conversation?.quotesOff == true ? "Q0" : "Q1"
                 let hiddenTiles = m.album.isEmpty ? "-"
                     : (0..<m.album.count).filter { HiddenMessages.isHidden("\(m.id)-\($0)") }.map(String.init).joined(separator: ",")
                 // ⛔ WHAT THE FOOTER AND THE MEDIA FRAME ARE MADE FROM — owner 2026-10-21, the same
@@ -4137,7 +4141,7 @@ struct ThreadView: View {
                 if let r = m.replyTo, !r.isStatus, repo.quoteOriginalDeleted(r.id) { linkTok += ":QD" }
                 // Bold spans: an edit may change only them.
                 if let b = m.boldSpans { linkTok += ":B\(b.hashValue)" }
-                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.replyFaces.hashValue)|\(m.repliesOff(channelDefault: chanRepliesOff))"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
+                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.replyFaces.hashValue)|\(m.repliesOff(channelDefault: chanRepliesOff))|\(quotesTok)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
             sigCache.base = out

@@ -3800,6 +3800,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     private func performScrollTarget(_ target: String) {
+        if jumpIsTheLanding(target) {
+            flashLandedRow(target)
+            return
+        }
         // owner audit 2026-10-06 chat #50: a jump is the reader being moved on purpose, so the
         // one-shot landing re-pin must not pull them back to where the chat opened.
         awaitingInitialRepin = false
@@ -3809,6 +3813,30 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if target == "BOTTOM" {
             perform(.newest(animated: true))
         } else { perform(.message(target)) }
+    }
+
+    /// ⛔ A JUMP TO THE ROW THE CHAT OPENED ON IS NOT A MOVE (owner 2026-11-10, video: a quote card
+    /// opened its channel on the quoted post, then a moment later the whole list slid up ~120pt).
+    /// Opening at a message lands on it at once (`initialScrollId`), and ThreadView then asks for the
+    /// same message again as a jump, 400 ms later, so it flashes. That jump ended the landing hold
+    /// and the focus pin even when there was nothing to scroll. With the hold gone, the push's
+    /// `viewDidAppear` put the reader back at the distance from the bottom recorded at the land,
+    /// and the rows below had taken their real heights since (LISTGEO# land y=687 max=2099, then
+    /// y=812 max=2224, dist=1412 both times): the post moved up by exactly that growth.
+    /// The reference app leaves a jumped-to message where it first landed and highlights it. So
+    /// does this: the landing keeps holding the row, and the jump only flashes it.
+    private func jumpIsTheLanding(_ target: String) -> Bool {
+        guard target != "BOTTOM", isLandingHeld,
+              let landed = landedTarget?.id, landed == target,
+              dataSource.indexPath(for: target) != nil else { return false }
+        return true
+    }
+
+    /// The flash a jump gives its row, with no scroll and the landing left in charge.
+    private func flashLandedRow(_ target: String) {
+        pendingNewestJump = nil   // the reader asked for this message; a parked trip to the newest is stale
+        pendingJumpHighlight = target
+        if !programmaticScrollAnimating { performJumpHighlightIfNeeded() }
     }
 
     private func reflowInserted(_ ids: [String]) {
@@ -3977,10 +4005,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // same gate and retry every parked jump uses. It outranks the landing, so no re-pin after it.
         if let target = pendingScrollTarget {
             pendingScrollTarget = nil
-            awaitingInitialRepin = false
-            endLandingHold()
-            revealNow()   // no re-pin is coming; a deferred reveal must not wait for one
-            parkScrollTarget(target)
+            // A jump to the very row this land just put on screen only flashes it, and the landing
+            // keeps holding it (see `jumpIsTheLanding`).
+            if jumpIsTheLanding(target) {
+                flashLandedRow(target)
+            } else {
+                awaitingInitialRepin = false
+                endLandingHold()
+                revealNow()   // no re-pin is coming; a deferred reveal must not wait for one
+                parkScrollTarget(target)
+            }
         }
         // The guessed rows, once the push has finished sliding (about 0.35s), so the slide is not
         // sharing its frames with them. See `settleEstimatedHeights`.
@@ -6416,12 +6450,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     func repaintUikitCells() {
         guard !rowModels.isEmpty, collectionView.bounds.width > 0 else { return }
+        var drifted: [String] = []
         for ip in collectionView.indexPathsForVisibleItems {
             guard let id = dataSource.itemIdentifier(for: ip),
                   let m = rowModels[id],
                   let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { continue }
-            cell.repaintMetaIfChanged(m, plan: planStore.plan(for: m, width: collectionView.bounds.width),
-                                      cid: cid)
+            let plan = planStore.plan(for: m, width: collectionView.bounds.width)
+            // ⛔ A REPAINT NEVER DRAWS A ROW TALLER OR SHORTER THAN ITS FRAME (VE3, the unread divider
+            // drawn over the Reply bar above it and the first line below it). This pass runs right
+            // after `apply`, also when `apply` parked the update behind a send glide or a menu, so
+            // `heights` can still hold the old number. Since channel posts wear their bar and count
+            // while sending, a post's model can change in a way `sameGeometry` lets through (the
+            // sending clock's footer slot) while its plan height moves, and the cell then drew over
+            // its neighbours. Such a row goes to the measured path instead, which moves the frame
+            // and the reader together and then reconfigures the cell.
+            if let cached = heights[id], abs(cached - plan.height) > 0.5,
+               let shown = cell.model, shown != m {
+                drifted.append(id)
+                continue
+            }
+            cell.repaintMetaIfChanged(m, plan: plan, cid: cid)
+        }
+        // Before the first land nothing is shown yet, and the land measures every row it draws.
+        guard !drifted.isEmpty, didFirstLand else { return }
+        if canLandLoad {
+            refreshVisible(drifted)
+        } else {
+            drifted.forEach { pendingSettleHeights.insert($0) }
+            needsRefreshOnSettle = true
+            scheduleSettleRetry()
         }
     }
 

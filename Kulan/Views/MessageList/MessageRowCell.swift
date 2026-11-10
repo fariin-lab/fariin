@@ -454,6 +454,10 @@ final class MessageRowCell: UICollectionViewCell {
                 && x.showsFailedBadge == y.showsFailedBadge
                 && x.meta.edited == y.meta.edited && x.meta.timeText == y.meta.timeText
                 && x.meta.views == y.meta.views   // a channel post's count changes the footer's width
+                // Whether the footer reserves a tick slot (BubbleText.meta's own rule). A channel
+                // post keeps one only while its clock spins, so its send landing narrows the footer
+                // and can unwrap it (2026-11-10). The tick's look alone stays a repaint.
+                && Self.hasTickSlot(x) == Self.hasTickSlot(y)
                 && x.quoteBar == y.quoteBar         // the "N Quotes" bar grows the bubble (check-3 2026-11-06)
                 && x.wide == y.wide                 // a channel post takes the whole width
                 && x.meta.signature == y.meta.signature
@@ -464,6 +468,11 @@ final class MessageRowCell: UICollectionViewCell {
         default:
             return false
         }
+    }
+
+    /// The same test `BubbleText.meta` makes before it appends the tick's slot to the footer.
+    private static func hasTickSlot(_ b: BubbleRow) -> Bool {
+        (b.isMe || b.meta.tick == .sending) && b.meta.tick != .none && b.meta.tick != .failed
     }
 
     override func prepareForReuse() {
