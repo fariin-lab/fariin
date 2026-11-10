@@ -458,7 +458,11 @@ enum MessageRowModelBuilder {
                              // the server's write only made it appear late.
                              // Not while it is still on its way (offline): the clock says so, and
                              // a "1" beside it read as posted (Android check, 2026-11-06).
-                             views: ctx.isChannel && !msg.deleted && msg.sendState == nil
+                             // ⛔ FROM THE FIRST FRAME (owner 2026-11-10: the eye and its count
+                             // arrived after the post was sent, a late pop). My own post shows its
+                             // 1 while it goes out too; the spinning clock beside it still says it
+                             // is on its way. A failed send shows none.
+                             views: ctx.isChannel && !msg.deleted && msg.sendState != .failed
                                  ? (msg.authorId == ctx.me ? max(msg.views, 1) : msg.views) : nil,
                              signature: ctx.isChannel && ctx.signPosts && !msg.deleted ? ctx.nameFor(msg.authorId) : nil,
                              tick: tick,
