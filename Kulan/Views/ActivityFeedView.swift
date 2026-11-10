@@ -419,11 +419,14 @@ struct ActivityChatRow: View {
     var body: some View {
         let unread = summary?.unread ?? 0
         HStack(spacing: 12) {
+            // owner 2026-11-10 (option I of 16): a white circle with a black bell in dark mode. In light
+            // mode the same idea inverted (black circle, white bell), or a white circle would vanish
+            // into the white list.
             ZStack {
-                Circle().fill(AvatarPalette.placeholderFill)
+                Circle().fill(dark ? Color.white : Color.black)
                 Image(systemName: "bell.fill")
                     .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(dark ? Color.black : Color.white)
             }
             .frame(width: 56, height: 56)
             .padding(.vertical, 12)
