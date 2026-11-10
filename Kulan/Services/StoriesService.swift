@@ -332,7 +332,9 @@ extension StoriesService {
         FirestoreHub.db.collection("stories").document(storyId).collection("replies")
             .order(by: "createdAt").limit(toLast: 500)
             .addSnapshotListener { snap, _ in
-                let rows = (snap?.documents ?? []).map { d -> GroupStoryReply in
+                // A listener error keeps the replies already shown, not a blank list (audit L15).
+                guard let snap else { return }
+                let rows = snap.documents.map { d -> GroupStoryReply in
                     let x = d.data()
                     return GroupStoryReply(id: d.documentID, uid: x["uid"] as? String ?? "",
                                            text: x["text"] as? String ?? "", emoji: x["emoji"] as? String ?? "",

@@ -58,6 +58,11 @@ const cases = [
   ['I set my own silent posting', 'ALLOW', OWNER, 'create', `users/${OWNER}/channelPrefs/${CID}`, null, { silent: true }, chan, false],
   ['someone sets my silent posting', 'DENY', X, 'create', `users/${OWNER}/channelPrefs/${CID}`, null, { silent: true }, chan, false],
   ['silent as text', 'DENY', OWNER, 'create', `users/${OWNER}/channelPrefs/${CID}`, null, { silent: 'yes' }, chan, false],
+  // The bell merges `silent` and keeps the server's replyNotifs (audit L19, 2026-11-10).
+  ['bell keeps my reply alerts off', 'ALLOW', OWNER, 'update', `users/${OWNER}/channelPrefs/${CID}`, { replyNotifs: 'off' }, { replyNotifs: 'off', silent: true }, chan, false],
+  ['older build drops replyNotifs (B5-08 keeps it)', 'DENY', OWNER, 'update', `users/${OWNER}/channelPrefs/${CID}`, { replyNotifs: 'off', silent: false }, { silent: true }, chan, false],
+  ['I change replyNotifs myself', 'DENY', OWNER, 'update', `users/${OWNER}/channelPrefs/${CID}`, { replyNotifs: 'off', silent: false }, { replyNotifs: 'on', silent: true }, chan, false],
+  ['I add replyNotifs myself', 'DENY', OWNER, 'update', `users/${OWNER}/channelPrefs/${CID}`, { silent: false }, { replyNotifs: 'on', silent: true }, chan, false],
   ['admin renames the channel (control)', 'ALLOW', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, title: 'News 2' }, chan, false],
   ['admin turns a group INTO a channel', 'DENY', OWNER, 'update', `conversations/${CID}`, group, { ...group, channel: true }, group, false],
   ['admin edits followerCount', 'DENY', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, followerCount: 999 }, chan, false],

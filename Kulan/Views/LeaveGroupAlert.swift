@@ -47,12 +47,17 @@ struct LeaveGroupAlert: View {
     /// channel page's Leave does; words say channel.
     private var isChannel: Bool { conv.isChannel }
     private var followerOnly: Bool { conv.isChannel && conv.isFollower(me) }
-    private var actionTitle: String { isChannel ? "Leave Channel" : "Delete Group" }
+    /// A channel's OWNER is never offered Leave here, as on the channel page (GroupInfoView hides
+    /// Leave from the owner): the owner leaving empties the channel and the server removes it from
+    /// every follower. The swipe asks the channel page's own Delete Channel question instead, in the
+    /// same red words, and runs the same delete (with its Undo).
+    private var ownsChannel: Bool { conv.isChannel && conv.isOwner(me) }
+    private var actionTitle: String { ownsChannel ? "Delete Channel" : isChannel ? "Leave Channel" : "Delete Group" }
 
     /// The heir `ChatService.leaveGroup` picks: the longest-serving admin still a member, else the
     /// longest-serving member.
     private var ownerLine: String? {
-        guard conv.isOwner(me) else { return nil }
+        guard conv.isOwner(me), !ownsChannel else { return nil }
         guard let heir = conv.admins.first(where: { $0 != me && conv.users.contains($0) })
                 ?? conv.users.first(where: { $0 != me }) else { return nil }
         let who = conv.names[heir].flatMap { $0.isEmpty ? nil : $0 } ?? "another member"
@@ -81,7 +86,13 @@ struct LeaveGroupAlert: View {
             Text(actionTitle)
                 .font(.system(size: 17, weight: .semibold))
                 .padding(.top, 12)
-            (Text("Are you sure you want to leave ") + Text(name).bold() + Text("?"))
+            Group {
+                if ownsChannel {
+                    Text("This permanently deletes the channel and all its posts for everyone. Its followers lose it too. This cannot be undone.")
+                } else {
+                    Text("Are you sure you want to leave ") + Text(name).bold() + Text("?")
+                }
+            }
                 .font(.system(size: 14))
                 .multilineTextAlignment(.center)
                 .padding(.top, 6).padding(.horizontal, 20)
@@ -92,8 +103,10 @@ struct LeaveGroupAlert: View {
                     .padding(.top, 6).padding(.horizontal, 20)
             }
             VStack(spacing: 8) {
-                button(actionTitle, color: .red, weight: .semibold) {
-                    if followerOnly {
+                button(ownsChannel ? "Delete for Everyone" : actionTitle, color: .red, weight: .semibold) {
+                    if ownsChannel {
+                        LeaveGroupUndo.shared.start(cid: conv.id, title: name, kind: .deleteChannel)
+                    } else if followerOnly {
                         let cid = conv.id
                         Task {
                             do {

@@ -53,7 +53,15 @@ final class ChannelStoryCounts {
             .collection("meta").document("public")
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self, self.watchId == storyId else { return }
-                let d = snap?.data() ?? [:]
+                // A listener error is not "no views": the last numbers stay on screen (audit L15).
+                // The dead listener is let go, so the next look at this story listens again.
+                guard let snap else {
+                    self.listener?.remove()
+                    self.listener = nil
+                    self.watchId = ""
+                    return
+                }
+                let d = snap.data() ?? [:]
                 let next = Counts(views: (d["views"] as? NSNumber)?.intValue ?? 0,
                                   likes: (d["likes"] as? NSNumber)?.intValue ?? 0,
                                   reposts: (d["reposts"] as? NSNumber)?.intValue ?? 0)

@@ -46,8 +46,11 @@ enum PollService {
         }
         return PollVotesHub.shared.subscribe(key: "\(cid)|\(messageId)", cb) {
             votesRef(cid, messageId).addSnapshotListener { snap, _ in
+                // A listener error is not "0 votes": the last tally stays, and the poll listens
+                // again when the session recovers (audit L14).
+                guard let snap else { PollVotesHub.shared.noteDead(key: "\(cid)|\(messageId)"); return }
                 var out: [String: [Int]] = [:]
-                for d in snap?.documents ?? [] {
+                for d in snap.documents {
                     if let opts = d.data()["options"] as? [Int], !opts.isEmpty { out[d.documentID] = opts }
                     else if let opts = d.data()["options"] as? [NSNumber], !opts.isEmpty { out[d.documentID] = opts.map { $0.intValue } }
                 }
@@ -100,7 +103,9 @@ enum PollService {
                 PollVotesHub.shared.deliver(key: key, out)
             }
             let postReg = msgRef.addSnapshotListener { snap, _ in
-                let d = snap?.data() ?? [:]
+                // An error keeps the last tally (audit L14); the post's own numbers come back on recovery.
+                guard let snap else { PollVotesHub.shared.noteDead(key: key); return }
+                let d = snap.data() ?? [:]
                 var next: [Int: Int] = [:]
                 for (k, val) in (d["pollCounts"] as? [String: Any]) ?? [:] {
                     if let i = Int(k), let n = (val as? NSNumber)?.intValue, n > 0 { next[i] = n }
@@ -112,10 +117,12 @@ enum PollService {
             }
             guard !me.isEmpty else { return postReg }
             let mineReg = votesRef(cid, messageId).document(me).addSnapshotListener { snap, _ in
-                let raw = snap?.data()?["options"]
+                // An error is not "I have not voted": my last vote stays (audit L14).
+                guard let snap else { PollVotesHub.shared.noteDead(key: key); return }
+                let raw = snap.data()?["options"]
                 mine = (raw as? [Int]) ?? ((raw as? [NSNumber])?.map(\.intValue) ?? [])
                 // A pending server timestamp reads as nil: not counted yet, so nothing is taken off.
-                mineAt = ((snap?.data()?["at"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
+                mineAt = ((snap.data()?["at"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
                 emit()
             }
             return PollCompositeRegistration([postReg, mineReg])
@@ -142,12 +149,19 @@ private final class PollVotesHub {
         NotificationCenter.default.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
             self?.reattachAfterSwap()
         }
+        // A votes listener that died on an error (a refused or expired session) listens again once
+        // the server lets this phone back in (audit L14). A healthy one is left alone.
+        NotificationCenter.default.addObserver(forName: SessionRecovery.recovered, object: nil, queue: .main) { [weak self] _ in
+            self?.reattachDead()
+        }
     }
     private struct Entry {
         var reg: ListenerRegistration?
         /// How the listener was attached, kept for a Firestore client swap (2026-10-20, owner).
         var start: (() -> ListenerRegistration)?
         var votes: [String: [Int]]?
+        /// Its listener stopped on an error; re-attached on `SessionRecovery.recovered`.
+        var dead = false
         var subs: [UUID: ([String: [Int]]) -> Void] = [:]
         var idleSince = 0   // bumped on each release, so an older teardown timer does nothing
     }
@@ -169,6 +183,26 @@ private final class PollVotesHub {
     private func reattachAfterSwap() {
         FirestoreHub.drop(entries.values.map(\.reg))
         for (key, var e) in entries {
+            guard !e.subs.isEmpty, let start = e.start else { entries[key] = nil; continue }
+            e.reg = start()
+            e.dead = false
+            entries[key] = e
+        }
+    }
+
+    /// A listener of this poll stopped on an error. Its last tally is kept for the views.
+    func noteDead(key: String) {
+        guard var e = entries[key] else { return }
+        e.dead = true
+        entries[key] = e
+    }
+
+    private func reattachDead() {
+        for (key, var e) in entries where e.dead {
+            e.reg?.remove()
+            e.reg = nil
+            e.dead = false
+            // Nobody showing it: let it go, the next view listens afresh.
             guard !e.subs.isEmpty, let start = e.start else { entries[key] = nil; continue }
             e.reg = start()
             entries[key] = e

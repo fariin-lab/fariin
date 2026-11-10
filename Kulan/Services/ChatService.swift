@@ -4755,11 +4755,22 @@ enum ChatService {
     /// The chat list's multi-select Delete. A group I am in is LEFT, as the single Delete does
     /// (LeaveGroupAlert); hiding it would keep me a member of a group I can no longer see. Every
     /// other chat is deleted for me as before.
+    /// A channel I OWN is skipped: leaving it would empty it and the server would remove it from every
+    /// follower. Only the channel's own Delete Channel (or the single swipe's) deletes it, after its
+    /// own warning; here the toast says where.
     static func deleteChats(_ ids: Set<String>) async {
         let me = uid
         let convs = await MainActor.run { ConversationsRepository.shared.conversations }
+        let owned = Set(convs.filter { ids.contains($0.id) && $0.isChannel && $0.isOwner(me) }.map(\.id))
+        if !owned.isEmpty {
+            await MainActor.run {
+                ToastNotice.show(owned.count == 1
+                                 ? "A channel you own was kept. Delete it from the channel's page."
+                                 : "Channels you own were kept. Delete them from each channel's page.")
+            }
+        }
         await withTaskGroup(of: Void.self) { g in
-            for id in ids {
+            for id in ids where !owned.contains(id) {
                 let leaves = convs.first(where: { $0.id == id }).map { $0.isGroup && $0.users.contains(me) } ?? false
                 g.addTask {
                     if leaves {
@@ -4777,7 +4788,7 @@ enum ChatService {
     @MainActor static func groupsLeftBy(_ ids: Set<String>) -> Int {
         let me = uid
         return ConversationsRepository.shared.conversations
-            .filter { ids.contains($0.id) && $0.isGroup && $0.users.contains(me) }.count
+            .filter { ids.contains($0.id) && $0.isGroup && $0.users.contains(me) && !($0.isChannel && $0.isOwner(me)) }.count
     }
 
     /// "Delete for me" — hides the thread until a newer message arrives (clearedAt).
