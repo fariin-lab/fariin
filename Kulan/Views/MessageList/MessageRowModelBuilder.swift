@@ -66,6 +66,9 @@ struct MessageRowContext {
     /// The colour name of that member's tag (owner 2026-10-28), or nil.
     var roleColorFor: (String) -> String? = { _ in nil }
     var resolveOriginal: (String) -> Message?
+    /// The quoted message is known to be deleted for everyone, even when `resolveOriginal` cannot
+    /// see it: a group drops its tombstones from the list, and an old original is not loaded (audit H5).
+    var quoteDeleted: (String) -> Bool = { _ in false }
     /// The quoted message was sent while I had its author blocked: never shown, so a reply to it
     /// says "Not available" instead of the copy of its words the reply carries.
     var quoteHiddenByBlock: (String) -> Bool = { _ in false }
@@ -412,11 +415,15 @@ enum MessageRowModelBuilder {
         if let reply = msg.replyTo, !reply.isStatus, !msg.deleted {
             let original = ctx.resolveOriginal(reply.id)
             let blocked = ctx.quoteHiddenByBlock(reply.id)
+            // Deleted for everyone, seen or not in the list (audit H5): the words it carries are a
+            // copy of the deleted message, so they are not drawn.
+            let gone = ctx.quoteDeleted(reply.id)
             quote = QuoteChrome(
                 targetId: reply.id,
                 authorLine: reply.authorId == ctx.me ? "You" : ctx.nameFor(reply.authorId),
-                snippet: blocked ? "Not available" : replyLabel(reply: reply, original: original),
-                thumb: blocked ? .none : replyThumb(original),
+                snippet: blocked ? "Not available"
+                    : (gone ? "This message was deleted" : replyLabel(reply: reply, original: original)),
+                thumb: blocked || gone ? .none : replyThumb(original),
                 isStatus: false)
         }
 
@@ -531,7 +538,7 @@ enum MessageRowModelBuilder {
             text: m.text, searchTerm: ctx.searchTerm,
             mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" }, bold: m.boldRanges)
         let duration: String? = {
-            guard kind == .video, let d = m.duration, d > 0 else { return nil }
+            guard kind == .video, let d = MediaDuration.clean(m.duration), d > 0 else { return nil }
             let s = Int(d)
             return String(format: "%d:%02d", s / 60, s % 60)
         }()
@@ -640,7 +647,7 @@ enum MessageRowModelBuilder {
             let isVideo = m.localAlbumIsVideo.indices.contains(i) ? m.localAlbumIsVideo[i]
                                                                   : (item?.isVideo ?? false)
             let duration: String? = {
-                guard let d = item?.duration, d > 0 else { return nil }
+                guard let d = MediaDuration.clean(item?.duration), d > 0 else { return nil }
                 let s = Int(d)
                 return String(format: "%d:%02d", s / 60, s % 60)
             }()
@@ -714,7 +721,7 @@ enum MessageRowModelBuilder {
     }
 
     private static func voiceBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.VoiceBody {
-        let secs = Int(m.duration ?? 0)
+        let secs = MediaDuration.whole(m.duration)
         return BubbleBody.VoiceBody(
             messageId: m.id,
             url: m.audioUrl, enc: m.enc, localData: m.localAudioData,

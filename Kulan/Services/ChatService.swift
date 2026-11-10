@@ -3572,7 +3572,7 @@ enum ChatService {
 
     /// "0:53" — voice-note length for markers and previews.
     static func voiceDurationLabel(_ seconds: Double) -> String {
-        let d = Int(seconds.rounded())
+        let d = MediaDuration.whole(seconds, rounded: true)
         return String(format: "%d:%02d", d / 60, d % 60)
     }
 

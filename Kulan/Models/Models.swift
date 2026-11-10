@@ -318,6 +318,28 @@ extension Message {
     var isStoryReaction: Bool { replyTo?.isStatus == true && replyTo?.isReaction == true }
 }
 
+/// A media length (seconds) that is safe to show. `duration` arrives from other phones and any of
+/// them can write Infinity, NaN, a negative or 1e300, and `Int(d)` traps on anything that does not
+/// fit, which would stop the app for everyone who opens that chat (audit C2). Every duration is
+/// cleaned once where a message is read, and again wherever one turns into a whole number, because
+/// a chat cached on disk by an older build can still carry the raw value.
+enum MediaDuration {
+    /// 99:59:59. Nothing real is longer, and `Int` holds it on every device.
+    static let maxSeconds: Double = 359_999
+
+    /// nil for a value that is not a real length; otherwise clamped to `maxSeconds`.
+    static func clean(_ raw: Double?) -> Double? {
+        guard let d = raw, d.isFinite, d >= 0 else { return nil }
+        return min(d, maxSeconds)
+    }
+
+    /// Whole seconds, 0 for anything that is not a real length. Never traps.
+    static func whole(_ raw: Double?, rounded: Bool = false) -> Int {
+        guard let d = clean(raw) else { return 0 }
+        return Int(rounded ? d.rounded() : d)
+    }
+}
+
 // Local delivery state for a message I'm sending. nil = a confirmed server message
 // (its receipt is derived from the other person's lastRead instead).
 enum MessageSendState: Equatable { case sending, failed }
@@ -915,7 +937,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.fileUrl = data["fileUrl"] as? String
         self.fileName = data["fileName"] as? String
         self.fileSize = (data["fileSize"] as? NSNumber)?.intValue
-        self.duration = (data["duration"] as? NSNumber)?.doubleValue
+        self.duration = MediaDuration.clean((data["duration"] as? NSNumber)?.doubleValue)
         self.waveform = (data["waveform"] as? [Int])
             ?? (data["waveform"] as? [NSNumber])?.map { $0.intValue } ?? []
         self.width = (data["width"] as? NSNumber)?.doubleValue
@@ -1020,7 +1042,7 @@ struct Message: Identifiable, Equatable, Codable {
                              kind: d["kind"] as? String ?? "image",
                              videoUrl: d["videoUrl"] as? String,
                              videoEnc: (d["videoEnc"] as? [String: Any]).flatMap(EncMeta.init(map:)),
-                             duration: (d["duration"] as? NSNumber)?.doubleValue ?? 0)
+                             duration: MediaDuration.clean((d["duration"] as? NSNumber)?.doubleValue) ?? 0)
         } ?? []
         // ⛔ A ONE-ITEM ALBUM IS THE PHOTO OR VIDEO IT HOLDS — owner, 2026-08-28 and again
         // 2026-09-26: send two, cancel one, and the survivor drew beside a BLANK tile, because the

@@ -444,7 +444,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             urlStr, priority: .user,
             finish: MediaFetch.voiceFinisher(enc: meta, cid: cid, messageId: message.id))
         DiagLog.add("VOICETAP# not local at tap ok=\(ok) waited=\(Int(Date().timeIntervalSince(waitedFrom) * 1000))ms "
-                    + "len=\(Int(message.duration ?? 0))s "
+                    + "len=\(MediaDuration.whole(message.duration))s "
                     + "wifi=\(NetworkState.shared.isWifi)")
         DiagUpload.flag(after: 5)
         guard ok, let local = AudioCache.url(for: message.id) else {

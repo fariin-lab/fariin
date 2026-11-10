@@ -2596,7 +2596,10 @@ struct ThreadView: View {
             // message, poll cards included, under it: the work behind the lag and behind the build
             // 1036 crash. The `groupModHidesChat` onChange above starts the chat if the hold lifts.
             if !groupModHidesChat {
-                if quiet { repo.start() } else { repo.open(); repoOpened = true }
+                // Counted in once per screen (audit L16): a second onAppear without a disappear in
+                // between re-attaches instead, or the extra count would keep the listeners running
+                // after the chat is left. Same rule as the moderation onChange and `becameMember`.
+                if !quiet && !repoOpened { repo.open(); repoOpened = true } else { repo.start() }
             }
             // PAY THE GIF KEY'S ROUND TRIP NOW, quietly, instead of on the first tap of the button.
             // Opening a chat is the moment we learn a GIF might be sent, and it is a moment with
@@ -3269,6 +3272,13 @@ struct ThreadView: View {
         return out
     }
 
+    /// The message this reply quotes is known to be deleted for everyone (audit H5), loaded or not.
+    /// A function so the bubble's long argument list stays easy on the type checker.
+    private func quotedOriginalGone(_ m: Message) -> Bool {
+        guard let r = m.replyTo, !r.isStatus else { return false }
+        return repo.quoteOriginalDeleted(r.id)
+    }
+
     /// The loaded message a reply quote points at (owner audit 2026-10-06 chat #45: a dictionary hit
     /// instead of a scan of the whole window per reply row).
     private func loadedMessage(id: String) -> Message? {
@@ -3813,6 +3823,7 @@ struct ThreadView: View {
                 onResend: { m in failedActionTarget = m },   // 2026-09-24 decision D14: ask first
                 onJumpTo: { id in jumpTo(id) },
                 resolveReplyOriginal: { id in loadedMessage(id: id) },   // owner audit 2026-10-06 chat #45
+                replyOriginalGone: quotedOriginalGone(msg),   // audit H5
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
                 storyQuoteOpens: true,
                 isHighlighted: msg.id == highlightId,
@@ -4120,6 +4131,9 @@ struct ThreadView: View {
                 }
                 // A quoted channel post draws the server's answer (QuoteStore), so that is its token.
                 if let q = m.quoteId { linkTok += ":Q" + QuoteStore.shared.token(q) }
+                // A quoted original found deleted turns the quote's words into "This message was
+                // deleted" (audit H5), and nothing else on this row moves when that happens.
+                if let r = m.replyTo, !r.isStatus, repo.quoteOriginalDeleted(r.id) { linkTok += ":QD" }
                 // Bold spans: an edit may change only them.
                 if let b = m.boldSpans { linkTok += ":B\(b.hashValue)" }
                 out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.replyFaces.hashValue)|\(m.repliesOff(channelDefault: chanRepliesOff))"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
@@ -4297,6 +4311,7 @@ struct ThreadView: View {
             roleFor: { isGroup ? conversation?.roles[$0]?.display : nil },   // owner 2026-10-18 Role
             roleColorFor: { isGroup ? conversation?.roles[$0]?.color : nil },   // owner 2026-10-28
             resolveOriginal: { id in loadedMessage(id: id) },   // owner audit 2026-10-06 chat #45
+            quoteDeleted: { repo.quoteOriginalDeleted($0) },   // audit H5
             quoteHiddenByBlock: { repo.isHiddenByBlock(id: $0) },
             storyIsLive: { storyId, author in
                 // Unknown until the stories repo has loaded: assume live, so a reply does not flash
@@ -10731,7 +10746,7 @@ struct ThreadView: View {
     }
 
     private func replyVoiceDuration(_ r: Message) -> String {
-        let d = Int(r.duration ?? 0); return String(format: "%d:%02d", d / 60, d % 60)
+        let d = MediaDuration.whole(r.duration); return String(format: "%d:%02d", d / 60, d % 60)
     }
 
     // True while the finger is held down recording (not yet locked).
@@ -12082,6 +12097,7 @@ struct MessageBubble: View, Equatable {
             && l.isViewedOnce == r.isViewedOnce && l.restricted == r.restricted
             && l.onWallpaper == r.onWallpaper && l.wallpaperBlur == r.wallpaperBlur
             && l.editPending == r.editPending   // 2026-09-24 feature-audit
+            && l.replyOriginalGone == r.replyOriginalGone   // audit H5
     }
 
     let message: Message
@@ -12146,7 +12162,7 @@ struct MessageBubble: View, Equatable {
         return "\(b) B"
     }
     private var videoDurationLabel: String {
-        let d = Int(message.duration ?? 0)
+        let d = MediaDuration.whole(message.duration)
         return String(format: "%d:%02d", d / 60, d % 60)
     }
     var onResend: (Message) -> Void = { _ in }
@@ -12155,6 +12171,9 @@ struct MessageBubble: View, Equatable {
     // reply can show a real thumbnail in the quote (reference-style) instead of "📷 Photo" text.
     // Returns nil if the original isn't loaded → the quote falls back to the text snippet.
     var resolveReplyOriginal: (String) -> Message? = { _ in nil }
+    /// The quoted original is known to be deleted for everyone, even when it is not loaded (audit H5).
+    /// A value, not a closure, so it is part of `==` and the quote redraws when it turns true.
+    var replyOriginalGone: Bool = false
     var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
     /// This bubble's story-quote thumbnail is a door: register it as the flight's source. False for
     /// the bubble kinds that draw a quote but never open one, which must not file a rectangle the
@@ -14054,7 +14073,7 @@ struct MessageBubble: View, Equatable {
                         // top". Two views, two keys, and each tap names the one it is on.
                         .modifier(ReplyStoryAnchor(active: storyQuoteOpens, id: "replyquote-\(message.id)",
                                                    cornerRadius: 5))
-                } else if let o = original, !o.deleted {
+                } else if !replyOriginalGone, let o = original, !o.deleted {
                     // Photo / GIF / video / album reply → real thumbnail (reference-style preview).
                     // Never for a deleted original: its thumbnail is gone from Storage, so this would
                     // draw an empty box next to the words saying it was deleted.
@@ -14063,7 +14082,7 @@ struct MessageBubble: View, Equatable {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(reply.authorId == AuthService.shared.uid ? "You" : nameFor(reply.authorId))
                         .font(.caption.weight(.semibold)).foregroundStyle(fg.opacity(0.9))
-                    Text(replyLabel(reply: reply, original: original))
+                    Text(replyOriginalGone ? "This message was deleted" : replyLabel(reply: reply, original: original))
                         .font(.caption).lineLimit(1).foregroundStyle(fg.opacity(0.75))
                 }
                 // MINIMUM quote width (reference behavior): a one-character quote never renders as a tiny

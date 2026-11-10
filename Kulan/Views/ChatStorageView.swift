@@ -411,7 +411,7 @@ struct ChatStorageView: View {
     }
 
     static func clock(_ s: Double) -> String {
-        let t = Int(s.rounded())
+        let t = MediaDuration.whole(s, rounded: true)
         return String(format: "%d:%02d", t / 60, t % 60)
     }
 }

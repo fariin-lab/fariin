@@ -255,7 +255,7 @@ struct VoiceMessageView: View {
         return isMe ? Theme.onAccent(dark) : (dark ? .white : .black)
     }
     private var durationText: String {
-        let d = Int(message.duration ?? 0)
+        let d = MediaDuration.whole(message.duration)
         return String(format: "%d:%02d", d / 60, d % 60)
     }
 
@@ -927,7 +927,7 @@ struct OneTimeVoicePill: View {
 
     private var spent: Bool { !isMe && (consumed || consumedLive) }
     private var durationText: String {
-        let d = Int(message.duration ?? 0)
+        let d = MediaDuration.whole(message.duration)
         return String(format: "%d:%02d", d / 60, d % 60)
     }
 
@@ -1015,11 +1015,11 @@ struct OneTimeVoicePage: View {
     @State private var localBars: [Int]?
 
     private var durationText: String {
-        let d = Int(player?.duration ?? message.duration ?? 0)
+        let d = MediaDuration.whole(player?.duration ?? message.duration)
         return String(format: "%d:%02d", d / 60, d % 60)
     }
     private var elapsedText: String {
-        let d = Int((player?.duration ?? 0) * progress)
+        let d = MediaDuration.whole((player?.duration ?? 0) * progress)
         return String(format: "%d:%02d", d / 60, d % 60)
     }
 

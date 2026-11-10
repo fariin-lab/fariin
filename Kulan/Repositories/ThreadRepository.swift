@@ -476,6 +476,64 @@ final class ThreadRepository {
         }
     }
 
+    // ⛔ A REPLY MUST NOT KEEP A DELETED MESSAGE READABLE (audit H5). A reply carries a copy of the
+    // words it quotes, and the row only hid that copy when it could see the original as a tombstone in
+    // `items`. A group drops its tombstones from `items` (see `refreshItems`), and an original older
+    // than the loaded window is not there at all, so every member kept reading the deleted words
+    // inside each reply to them. The answer now comes from the whole window (`byId`, tombstones
+    // included) and, for an original outside it, from one read by id, like the pins above.
+    /// Quoted originals a read by id found deleted, or not there at all.
+    @ObservationIgnored private var quotesGone: Set<String> = []
+    /// Quoted originals already asked about by id, so each is read at most once per repository.
+    @ObservationIgnored private var quotesChecked: Set<String> = []
+    /// At most this many reads by id per repository, so a chat full of old replies stays cheap.
+    private static let maxQuoteChecks = 40
+    /// The originals quoted by `items` that are known to be deleted for everyone. Published once per
+    /// `refreshItems`, like `indexById`, so the screen reads one set instead of observing `byId`.
+    private(set) var quotedDeletedIds: Set<String> = []
+
+    /// Is the message a reply quotes known to be deleted for everyone?
+    func quoteOriginalDeleted(_ id: String) -> Bool { quotedDeletedIds.contains(id) }
+
+    /// The set `quoteOriginalDeleted` reads, from the whole window (tombstones a group drops from
+    /// `items` included), a delete still on its way, and the reads by id below.
+    private func refreshQuotedDeleted() {
+        var gone = Set<String>()
+        for m in items {
+            guard let r = m.replyTo, !r.isStatus else { continue }
+            if locallyDeleted.contains(r.id) || quotesGone.contains(r.id) || byId[r.id]?.deleted == true {
+                gone.insert(r.id)
+            }
+        }
+        if gone != quotedDeletedIds { quotedDeletedIds = gone }
+    }
+
+    /// Ask by id about each quoted original that is not in the window. A failed read is no signal,
+    /// so it is never taken as "deleted"; the reply keeps its copy until a read says otherwise.
+    private func checkQuotedOriginals() {
+        // Only once the server's window is in: before that, most originals are about to arrive in
+        // it for free. A warm-only repository draws nothing, so it asks nothing.
+        guard !warmOnly, sawServerWindow else { return }
+        for m in items {
+            guard let r = m.replyTo, !r.isStatus, !m.deleted, !r.id.isEmpty else { continue }
+            let id = r.id
+            guard byId[id] == nil, !quotesChecked.contains(id) else { continue }
+            // A reply to something of mine still sending: its document may not be written yet, and
+            // "not there" must not read as "deleted".
+            guard !pending.contains(where: { $0.id == id || $0.clientId == id }) else { continue }
+            guard quotesChecked.count < Self.maxQuoteChecks else { return }
+            quotesChecked.insert(id)
+            db.collection("conversations").document(cid).collection("messages").document(id)
+                .getDocument { [weak self] snap, _ in
+                    guard let self, let snap else { return }
+                    let gone = !snap.exists || (snap.data()?["deleted"] as? Bool ?? false)
+                    guard gone, !self.quotesGone.contains(id) else { return }
+                    self.quotesGone.insert(id)
+                    self.refreshItems()
+                }
+        }
+    }
+
     /// A TOMBSTONE counts as gone. Delete-for-everyone already unpins, so this only catches the case
     /// where that write was refused and the pin outlived the message — but the pin bar must never be
     /// the one place in the app still showing something you deleted.
@@ -782,7 +840,9 @@ final class ThreadRepository {
 
         indexById = Dictionary(items.enumerated().map { ($0.element.rowId, $0.offset) },
                                uniquingKeysWith: { a, _ in a })
+        refreshQuotedDeleted()
         itemsVersion += 1
+        checkQuotedOriginals()
     }
 
     func addPending(_ m: Message) { pending.append(m); refreshItems() }

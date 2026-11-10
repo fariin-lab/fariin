@@ -50,7 +50,7 @@ enum VoiceAutoDownload {
     /// enforced on the bytes: the download job stops at the response headers when the server's length
     /// is over it (`MediaDownloads.autoLimit`).
     static func estimatedBytes(duration: Double?) -> Int64? {
-        guard let d = duration, d.isFinite, d > 0 else { return nil }
+        guard let d = MediaDuration.clean(duration), d > 0 else { return nil }
         return Int64(d * 5_000 * 1.1) + 4_096
     }
 
