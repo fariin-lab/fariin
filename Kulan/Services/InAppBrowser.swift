@@ -681,6 +681,21 @@ extension InAppBrowserViewController: WKNavigationDelegate {
         // A new page starts with the bars out, as the reference does.
         lastOffsetToTop = nil
         setCollapse(0, animation: .spring)
+        startAtTop()
+    }
+
+    /// ⛔ A FILE OPENS AT ITS TOP, CLEAR OF THE BAR (owner 2026-11-10: a .md file opened with its title
+    /// and first lines under the floating title bar, "always need to scroll"). The inset is set before
+    /// the page loads, and loading a page puts the scroll back at 0, which is `inset.top` points too
+    /// far down. Once on commit and once when it has finished laying out.
+    private func startAtTop() {
+        let sv = webView.scrollView
+        sv.setContentOffset(CGPoint(x: 0, y: -sv.contentInset.top), animated: false)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // Only a page still at (or above) its top: a reload of a page read halfway stays put.
+        if webView.scrollView.contentOffset.y <= 1 { startAtTop() }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
