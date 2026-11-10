@@ -778,7 +778,7 @@ struct ContactInfoView: View {
             }
             .disabled(exportingChat)
         }
-        Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
+        Button { showClear = true } label: { Label("Clear Messages", systemImage: "trash") }
     }
 
     private var hasChat: Bool {
@@ -1331,15 +1331,19 @@ struct ContactInfoView: View {
             // and a SwiftUI alert cannot be told that from here — the whole reckoning, including the
             // two ways it has already been tried and reverted, is in `DarkAlert.swift`. Same titles,
             // same messages, same destructive red.
-            .darkAlert("Clear your messages?",
-                       message: "This deletes the messages you sent in this chat. It can't be undone.",
+            // ⛔ CLEAR MESSAGES = ALL OF THEM, FOR ME ONLY (owner 2026-11-10: "Clear My Messages" did
+            // nothing: it tried to hard-delete my own messages, which the rules refuse, and the error
+            // was swallowed). Now the same watermark as Clear Chat: every message up to now is hidden
+            // on my devices; the other person keeps theirs.
+            .darkAlert("Clear all messages?",
+                       message: "All messages in this chat are removed for you only. \(shownName) still has them.",
                        isPresented: $showClear,
                        actions: [
                         .cancel(),
                         .destructive("Clear") {
                             // A refusal here must not blank the strip — only a real answer replaces it.
                             Task {
-                                await ChatService.clearMyMessages(cid)
+                                await ChatService.deleteForMe(cid)
                                 if let fresh = await ChatService.sharedMedia(cid) { media = fresh; mediaHint = fresh.count }
                             }
                         },
