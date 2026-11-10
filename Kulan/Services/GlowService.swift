@@ -167,7 +167,7 @@ import FirebaseFirestore
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, self.uid == newUid else { return }
                 guard let snap else {
-                    if let error { print("glow: glowers listener failed:", error) }
+                    if let error { debugLog("glow: glowers listener failed:", error) }
                     self.glowersFailed = true
                     self.hasFailed = true
                     return
@@ -182,7 +182,7 @@ import FirebaseFirestore
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, self.uid == newUid else { return }
                 guard let snap else {
-                    if let error { print("glow: glowing listener failed:", error) }
+                    if let error { debugLog("glow: glowing listener failed:", error) }
                     self.glowingFailed = true
                     self.hasFailed = true
                     return

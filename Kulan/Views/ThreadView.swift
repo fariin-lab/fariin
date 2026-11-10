@@ -8543,7 +8543,7 @@ struct ThreadView: View {
         // by the sender or fixed by anybody. A CANCEL is not a failure — the helper removes the
         // bubble quietly and never reaches the failure hook.
         await runRegisteredSend(clientId, onFailure: { error in
-            print("sendMixedAlbum failed:", error)
+            debugLog("sendMixedAlbum failed:", error)
             sendError = "Couldn't send. \(error.localizedDescription)"
         }) {
             try await ChatService.sendMixedAlbum(cid: cid, items: items, caption: caption,
@@ -9698,7 +9698,7 @@ struct ThreadView: View {
         } catch {
             // The announcement itself failing is a dead send: nothing was written, so there is
             // nothing to clean up, and the transcode below would only be wasted work.
-            print("announceVideo failed:", error)
+            debugLog("announceVideo failed:", error)
             try? FileManager.default.removeItem(at: url)
             let cancelled = await MediaSend.shared.wasCancelled(clientId)
             await MainActor.run {
@@ -9723,7 +9723,7 @@ struct ThreadView: View {
         let wantHD = hd || ChatService.highQualitySends
         var exported = await VideoTranscoder.prepare(url, hd: wantHD)
         if wantHD, let big = exported, big.data.count > Limits.videoMessageBytes {
-            print("sendVideo: HD export was \(big.data.count / 1_048_576)MB, over the limit — retrying at standard")
+            debugLog("sendVideo: HD export was \(big.data.count / 1_048_576)MB, over the limit — retrying at standard")
             exported = await VideoTranscoder.prepare(url, hd: false)
         }
         guard let prepared = exported else {
@@ -9778,7 +9778,7 @@ struct ThreadView: View {
             // A CANCEL lands here too (aborting the upload throws), and is not a real failure: the
             // bubble is already gone (Cancel Sending removed it), so say nothing.
             let cancelled = await MediaSend.shared.wasCancelled(clientId)
-            if !cancelled { print("sendVideo failed:", error) }
+            if !cancelled { debugLog("sendVideo failed:", error) }
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
                 if !cancelled { sendError = "Couldn't send the video. \(error.localizedDescription)" }
@@ -11455,7 +11455,7 @@ struct ThreadView: View {
         let dur = previewPlayer?.duration ?? 0
         let leadSilence = bars.isEmpty ? 0 : dur * Double(quietBars) / Double(bars.count)
         DiagLog.add("VOICE# play warm=\(wasWarm) setup=\(Int(t1.timeIntervalSince(t0) * 1000))ms play()=\(Int(t2.timeIntervalSince(t1) * 1000))ms ok=\(previewPlaying) at=\(String(format: "%.2f", previewPlayer?.currentTime ?? 0))s dur=\(String(format: "%.2f", dur))s route=\(route) leadSilence=\(String(format: "%.2f", leadSilence))s bars=\(bars.prefix(8).map(String.init).joined(separator: "/"))")
-        DiagLog.flagForUpload()
+        DiagUpload.flag()
     }
 
     private func stopPreviewPlayback() {

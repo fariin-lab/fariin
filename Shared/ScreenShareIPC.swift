@@ -102,14 +102,14 @@ enum ScreenShareIPC {
 
         init?(name: String, size: Int) {
             guard let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: ScreenShareIPC.appGroup) else {
-                NSLog("[ScreenShare] IPC: no App Group container")
+                screenShareLog("[ScreenShare] IPC: no App Group container")
                 return nil
             }
             var url = dir.appendingPathComponent(name)
             let path = url.path
             let fd = open(path, O_RDWR | O_CREAT, 0o644)
             guard fd >= 0 else {
-                NSLog("[ScreenShare] IPC: open %@ failed errno %d", name, errno)
+                screenShareLog("[ScreenShare] IPC: open %@ failed errno %d", name, errno)
                 return nil
             }
             defer { close(fd) }
@@ -121,13 +121,13 @@ enum ScreenShareIPC {
             guard fstat(fd, &st) == 0 else { return nil }
             if Int(st.st_size) < size {
                 guard ftruncate(fd, off_t(size)) == 0 else {
-                    NSLog("[ScreenShare] IPC: ftruncate %@ failed errno %d", name, errno)
+                    screenShareLog("[ScreenShare] IPC: ftruncate %@ failed errno %d", name, errno)
                     return nil
                 }
             }
             guard let raw = mmap(nil, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0),
                   raw != UnsafeMutableRawPointer(bitPattern: -1) else {
-                NSLog("[ScreenShare] IPC: mmap %@ failed errno %d", name, errno)
+                screenShareLog("[ScreenShare] IPC: mmap %@ failed errno %d", name, errno)
                 return nil
             }
             base = raw
@@ -535,4 +535,12 @@ enum ScreenShareIPC {
         copyPlane(src: uv, srcStride: uvStride, dst: duv, dstStride: duvStride, rowBytes: width, rows: height / 2)
         return true
     }
+}
+
+/// The screen share's console lines (app and extension), debug builds only (release audit
+/// 2026-11-10: a release build writes no system-log lines). Same arguments as `NSLog`.
+func screenShareLog(_ format: String, _ args: CVarArg...) {
+    #if DEBUG
+    withVaList(args) { NSLogv(format, $0) }
+    #endif
 }

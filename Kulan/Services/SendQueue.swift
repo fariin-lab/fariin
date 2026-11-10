@@ -123,7 +123,7 @@ enum SendQueue {
         }
         if cleared > 0 { save(map) }
         lock.unlock()
-        print("[Recovery] send queue: cleared \(cleared) refused sends after recovery")
+        debugLog("[Recovery] send queue: cleared \(cleared) refused sends after recovery")
         if cleared > 0 { Task { @MainActor in await drainAll() } }
     }
 
@@ -153,7 +153,7 @@ enum SendQueue {
         let n = inFlight.count
         inFlight.removeAll()
         lock.unlock()
-        print("[Recovery] send queue: released \(n) send claim(s) held by the old Firestore client")
+        debugLog("[Recovery] send queue: released \(n) send claim(s) held by the old Firestore client")
     }
 
     private static let key = "sendQueue.v1"

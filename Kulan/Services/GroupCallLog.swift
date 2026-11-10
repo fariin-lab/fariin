@@ -26,7 +26,7 @@ enum GCLog {
     /// reaches us the same day instead of waiting for some later stall to flag it.
     static func failure(_ name: String, room: String?, _ fields: [String: String] = [:]) {
         event(name, room: room, fields)
-        DiagLog.flagForUpload()
+        DiagUpload.flag()
     }
 
     /// Same room, same hash on every phone, so two phones' logs of one call line up; the id itself

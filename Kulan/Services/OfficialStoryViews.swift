@@ -64,7 +64,7 @@ enum OfficialStoryViews {
         FirestoreHub.db.collection("officialStories").document(raw)
             .collection("views").document(viewId)
             .setData(["at": FieldValue.serverTimestamp(), "named": named]) { err in
-                if let err { print("official story view not written:", err.localizedDescription) }
+                if let err { debugLog("official story view not written:", err.localizedDescription) }
             }
         // My own view moves the count an admin is looking at.
         OfficialStoryViewsModel.shared.forget(raw)
@@ -179,7 +179,7 @@ final class OfficialStoryViewsModel {
                 summaries[rawId] = s
                 fetchedAt[rawId] = Date()
             } catch {
-                print("official story views: fetch failed:", error.localizedDescription)
+                debugLog("official story views: fetch failed:", error.localizedDescription)
             }
         }
     }

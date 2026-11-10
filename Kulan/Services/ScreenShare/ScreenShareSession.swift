@@ -113,7 +113,7 @@ final class ScreenShareSession {
             self.lastAliveWriteNs = ScreenShareIPC.nowNs()
             self.startTimer()
         }
-        NSLog("[ScreenShare] session: listening (seq %llu)", baseline)
+        screenShareLog("[ScreenShare] session: listening (seq %llu)", baseline)
         return true
     }
 
@@ -162,7 +162,7 @@ final class ScreenShareSession {
             guard stale else { return }
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.finished else { return }
-                NSLog("[ScreenShare] session: extension keepalive stale")
+                screenShareLog("[ScreenShare] session: extension keepalive stale")
                 self.finish(.extensionGone)
             }
         }
@@ -239,7 +239,7 @@ final class ScreenShareSession {
             guard CVPixelBufferPoolCreate(kCFAllocatorDefault, poolAttrs as CFDictionary,
                                           attrs as CFDictionary, &created) == kCVReturnSuccess,
                   let created else {
-                NSLog("[ScreenShare] session: pool create failed %ldx%ld", info.width, info.height)
+                screenShareLog("[ScreenShare] session: pool create failed %ldx%ld", info.width, info.height)
                 return nil
             }
             pool = created
@@ -274,13 +274,13 @@ final class ScreenShareSession {
         // onStarted can stop us (a share that began into a held call): no timer for a dead session.
         guard !finished, !gotFrame else { return }
         gotFrame = true
-        NSLog("[ScreenShare] session: first frame")
+        screenShareLog("[ScreenShare] session: first frame")
         onFirstFrame?()
     }
 
     private func extensionSaidStarted() {
         guard !finished else { return }
-        NSLog("[ScreenShare] session: extension started")
+        screenShareLog("[ScreenShare] session: extension started")
         fireStarted()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstFrameTimeout) { [weak self] in
             guard let self, !self.finished, !self.gotFrame else { return }
@@ -303,7 +303,7 @@ final class ScreenShareSession {
     private func finish(_ reason: EndReason) {
         guard !finished else { return }
         finished = true
-        NSLog("[ScreenShare] session: ended (%@)", String(describing: reason))
+        screenShareLog("[ScreenShare] session: ended (%@)", String(describing: reason))
         // Ask anyway: a stale keepalive may be a stuck extension, and a stop costs nothing.
         tearDown(requestStop: reason != .extensionEnded)
         onEnded?(reason)

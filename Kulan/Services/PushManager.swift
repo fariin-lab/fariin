@@ -240,7 +240,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
 
     func application(_ application: UIApplication,
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        print("push: APNs registration failed:", error)
+        debugLog("push: APNs registration failed:", error)
     }
 
     /// iOS finished carrying an upload while the app was not running and has woken it only to say

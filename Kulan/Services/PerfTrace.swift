@@ -18,6 +18,8 @@ enum PerfTrace {
     private static var started = false
     private static var marked = Set<String>()
     private static var lastHangLog = Date.distantPast
+    /// The stall watchdog is pinging (on `queue`). It stops off screen and starts again on return.
+    private static var watching = false
 
     /// When iOS started this process, from the kernel (ms since 1970). Nil if it cannot be read.
     private static let processStartMs: Double? = {
@@ -46,13 +48,16 @@ enum PerfTrace {
         return kr == KERN_SUCCESS ? Int(info.phys_footprint / 1_048_576) : -1
     }
 
-    /// Called once at launch (KulanApp). Starts the stall watchdog and the memory sampler, and sends
-    /// the log after a few minutes of use so each launch reports once.
+    /// Called once at launch (KulanApp). Starts the stall watchdog and the memory sampler. A debug
+    /// build also sends the log after a few minutes of use; a release build never sends it on its
+    /// own (release audit 2026-11-10: every launch of every phone uploaded up to 60 KB). The PERF#
+    /// lines still ride along when a test build sends the log for another reason.
     static func start() {
         queue.async {
             guard !started else { return }
             started = true
             DiagLog.add("PERF# launch process_ms=\(sinceStart()) mem_mb=\(footprintMB())")
+            watching = true
             watchdog()
             memorySampler()
         }
@@ -61,7 +66,18 @@ enum PerfTrace {
             DiagLog.add("PERF# memory_warning mem_mb=\(footprintMB())")
             Telemetry.event(.warning, component: "perf", code: "memory_warning", detail: ["mb": String(footprintMB())])   // owner 2026-10-21
         }
+        // Back on screen: the watchdog stopped itself when the app left it (see `watchdog`).
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                               object: nil, queue: nil) { _ in
+            queue.async {
+                guard started, !watching else { return }
+                watching = true
+                watchdog()
+            }
+        }
+        #if DEBUG
         DiagLog.flagForUpload(after: 240)
+        #endif
     }
 
     /// A milestone, logged the first time it is reached in this process.
@@ -80,12 +96,16 @@ enum PerfTrace {
     // Every 500 ms: post a ping to the main queue and see how long it takes to run. 250 ms or more is
     // a visible freeze (a dropped scroll, a late tap). At most one line every 2 s, so a long freeze is
     // one line, not forty.
+    // Only while on screen (release audit 2026-11-10): it used to wake the main thread twice a second
+    // for the whole of a background call or audio session. Off screen the ping is not sent again;
+    // `didBecomeActive` (in `start`) starts it once more.
     private static func watchdog() {
         let sent = Date()
         DispatchQueue.main.async {
             let lag = Int(Date().timeIntervalSince(sent) * 1000)
+            let active = UIApplication.shared.applicationState == .active
             // Only on screen: a suspended app's main queue "lags" by the whole time it was away.
-            if lag >= 250, UIApplication.shared.applicationState == .active {
+            if lag >= 250, active {
                 queue.async {
                     guard Date().timeIntervalSince(lastHangLog) > 2 else { return }
                     lastHangLog = Date()
@@ -93,6 +113,7 @@ enum PerfTrace {
                     if lag >= 1000 { Telemetry.event(.warning, component: "perf", code: "main_stall", detail: ["ms": String(lag)]) }   // owner 2026-10-21
                 }
             }
+            guard active else { queue.async { watching = false }; return }
             queue.asyncAfter(deadline: .now() + 0.5) { watchdog() }
         }
     }

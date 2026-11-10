@@ -143,7 +143,7 @@ final class OfficialStories {
                   let rows = data["stories"] as? [[String: Any]] else { return [] }
             return rows.compactMap(Self.story)
         } catch {
-            print("official stories: feed failed:", error.localizedDescription)
+            debugLog("official stories: feed failed:", error.localizedDescription)
             return nil
         }
     }

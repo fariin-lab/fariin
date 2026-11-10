@@ -740,10 +740,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// when. REMOVE once the cause is confirmed on a phone.
     private var landedAt = Date.distantPast
     private static var opensThisRun: [String: Int] = [:]
+    /// Debug builds only (release audit 2026-11-10).
     private func reopenLog(_ what: @autoclosure () -> String) {
+        #if DEBUG
         let t = Date().timeIntervalSince(landedAt)
         guard t >= 0, t <= 5 else { return }
         NSLog("[REOPEN] +%4.0fms %@", t * 1000, what())
+        #endif
     }
     var lastRepaintedModelsVersion = -1       // -1 so the first update always repaints
 
@@ -4843,7 +4846,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // A sheet's own keys are not this chat's keys (see `sheetCoversChat`).
         if up, sheetCoversChat {
             DiagLog.add("KEYSHEET# refused rise overlap=\(Int(overlap))")
-            DiagLog.flagForUpload(after: 6)
+            DiagUpload.flag(after: 6)
             return
         }
         // The reader opened the keys: they have taken over, so the unread pin lets the list ride them
@@ -4948,7 +4951,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let was = keyboardOverlap
         guard abs(was - truth) > 16 else { return }
         DiagLog.add("KB# corrected guide=\(Int(was)) truth=\(Int(truth)) docked=\(Int(dockedBand))")
-        DiagLog.flagForUpload()   // read the same day: what wrote the wrong height
+        DiagUpload.flag()   // read the same day: what wrote the wrong height
         dockedBand = truth
         if setKeyboardGuideHeight(truth) {
             positionBottomBar()
@@ -7745,12 +7748,16 @@ final class MessageLayout: UICollectionViewLayout {
 /// "before you fix, get the real bug, no guessing". Every step that can move the list logs its
 /// numbers, with milliseconds since the event, for two seconds after a reaction lands or the message
 /// menu closes, and is silent the rest of the time. Read in the Appetize preview's log. REMOVE once
-/// the cause is proven.
+/// the cause is proven. Debug builds only (release audit 2026-11-10): a release build never opens
+/// the window, so `log` returns at once and builds no line.
 enum RxTrace {
     private static var start: Date?
-    static func begin(_ what: String) {
+    static func begin(_ what: @autoclosure () -> String) {
+        #if DEBUG
         if start == nil || Date().timeIntervalSince(start!) > 2 { start = Date() }
-        log("BEGIN " + what)
+        let line = "BEGIN " + what()
+        log(line)
+        #endif
     }
     /// `@autoclosure`: `scrollViewDidScroll` calls this on every frame, and the message is only built
     /// inside the two-second trace window, not 120 times a second for nothing (2026-10-03).

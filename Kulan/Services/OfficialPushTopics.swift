@@ -81,14 +81,14 @@ enum OfficialPushTopics {
         for topic in target.subtracting(joined) {
             Messaging.messaging().subscribe(toTopic: topic) { error in
                 guard let error else { return }
-                print("official push: could not join \(topic):", error)
+                debugLog("official push: could not join \(topic):", error)
                 forget(topic)
             }
         }
         for topic in joined.subtracting(target) {
             Messaging.messaging().unsubscribe(fromTopic: topic) { error in
                 guard let error else { return }
-                print("official push: could not leave \(topic):", error)
+                debugLog("official push: could not leave \(topic):", error)
                 // Still listed as joined, because it still is. Better a topic we keep trying to
                 // leave than one we believe we left and did not.
                 remember(topic)

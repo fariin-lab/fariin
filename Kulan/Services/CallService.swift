@@ -704,10 +704,10 @@ final class CallService: NSObject {
             let limit = remoteFramesMovedSinceReset ? Self.remoteStallAfter : Self.remoteFirstFrameAllowance
             if !remoteVideoStalled, now.timeIntervalSince(since) >= limit {
                 remoteVideoStalled = true
-                print("[Call] their video stalled (no frames for \(Int(Self.remoteStallAfter))s), showing their photo")
+                debugLog("[Call] their video stalled (no frames for \(Int(Self.remoteStallAfter))s), showing their photo")
             }
         } else {
-            if remoteVideoStalled { print("[Call] their video is moving again") }
+            if remoteVideoStalled { debugLog("[Call] their video is moving again") }
             if remoteFramesDecoded != nil { remoteFramesMovedSinceReset = true }   // r2 E8
             remoteFramesDecoded = frames
             remoteFramesMovedAt = now
@@ -974,7 +974,7 @@ final class CallService: NSObject {
     private func sealSignal(_ text: String) -> String? {
         guard sealSignalling, !otherUid.isEmpty else { return nil }
         let s = Crypto.shared.encryptForConversationIfCached(signalCid, text)
-        if s == nil { print("call: #27 seal failed on a sealed call, held for a retry") }
+        if s == nil { debugLog("call: #27 seal failed on a sealed call, held for a retry") }
         return s
     }
 
@@ -1019,7 +1019,7 @@ final class CallService: NSObject {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.callId == id, !self.isCaller,
                   self.state != .idle, self.state != .ended else { return }
-            print("call: G2 unsealed offer refused")
+            debugLog("call: G2 unsealed offer refused")
             self.endReason = .failed
             self.recordWritten = true   // 1:1 audit r3 B1, 2026-10-08: no "Missed call" row for it
             self.endLocally()
@@ -1347,7 +1347,7 @@ final class CallService: NSObject {
             pcIceServersFetchedAt = at
             pcHasRelay = Self.hasRelay(list)
         } else {
-            print("call: M-009 setConfiguration refused the newer ICE servers")
+            debugLog("call: M-009 setConfiguration refused the newer ICE servers")
         }
     }
 
@@ -1615,7 +1615,7 @@ final class CallService: NSObject {
         ini.direction = .recvOnly
         ini.streamIds = ["screen0"]
         if connection.addTransceiver(of: .video, init: ini) == nil {
-            print("[ScreenShare] could not add the screen transceiver; this call shares in fallback mode")
+            debugLog("[ScreenShare] could not add the screen transceiver; this call shares in fallback mode")
         }
     }
 
@@ -1675,7 +1675,7 @@ final class CallService: NSObject {
         if t.direction != .sendRecv { t.setDirection(.sendRecv, error: nil) }
         screenUpgradeAttempts += 1
         screenUpgradeOfferAt = Date()
-        print("[ScreenShare] opening the screen m-line for sending (try \(screenUpgradeAttempts))")
+        debugLog("[ScreenShare] opening the screen m-line for sending (try \(screenUpgradeAttempts))")
         restartIce(iceRestart: false)
     }
 
@@ -1873,7 +1873,7 @@ final class CallService: NSObject {
             // input. Before startCapture the session has none, and `isMultitaskingCameraAccessSupported`
             // can read false there, so the call above may do nothing. On the capturer's own queue.
             self?.allowBackgroundCamera(on: capturer.captureSession)
-            print("[Call] background camera access: \(capturer.captureSession.isMultitaskingCameraAccessEnabled)")
+            debugLog("[Call] background camera access: \(capturer.captureSession.isMultitaskingCameraAccessEnabled)")
             guard let self else { return }
             DispatchQueue.main.async {
                 // A front↔back switch resolves HERE: the new camera is delivering (or has failed —
@@ -2203,7 +2203,7 @@ final class CallService: NSObject {
             source = s
         }
         shareUsesTrack = dual
-        print("[ScreenShare] share requested, mode \(dual ? "track" : "camera")")
+        debugLog("[ScreenShare] share requested, mode \(dual ? "track" : "camera")")
         let capturer = ScreenShareCapturer(source: source)
         let session = ScreenShareSession { frame, rotation in
             capturer.push(frame, rotationDegrees: rotation)
@@ -2246,7 +2246,7 @@ final class CallService: NSObject {
                     guard !fresh, let self, let session, self.screenShareSession === session,
                           !self.screenSharing, !session.hasStarted,
                           self.screenSharePhase == .picking else { return }
-                    print("[Call] screen share sheet closed without a start")
+                    debugLog("[Call] screen share sheet closed without a start")
                     self.stopScreenShare(requestExtensionStop: true, signal: false)
                 }
             }
@@ -2272,7 +2272,7 @@ final class CallService: NSObject {
                     guard let self, self.state == .active, self.connectedDate != nil,
                           !self.inGroupCall, self.lateShareStop == nil,
                           self.screenShareSession == nil, !self.screenSharing else { return }
-                    print("[Call] adopting a screen share started outside the app")
+                    debugLog("[Call] adopting a screen share started outside the app")
                     guard self.openShareSession() else { return }
                     // Begins the share now; the session's 10 s first-frame wait is the net.
                     self.screenShareSession?.adoptRunningBroadcast()
@@ -2304,7 +2304,7 @@ final class CallService: NSObject {
         var screenSender: RTCRtpSender?
         if shareUsesTrack {
             guard let pc, let sender = screenTransceiver(in: pc)?.sender, let track = screenTrack else {
-                print("[ScreenShare] dual mode lost its screen sender before the start")
+                debugLog("[ScreenShare] dual mode lost its screen sender before the start")
                 stopScreenShare(notice: "Couldn't start screen sharing. Try again.")
                 return
             }
@@ -3426,7 +3426,7 @@ final class CallService: NSObject {
         relayRefreshTries += 1
         relayRefreshTriedAt = Date()
         let id = callId
-        print("[Call] relay list is \(Int(Date().timeIntervalSince(built) / 60)) min old, refreshing mid-call")
+        debugLog("[Call] relay list is \(Int(Date().timeIntervalSince(built) / 60)) min old, refreshing mid-call")
         Task { [weak self] in
             await self?.refreshIceServers()
             DispatchQueue.main.async {
@@ -3464,7 +3464,7 @@ final class CallService: NSObject {
             let key = "\(self.callId ?? ""):\(v)"
             let n = (self.restartLatchFailures[key] ?? 0) + 1
             self.restartLatchFailures[key] = n
-            print("[Call] restart v\(v) step failed (\(n)): \(err?.localizedDescription ?? "no description")")
+            debugLog("[Call] restart v\(v) step failed (\(n)): \(err?.localizedDescription ?? "no description")")
             guard n < 3 else { return }
             self.appliedRemoteRestart = previous
         }
@@ -4349,7 +4349,7 @@ final class CallService: NSObject {
             let checking = self.iceCheckingSince != nil || self.restartIsWorking   // 1:1 audit r3 E2
             // 1:1 audit r2 F5, 2026-10-08: a failed DTLS transport never comes back; no extension.
             if elapsed < 60, peerAlive || checking, !self.transportFailed {
-                print("[Call] reconnect: still trying at \(Int(elapsed))s (peerAlive \(peerAlive), checking \(checking))")
+                debugLog("[Call] reconnect: still trying at \(Int(elapsed))s (peerAlive \(peerAlive), checking \(checking))")
                 self.armReconnectGiveUp(after: min(15, 60 - elapsed))
                 return
             }
@@ -4523,7 +4523,7 @@ final class CallService: NSObject {
                 if self.restartIsWorking { return }
                 if let a = self.restartAppliedAt, a > asked, self.state == .active, self.mediaReady { return }
             }
-            print("[Call] restart: running the one held back by the in-flight window")
+            debugLog("[Call] restart: running the one held back by the in-flight window")
             self.restartIce()
         }
         restartDeferWork = w
@@ -4545,7 +4545,7 @@ final class CallService: NSObject {
             guard self.callId == id, self.state == .active || self.state == .reconnecting else { return }
             if let c = self.lastIceConnectedAt, c > asked, self.state == .active { return }
             if self.restartIsWorking { self.recheckRestartRequestLater(); return }
-            print("[Call] restart: serving the callee's request held over a working restart")
+            debugLog("[Call] restart: serving the callee's request held over a working restart")
             self.restartIce()
         }
         restartRequestRecheck = w
@@ -4621,7 +4621,7 @@ final class CallService: NSObject {
         guard sealSignalling else { ref.updateData([field: ["sdp": sdp, "version": v] as [String: Any]]); return }
         // 1:1 audit r3 E7, 2026-10-08: each retry waits for the key read it started (up to ~10 s),
         // 4 reads in all, instead of 1 s ticks that gave up before a slow read could land.
-        guard attempt <= 4 else { print("[Call] G9: \(field) could not be sealed, not sent"); return }
+        guard attempt <= 4 else { debugLog("[Call] G9: \(field) could not be sealed, not sent"); return }
         let id = callId
         afterSignalKeyWarm { [weak self] in
             guard let self, self.callId == id, id == ref.documentID, current() else { return }
@@ -4966,7 +4966,7 @@ final class CallService: NSObject {
                         // 1:1 audit r2 G2, 2026-10-08: never a plaintext offer; the key was
                         // checked before the dial (`ensureSignalKey`), so this is a lost key.
                         self.sealSignalling = false
-                        print("call: G2 no key for the callee at offer time, dial failed")
+                        debugLog("call: G2 no key for the callee at offer time, dial failed")
                         self.failOutgoing(attempt: attempt)
                         return
                     }
@@ -5233,11 +5233,11 @@ final class CallService: NSObject {
                     guard let self, self.callId == id, self.state == .incoming else { return }
                     let firstRecheck = self.ringRechecked.insert(id).inserted
                     if stillGone || !firstRecheck {
-                        print("[Recovery] ring watch: call doc still refused or gone, ending quietly")
+                        debugLog("[Recovery] ring watch: call doc still refused or gone, ending quietly")
                         self.recordWritten = true
                         self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
                     } else {
-                        print("[Recovery] ring watch: call doc readable again, re-attaching")
+                        debugLog("[Recovery] ring watch: call doc readable again, re-attaching")
                         self.watchRingingCancel(id)
                     }
                 }
@@ -5445,7 +5445,7 @@ final class CallService: NSObject {
         incomingRetryStep += 1
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.incomingWanted, self.incomingDead, attach == self.incomingAttach else { return }
-            print("[Recovery] incoming calls: attached again after \(Int(delay))s")
+            debugLog("[Recovery] incoming calls: attached again after \(Int(delay))s")
             self.observeIncoming()
         }
     }
@@ -5457,7 +5457,7 @@ final class CallService: NSObject {
         guard !Self.isRefusal(err) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, self.callId == id, self.state != .idle, self.state != .ended else { return }
-            print("[Recovery] \(what): attached again after 3s")
+            debugLog("[Recovery] \(what): attached again after 3s")
             reattach()
         }
     }
@@ -5475,7 +5475,7 @@ final class CallService: NSObject {
             let uid = user?.uid ?? ""
             guard uid != self.incomingUid else { return }
             if !self.incomingUid.isEmpty {
-                print("[Recovery] incoming calls: account changed, listener dropped")
+                debugLog("[Recovery] incoming calls: account changed, listener dropped")
                 self.incomingListener?.remove(); self.incomingListener = nil
                 self.incomingAttach += 1   // an older listener's late error or retry does nothing
                 self.incomingDead = false
@@ -5492,7 +5492,7 @@ final class CallService: NSObject {
             // Every listener comes back, healthy or not: removing and re-adding one is cheap and
             // the contract says re-attach when unsure.
             if self.incomingWanted {
-                print("[Recovery] incoming calls: attached again after recovery")
+                debugLog("[Recovery] incoming calls: attached again after recovery")
                 self.observeIncoming()
             }
             self.reattachCallListeners("recovery")
@@ -5506,7 +5506,7 @@ final class CallService: NSObject {
         NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             guard let self, self.incomingWanted, self.incomingDead || !self.incomingHeardServer else { return }
-            print("[Recovery] incoming calls: attached again on foreground")
+            debugLog("[Recovery] incoming calls: attached again on foreground")
             self.observeIncoming()
         }
     }
@@ -5530,20 +5530,20 @@ final class CallService: NSObject {
         if let ref = callDocWatch { callDocWatch = db.document(ref.path) }
         if let col = candidatesWatch { candidatesWatch = db.collection(col.path) }
         if incomingWanted {
-            print("[Recovery] incoming calls: attached again on the fresh Firestore client")
+            debugLog("[Recovery] incoming calls: attached again on the fresh Firestore client")
             observeIncoming()
         }
         guard state != .idle, state != .ended, let id = callId else { return }
         if ringWanted, ringingWatchId == id {
-            print("[Recovery] call ring watch: attached again after the client swap")
+            debugLog("[Recovery] call ring watch: attached again after the client swap")
             watchRingingCancel(id)
         }
         if let ref = callDocWatch, ref.documentID == id {
-            print("[Recovery] call signalling: attached again after the client swap")
+            debugLog("[Recovery] call signalling: attached again after the client swap")
             observeCallDoc(ref)
         }
         if let col = candidatesWatch, col.parent?.documentID == id {
-            print("[Recovery] call routes: attached again after the client swap")
+            debugLog("[Recovery] call routes: attached again after the client swap")
             observeRemoteCandidates(col)
         }
     }
@@ -5554,15 +5554,15 @@ final class CallService: NSObject {
     private func reattachCallListeners(_ why: String) {
         guard state != .idle, state != .ended, let id = callId else { return }
         if ringingWatcher != nil, ringingWatchId == id {
-            print("[Recovery] call ring watch: attached again after \(why)")
+            debugLog("[Recovery] call ring watch: attached again after \(why)")
             watchRingingCancel(id)
         }
         if let ref = callDocWatch, ref.documentID == id {
-            print("[Recovery] call signalling: attached again after \(why)")
+            debugLog("[Recovery] call signalling: attached again after \(why)")
             observeCallDoc(ref)
         }
         if let col = candidatesWatch, col.parent?.documentID == id {
-            print("[Recovery] call routes: attached again after \(why)")
+            debugLog("[Recovery] call routes: attached again after \(why)")
             observeRemoteCandidates(col)
         }
     }
@@ -5575,7 +5575,7 @@ final class CallService: NSObject {
 
     /// Console only, never on screen. SessionRecovery decides whether the error is one it acts on.
     private static func reportToRecovery(_ err: Error, _ from: String) {
-        print("[Recovery] \(from) failed:", err)
+        debugLog("[Recovery] \(from) failed:", err)
         Task { @MainActor in SessionRecovery.noteRefusal(err, from) }
     }
 
@@ -5850,7 +5850,7 @@ final class CallService: NSObject {
             // 1:1 audit r3 B1, 2026-10-08: an unsealed offer (older caller build) is refused BEFORE
             // anything rings: no ring flash, no "Missed call" row, the doc ends as failed.
             if d["offerEnc"] == nil, d["offer"] != nil {
-                print("call: G2 unsealed offer refused before the ring")
+                debugLog("call: G2 unsealed offer refused before the ring")
                 self.gatingIncoming.remove(doc.documentID)
                 self.rememberFinished(doc.documentID)
                 self.endRingIfUnclaimed(doc.documentID,
@@ -6263,7 +6263,7 @@ final class CallService: NSObject {
             guard current != nil, self.callId == current, self.otherUid == uid else { return }
             let unreadable = err != nil || snap == nil
             if unreadable, attempt < 3 {
-                print("[Call] redial push: read failed (try \(attempt)), retrying")
+                debugLog("[Call] redial push: read failed (try \(attempt)), retrying")
                 DispatchQueue.main.asyncAfter(deadline: .now() + Double(attempt)) { [weak self] in
                     self?.arbitratePushedRedial(callId: newId, name: name, uid: uid, photo: photo, video: video,
                                                 attempt: attempt + 1, current: .some(current))
@@ -6273,7 +6273,7 @@ final class CallService: NSObject {
             if unreadable {
                 // Out of tries: ring the redial over a still-ringing call only (see above).
                 guard self.state == .incoming, !self.wasAccepted else { return }
-                print("[Call] redial push: unreadable after \(attempt) tries, ringing the new call")
+                debugLog("[Call] redial push: unreadable after \(attempt) tries, ringing the new call")
             } else {
                 guard let d = snap?.data(), (d["status"] as? String) == "ringing" else { return }
                 guard self.isNewerThanCurrent(d) else {
@@ -6792,7 +6792,7 @@ final class CallService: NSObject {
                               then: @escaping (String) -> Void) {
         if let enc = sealSignal(sdp) { then(enc); return }
         guard sealSignalling, attempt <= 4 else {
-            print("[Call] answer could not be sealed, not sent")
+            debugLog("[Call] answer could not be sealed, not sent")
             guard current() else { return }
             Telemetry.event(.error, component: "call", code: "answer_unsealed")   // owner 2026-10-21
             endReason = .failed; hangUp()
@@ -7211,7 +7211,7 @@ final class CallService: NSObject {
             pendingRemoteCandidates.append(candidate)
             return
         }
-        pc.add(candidate) { err in if let err { print("call: addIceCandidate failed:", err) } }
+        pc.add(candidate) { err in if let err { debugLog("call: addIceCandidate failed:", err) } }
     }
 
     func flushPendingCandidates() {
@@ -7224,7 +7224,7 @@ final class CallService: NSObject {
         // and the cap ages them out).
         let pending = pendingRemoteCandidates.filter { Self.matchesUfrag($0, of: remote) }
         pendingRemoteCandidates.removeAll { Self.matchesUfrag($0, of: remote) }
-        for c in pending { pc.add(c) { err in if let err { print("call: flush addIceCandidate failed:", err) } } }
+        for c in pending { pc.add(c) { err in if let err { debugLog("call: flush addIceCandidate failed:", err) } } }
     }
 
     /// Audit M-041, 2026-10-07: does this candidate belong to the ICE generation of `description`?
@@ -7307,7 +7307,7 @@ final class CallService: NSObject {
     /// for the same call. 1:1 audit r3 E7: each try waits for the key read to end (up to ~10 s),
     /// 4 reads in all; fixed 1 s ticks gave up before a slow read could land.
     private func retrySealedCandidate(_ enc: String, callId id: String?, attempt: Int) {
-        guard attempt <= 4 else { print("call: #27 sealed candidate could not be opened, skipped"); return }
+        guard attempt <= 4 else { debugLog("call: #27 sealed candidate could not be opened, skipped"); return }
         afterSignalKeyWarm { [weak self] in
             guard let self, id != nil, self.callId == id else { return }
             guard let c = self.openSealedCandidate(enc) else {
@@ -7354,7 +7354,7 @@ final class CallService: NSObject {
             guard let sealed = sealedCandidate(data) else {
                 // 1:1 audit r3 E6, 2026-10-08: never written in plaintext on a sealed call. Held
                 // until the key read ends, then sealed again (4 reads, as `writeSignalSdp`).
-                guard sealTry < 4 else { print("call: #27 candidate could not be sealed, not sent"); return }
+                guard sealTry < 4 else { debugLog("call: #27 candidate could not be sealed, not sent"); return }
                 afterSignalKeyWarm { [weak self] in
                     guard let self, self.callId == id, id != nil else { return }
                     self.writeCandidate(data, to: col, sealTry: sealTry + 1)
@@ -7635,7 +7635,7 @@ final class CallService: NSObject {
         // a ring-out is never read as a slow connect.
         mark("ended")
         writeTimeline(outcome: endReason == .none ? "ended" : endReason.rawValue)
-        if startedAsVideo { noteCamera("call over"); DiagLog.flagForUpload(after: 4) }
+        if startedAsVideo { noteCamera("call over"); DiagUpload.flag(after: 4) }
         listeners.forEach { $0.remove() }
         listeners = []
         ringingWatcher?.remove(); ringingWatcher = nil
@@ -7917,7 +7917,7 @@ extension CallService: RTCPeerConnectionDelegate {
         guard ice == .connected || ice == .completed else { return }
         DispatchQueue.main.async {
             guard peerConnection === self.pc else { return }   // #45: not a closed call's leftover
-            print("call: M-042 connection failed with ICE up (DTLS)")
+            debugLog("call: M-042 connection failed with ICE up (DTLS)")
             self.transportFailed = true
             self.mediaReady = false
             // Still ringing: the same "dropped during the ring" mark the ICE handler sets, so the

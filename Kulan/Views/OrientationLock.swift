@@ -88,7 +88,7 @@ enum OrientationLock {
             ownerUnknown = false
         }
         mask = wanted
-        print("[ScreenShare] orientation \(on ? "landscape allowed" : "portrait only")")
+        debugLog("[ScreenShare] orientation \(on ? "landscape allowed" : "portrait only")")
         for scene in UIApplication.shared.connectedScenes {
             guard let windowScene = scene as? UIWindowScene else { continue }
             // Every controller that may be deciding the orientation re-reads the mask: the root and
@@ -103,7 +103,7 @@ enum OrientationLock {
             // On: the system follows the way the phone is held, inside the new mask.
             // Off: back to portrait now, even while the phone is still held sideways.
             windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: wanted)) { error in
-                print("[ScreenShare] orientation update refused: \(error.localizedDescription)")
+                debugLog("[ScreenShare] orientation update refused: \(error.localizedDescription)")
             }
         }
     }

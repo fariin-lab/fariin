@@ -333,7 +333,7 @@ final class BlockList {
                 try await batch.commit()
             }
         } catch {
-            print("block (\(other), \(value)) refused:", error)
+            debugLog("block (\(other), \(value)) refused:", error)
             return false
         }
         // The chat's old copy of the block (and my unread count, which their silent messages ran
@@ -395,7 +395,7 @@ final class BlockList {
             ])
         } catch {
             // Left as it was; the old copy is still honoured, and the next launch tries again.
-            print("block move (\(cid)) failed:", error)
+            debugLog("block move (\(cid)) failed:", error)
         }
     }
 }

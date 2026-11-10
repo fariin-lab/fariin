@@ -416,7 +416,7 @@ enum TwoStepGate {
         let expiry = previous.expirationDate
         UserDefaults.standard.set(["uid": uid, "token": previous.token, "expiry": expiry.timeIntervalSince1970] as [String: Any],
                                   forKey: pendingKey)
-        print("[Recovery] two-step renew failed 4 times; saved to retry until \(expiry)")
+        debugLog("[Recovery] two-step renew failed 4 times; saved to retry until \(expiry)")
     }
 
     // MARK: - Pending renew (owner, 2026-10-08)
@@ -447,7 +447,7 @@ enum TwoStepGate {
             _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
             return true
         } catch {
-            print("[Recovery] two-step renew failed: \(error.localizedDescription)")
+            debugLog("[Recovery] two-step renew failed: \(error.localizedDescription)")
             return false
         }
     }
@@ -479,7 +479,7 @@ enum TwoStepGate {
             guard let token = pendingRenew() else { return false }
             if await attemptRenew(token: token) {
                 UserDefaults.standard.removeObject(forKey: pendingKey)
-                print("[Recovery] pending two-step renew went through")
+                debugLog("[Recovery] pending two-step renew went through")
                 return true
             }
             return false

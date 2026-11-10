@@ -7,23 +7,29 @@ import UIKit
 /// `users/{uid}/diag`. Remove once the cause is confirmed and fixed.
 ///
 /// Lines read `OPEN#<n> +<ms since tap>ms <what>`, rects as `x,y,w,h` in window points.
+///
+/// Debug builds only (release audit 2026-11-10). In a release build `begin` never starts a record,
+/// so `active` stays false: `note` and `end` return at once, no line is built (both take an
+/// autoclosure), no frame sampler is made and nothing is sent.
 @MainActor enum OpenTrace {
     private(set) static var active = false
     static var sampler: FrameSampler?
     private static var n = 0
     private static var tapAt: CFTimeInterval = 0
 
-    static func begin(_ what: String) {
+    static func begin(_ what: @autoclosure () -> String) {
+        #if DEBUG
         n += 1
         tapAt = CACurrentMediaTime()
         active = true
-        DiagLog.add("OPEN#\(n) +0ms TAP \(what)")
+        DiagLog.add("OPEN#\(n) +0ms TAP \(what())")
+        #endif
     }
 
-    static func note(_ what: String) {
+    static func note(_ what: @autoclosure () -> String) {
         guard active else { return }
         let ms = Int((CACurrentMediaTime() - tapAt) * 1000)
-        DiagLog.add("OPEN#\(n) +\(ms)ms \(what)")
+        DiagLog.add("OPEN#\(n) +\(ms)ms \(what())")
     }
 
     /// The flight landed and the copy is gone: close this open's record and send the file soon.

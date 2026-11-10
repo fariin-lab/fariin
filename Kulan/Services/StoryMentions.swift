@@ -27,8 +27,14 @@ enum StoryMentions {
         Task.detached(priority: .utility) {
             var sent = Set<String>()
             // One MENTION# line per name says where it stopped (owner 2026-10-16: no card arrived).
-            // Remove once a device log has answered.
-            func log(_ s: String) { Task { @MainActor in DiagLog.add("MENTION# story=\(storyId.prefix(6)) \(s)") } }
+            // Debug builds only (release audit 2026-11-10): the lines name other people and who is
+            // blocked, and a release build must neither keep nor send them.
+            func log(_ s: @autoclosure () -> String) {
+                #if DEBUG
+                let line = s()
+                Task { @MainActor in DiagLog.add("MENTION# story=\(storyId.prefix(6)) \(line)") }
+                #endif
+            }
             log("names=\(handles.count) audience=\(recipients.count)")
             for h in handles {
                 guard let u = await ChatService.findByHandle(h) else { log("@\(h) not found"); continue }   // never me
@@ -52,7 +58,9 @@ enum StoryMentions {
                     log("@\(h) send failed: \(error.localizedDescription)")
                 }
             }
+            #if DEBUG
             Task { @MainActor in DiagLog.flagForUpload() }
+            #endif
         }
     }
 }

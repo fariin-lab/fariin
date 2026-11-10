@@ -247,7 +247,7 @@ enum ChatService {
         // Refused: said, not only logged (audit 2026-10-20: the chat opened and then went away).
         ref.setData(data) { err in
             guard let err else { return }
-            print("[createGroup] write refused: \(err.localizedDescription)")
+            debugLog("[createGroup] write refused: \(err.localizedDescription)")
             Task { @MainActor in ToastNotice.show("Could not create the group. Try again.") }
         }
         let cid = ref.documentID
@@ -452,7 +452,7 @@ enum ChatService {
                         box.lock.unlock()
                         if done { return }
                         if idle >= limit {
-                            print("[Upload] no progress for \(Int(idle)) s, restarting the transfer")
+                            debugLog("[Upload] no progress for \(Int(idle)) s, restarting the transfer")
                             finish(.failure(URLError(.timedOut)))   // retryable: a fresh attempt follows
                             task.cancel()
                             return
@@ -533,7 +533,7 @@ enum ChatService {
                     try? FileManager.default.removeItem(atPath: job.filePath)
                     continue
                 }
-                print("resumePendingUploads: \(job.storagePath) not finished yet:", error)
+                debugLog("resumePendingUploads: \(job.storagePath) not finished yet:", error)
             }
         }
     }
@@ -1793,7 +1793,7 @@ enum ChatService {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             if !answered.isSet, UIApplication.shared.applicationState == .active {
-                print("[Recovery] send unanswered for 15s")
+                debugLog("[Recovery] send unanswered for 15s")
                 SessionRecovery.noteStall("send")
             }
         }
@@ -1812,7 +1812,7 @@ enum ChatService {
             let ns = error as NSError
             DiagLog.add("SEND# refused code=\(ns.code) \(ns.localizedDescription.prefix(200))")
             Telemetry.event(.error, component: "send", code: Telemetry.code(error))   // owner 2026-10-21: code only, never the text
-            DiagLog.flagForUpload()   // sent within seconds, so the cause can be read the same day
+            DiagUpload.flag()   // sent within seconds, so the cause can be read the same day
             await MainActor.run { SessionRecovery.noteRefusal(error, "send") }
             throw error
         }
@@ -3685,7 +3685,7 @@ enum ChatService {
                     markedDeleted = true
                 } catch {
                     #if DEBUG
-                    print("[deleteMessage] tombstone refused, falling back to hard delete: \(error)")
+                    debugLog("[deleteMessage] tombstone refused, falling back to hard delete: \(error)")
                     #endif
                 }
             }
@@ -3726,7 +3726,7 @@ enum ChatService {
             return true
         } catch {
             #if DEBUG
-            print("[deleteMessage] refused for \(cid)/\(messageId): \(error)")
+            debugLog("[deleteMessage] refused for \(cid)/\(messageId): \(error)")
             #endif
             return false
         }
@@ -4050,7 +4050,7 @@ enum ChatService {
             return true
         } catch {
             #if DEBUG
-            print("[deleteAlbumItem] refused for \(cid)/\(parentId)[\(index)]: \(error)")
+            debugLog("[deleteAlbumItem] refused for \(cid)/\(parentId)[\(index)]: \(error)")
             #endif
             return false
         }
@@ -4329,7 +4329,7 @@ enum ChatService {
             try await db.collection("conversations").document(cid).setData(data, merge: true)
             return true
         } catch {
-            print("[Recovery] \(what) write failed: \(error)")
+            debugLog("[Recovery] \(what) write failed: \(error)")
             await MainActor.run { SessionRecovery.noteRefusal(error, what) }
             return false
         }
@@ -4721,7 +4721,7 @@ enum ChatService {
             if !allowSelf { guard u.id != uid else { return nil } }   // never "find" yourself
             return ProfileStore.indexed(u, fresh: !d.metadata.isFromCache)   // warms photo / call-privacy / verification
         } catch {
-            print("findByHandle failed:", error)
+            debugLog("findByHandle failed:", error)
             handleLookupFailed = true
             return nil
         }

@@ -465,7 +465,9 @@ final class ImageLoader: UIView {
                           imageIsLoaded: @escaping () -> Void) {
 
         guard let validatedUrl = url else {
+            #if DEBUG
             print("url error")
+            #endif
             imageIsLoaded()   // still mark ready → the story auto-advances instead of freezing forever
             return
         }
@@ -680,7 +682,9 @@ final class ImageLoader: UIView {
                 // A cancel arrives here too, and it is not a failure — the story simply moved on, and
                 // calling `imageIsLoaded` would advance a progress bar that no longer owns the screen.
                 if (error as? URLError)?.code == .cancelled { return }
-                print(error as Any)
+                #if DEBUG
+                print(error as Any)   // debug builds only: the error names the media url
+                #endif
                 DispatchQueue.main.async { self.showShimmer(false); imageIsLoaded() }
                 return
             }

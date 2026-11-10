@@ -43,7 +43,7 @@ enum DeliveryReceipts {
         }
         guard let batch else { return }
         batch.commit { error in
-            if let error { print("[delivered] mark failed: \(error.localizedDescription)") }
+            if let error { debugLog("[delivered] mark failed: \(error.localizedDescription)") }
         }
     }
 

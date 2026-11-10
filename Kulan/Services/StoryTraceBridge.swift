@@ -16,7 +16,11 @@ enum StoryTraceBridge {
     /// A prepared clip on a local file starts in about 10 ms; the reference app within a frame.
     private static let slowLanding: TimeInterval = 0.15
 
+    /// Debug builds only (release audit 2026-11-10): the trace wrote dozens of lines a second to
+    /// disk around every swipe for every user, and a slow landing sent the whole file up. A release
+    /// build leaves the sink empty, so `StoryVideoTrace.note` does not even build its line.
     static func install() {
+        #if DEBUG
         StoryVideoTrace.sink = { line in
             let now = Date()
             lock.lock()
@@ -34,5 +38,6 @@ enum StoryTraceBridge {
                 DiagLog.flagForUpload()
             }
         }
+        #endif
     }
 }

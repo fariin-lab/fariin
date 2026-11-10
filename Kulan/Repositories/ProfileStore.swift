@@ -298,7 +298,7 @@ final class ProfileStore {
     func refetchFailed() async {
         let uids = takeFailed()
         guard !uids.isEmpty else { return }
-        print("[Recovery] re-fetching \(uids.count) profile(s) that failed")
+        debugLog("[Recovery] re-fetching \(uids.count) profile(s) that failed")
         let mine = Auth.auth().currentUser?.uid
         for start in stride(from: 0, to: uids.count, by: 4) {
             let chunk = Array(uids[start..<min(start + 4, uids.count)])
@@ -339,7 +339,7 @@ final class ProfileStore {
             // Offline, getDocument() answers from the disk cache: that copy is not fresh.
             return Self.indexed(UserProfile(id: uid, data: data), fresh: !snap.metadata.isFromCache)
         } catch {
-            print("profile fetch failed:", error)
+            debugLog("profile fetch failed:", error)
             markFetch(uid, failed: true)
             await MainActor.run { SessionRecovery.noteRefusal(error, "profile read") }
             // ⛔ A FAILED READ IS NOT A MISSING PERSON — 2026-09-28, owner: "every account looks like
@@ -1123,7 +1123,7 @@ final class ProfileStore {
         do {
             try await db.collection("users").document(uid).setData(userFields, merge: true)
         } catch {
-            print("[photoPrivacy] republish failed: \(error.localizedDescription)")
+            debugLog("[photoPrivacy] republish failed: \(error.localizedDescription)")
             return false
         }
 

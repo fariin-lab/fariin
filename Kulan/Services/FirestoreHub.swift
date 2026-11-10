@@ -108,7 +108,7 @@ enum FirestoreHub {
         let signedIn = await withTaskGroup(of: Bool.self) { group -> Bool in
             group.addTask {
                 do { try await Auth.auth(app: app).updateCurrentUser(user); return true }
-                catch { print("[FirestoreHub] updateCurrentUser failed:", error); return false }
+                catch { debugLog("[FirestoreHub] updateCurrentUser failed:", error); return false }
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
@@ -144,7 +144,7 @@ enum FirestoreHub {
         let answered = await withTaskGroup(of: Bool.self) { group -> Bool in
             group.addTask {
                 do { _ = try await fresh.collection("users").document(uid).getDocument(source: .server); return true }
-                catch { print("[FirestoreHub] fresh client read failed:", error); return false }
+                catch { debugLog("[FirestoreHub] fresh client read failed:", error); return false }
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
@@ -176,7 +176,7 @@ enum FirestoreHub {
             if !nudged, let user = Auth.auth().currentUser, user.uid == uid {
                 nudged = true
                 auth.updateCurrentUser(user) { error in
-                    if let error { print("[FirestoreHub] mirror sign-in retry failed:", error) }
+                    if let error { debugLog("[FirestoreHub] mirror sign-in retry failed:", error) }
                 }
             }
             guard Date() < deadline else { return false }
@@ -195,7 +195,7 @@ enum FirestoreHub {
             if let user {
                 guard auth.currentUser?.uid != user.uid else { return }
                 auth.updateCurrentUser(user) { error in
-                    if let error { print("[FirestoreHub] mirror sign-in failed:", error) }
+                    if let error { debugLog("[FirestoreHub] mirror sign-in failed:", error) }
                 }
             } else {
                 try? auth.signOut()

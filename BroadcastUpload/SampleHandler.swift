@@ -74,7 +74,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         guard let video, let audioRing, control != nil else {
-            NSLog("[ScreenShare] extension: shared files unavailable")
+            screenShareLog("[ScreenShare] extension: shared files unavailable")
             finish(message: NSLocalizedString("Screen sharing is not available right now.", comment: "Broadcast error"))
             return
         }
@@ -93,7 +93,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
                 self.control?.stopRequested = false
                 self.awaitingAdoption = true
                 self.startNs = now
-                NSLog("[ScreenShare] extension: started outside a share, waiting for the app")
+                screenShareLog("[ScreenShare] extension: started outside a share, waiting for the app")
             }
             self.running = true
             self.startKeepalive()
@@ -101,22 +101,22 @@ final class SampleHandler: RPBroadcastSampleHandler {
                 self?.lifeQueue.async { _ = self?.checkStop() }
             }
             ScreenShareIPC.post(ScreenShareIPC.Notify.started)
-            NSLog("[ScreenShare] extension: started")
+            screenShareLog("[ScreenShare] extension: started")
         }
     }
 
     override func broadcastPaused() {
         // The keepalive keeps running: a paused share is still a live share, only the frames stop.
-        NSLog("[ScreenShare] extension: paused")
+        screenShareLog("[ScreenShare] extension: paused")
     }
 
     override func broadcastResumed() {
         videoQueue.async { self.lastFrameTime = -1 }
-        NSLog("[ScreenShare] extension: resumed")
+        screenShareLog("[ScreenShare] extension: resumed")
     }
 
     override func broadcastFinished() {
-        NSLog("[ScreenShare] extension: finished")
+        screenShareLog("[ScreenShare] extension: finished")
         onLifeQueue { self.teardown() }
     }
 
@@ -155,14 +155,14 @@ final class SampleHandler: RPBroadcastSampleHandler {
                 awaitingAdoption = false   // the app took it: the normal rule from here
             } else {
                 if now &- startNs > Self.adoptGraceNs {
-                    NSLog("[ScreenShare] extension: not adopted by the app, finishing")
+                    screenShareLog("[ScreenShare] extension: not adopted by the app, finishing")
                     finish(message: NSLocalizedString("Start screen sharing from a Kulan call.", comment: "Broadcast error"))
                 }
                 return
             }
         }
         if alive == 0 || now &- alive > ScreenShareIPC.appAliveTimeoutNs {
-            NSLog("[ScreenShare] extension: app not alive for 4 s, finishing")
+            screenShareLog("[ScreenShare] extension: app not alive for 4 s, finishing")
             finish(message: NSLocalizedString("The call has ended", comment: "Broadcast error"))
         }
     }
@@ -171,7 +171,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     @discardableResult
     private func checkStop() -> Bool {
         guard running, !ended, control?.stopRequested == true else { return false }
-        NSLog("[ScreenShare] extension: stop requested by the app")
+        screenShareLog("[ScreenShare] extension: stop requested by the app")
         // Owner, 2026-10-10: Stop Sharing (and a call that ended) ends quietly, with no
         // "Live Broadcast ... has stopped" alert, as the reference app does.
         finish(message: nil)
@@ -269,7 +269,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
             guard status == noErr else {
                 transferFailures += 1
                 if transferFailures == 1 || transferFailures % 300 == 0 {
-                    NSLog("[ScreenShare] extension: pixel transfer failed %d (x%ld)", status, transferFailures)
+                    screenShareLog("[ScreenShare] extension: pixel transfer failed %d (x%ld)", status, transferFailures)
                 }
                 return
             }
@@ -310,7 +310,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         var session: VTPixelTransferSession?
         let status = VTPixelTransferSessionCreate(allocator: kCFAllocatorDefault, pixelTransferSessionOut: &session)
         guard status == noErr, let session else {
-            NSLog("[ScreenShare] extension: VTPixelTransferSessionCreate failed %d", status)
+            screenShareLog("[ScreenShare] extension: VTPixelTransferSessionCreate failed %d", status)
             return nil
         }
         transferSession = session
@@ -333,13 +333,13 @@ final class SampleHandler: RPBroadcastSampleHandler {
             let status = CVPixelBufferPoolCreate(kCFAllocatorDefault, poolAttributes as CFDictionary,
                                                  bufferAttributes as CFDictionary, &pool)
             guard status == kCVReturnSuccess, let pool else {
-                NSLog("[ScreenShare] extension: pool create failed %d", status)
+                screenShareLog("[ScreenShare] extension: pool create failed %d", status)
                 return nil
             }
             outputPool = pool
             poolWidth = width
             poolHeight = height
-            NSLog("[ScreenShare] extension: output %ldx%ld", width, height)
+            screenShareLog("[ScreenShare] extension: output %ldx%ld", width, height)
         }
         guard let outputPool else { return nil }
         var buffer: CVPixelBuffer?
@@ -391,7 +391,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
             return input
         }
         if status == .error {
-            NSLog("[ScreenShare] extension: audio convert failed %@", error?.localizedDescription ?? "?")
+            screenShareLog("[ScreenShare] extension: audio convert failed %@", error?.localizedDescription ?? "?")
             self.converter = nil
             return
         }
@@ -416,14 +416,14 @@ final class SampleHandler: RPBroadcastSampleHandler {
         }
         guard let format = AVAudioFormat(streamDescription: &native),
               let newConverter = AVAudioConverter(from: format, to: outFormat) else {
-            NSLog("[ScreenShare] extension: unsupported app audio format %.0f Hz %d ch flags %u",
+            screenShareLog("[ScreenShare] extension: unsupported app audio format %.0f Hz %d ch flags %u",
                   asbd.mSampleRate, Int32(asbd.mChannelsPerFrame), asbd.mFormatFlags)
             return false
         }
         newConverter.downmix = true
         inFormat = format
         converter = newConverter
-        NSLog("[ScreenShare] extension: app audio %.0f Hz %d ch", asbd.mSampleRate, Int32(asbd.mChannelsPerFrame))
+        screenShareLog("[ScreenShare] extension: app audio %.0f Hz %d ch", asbd.mSampleRate, Int32(asbd.mChannelsPerFrame))
         return true
     }
 

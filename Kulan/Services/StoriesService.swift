@@ -1618,7 +1618,7 @@ final class StoriesService {
         // and this used to name the hour whatever refused it (his group story; counters read 3/40).
         // The sentence now names both honest possibilities, and the real error goes to the log.
         DiagLog.add("STORYPOST# refused \((error as NSError).domain) \((error as NSError).code) \(error.localizedDescription.prefix(160))")
-        DiagLog.flagForUpload()
+        DiagUpload.flag()
         return "This story couldn't be posted. If you've posted a lot in the last hour (the limit is "
              + "\(AppLimits.shared.storiesPerHour)), wait a little and try again."
     }
@@ -3774,7 +3774,7 @@ final class StoriesRepository {
         othersReg = db.collection("stories")
             .whereField("recipientUids", arrayContains: StoryAudienceToken.token(me))
             .addSnapshotListener { [weak self] snap, error in
-                guard let self, let snap else { if let error { print("stories listen error:", error); self?.relistenAfterError() }; return }
+                guard let self, let snap else { if let error { debugLog("stories listen error:", error); self?.relistenAfterError() }; return }
                 if !snap.metadata.isFromCache { self.othersFromServer = true }
                 // One line, no extra read — see `ConnectionStatus`.
                 Task { @MainActor in ConnectionStatus.shared.noteSnapshot(fromCache: snap.metadata.isFromCache, pendingWrites: snap.metadata.hasPendingWrites) }
@@ -3786,7 +3786,7 @@ final class StoriesRepository {
         // The stories posted before the change, for the day they have left. See `othersLegacyReg`.
         othersLegacyReg = db.collection("stories").whereField("recipientUids", arrayContains: me)
             .addSnapshotListener { [weak self] snap, error in
-                guard let self, let snap else { if let error { print("legacy stories listen error:", error); self?.relistenAfterError() }; return }
+                guard let self, let snap else { if let error { debugLog("legacy stories listen error:", error); self?.relistenAfterError() }; return }
                 if !snap.metadata.isFromCache { self.othersLegacyFromServer = true }
                 if Self.ignoreColdEmpty(snap, serverHasSpoken: self.othersLegacyFromServer) { return }
                 self.othersByLegacyUid = self.parse(snap.documents)
@@ -3795,7 +3795,7 @@ final class StoriesRepository {
             }
         mineReg = db.collection("stories").whereField("authorUid", isEqualTo: me)
             .addSnapshotListener { [weak self] snap, error in
-                guard let self, let snap else { if let error { print("my stories listen error:", error); self?.relistenAfterError() }; return }
+                guard let self, let snap else { if let error { debugLog("my stories listen error:", error); self?.relistenAfterError() }; return }
                 if !snap.metadata.isFromCache { self.mineFromServer = true }
                 Task { @MainActor in ConnectionStatus.shared.noteSnapshot(fromCache: snap.metadata.isFromCache, pendingWrites: snap.metadata.hasPendingWrites) }
                 if Self.ignoreColdEmpty(snap, serverHasSpoken: self.mineFromServer) { return }

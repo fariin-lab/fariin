@@ -310,7 +310,7 @@ final class ConversationsRepository {
         listRetryWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.loadFailed else { return }
-            print("[Recovery] chat list re-attach after back-off")
+            debugLog("[Recovery] chat list re-attach after back-off")
             self.attach()
         }
         listRetryWork = work
@@ -357,7 +357,7 @@ final class ConversationsRepository {
                 guard behind > 60_000, Date().timeIntervalSince(self.lastBehindRepair) > 300 else { continue }
                 self.lastBehindRepair = Date()
                 DiagLog.add("CHATLIST# \(Int(behind / 1000))s behind the server: listening again")
-                DiagLog.flagForUpload(after: 5)
+                DiagUpload.flag(after: 5)
                 self.attach()
             }
         }
@@ -382,7 +382,7 @@ final class ConversationsRepository {
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else {
                     if let error {
-                        print("conversations listen error:", error)
+                        debugLog("conversations listen error:", error)
                         Task { @MainActor in SessionRecovery.noteRefusal(error, "chat list") }
                         // 2026-09-24 audit: see `loadFailed`. `hasLoaded` too, because we HAVE heard
                         // back, and it is what takes the skeleton down so the error can show.
@@ -442,7 +442,7 @@ final class ConversationsRepository {
                     let shownNewest = self.newestMillis(self.lastRaw + self.conversations.filter { !$0.isChannel })
                     if self.newestMillis(convs) + 1_000 < shownNewest {
                         DiagLog.add("CHATLIST# refused an older saved copy, \((shownNewest - self.newestMillis(convs)) / 1000)s behind")
-                        DiagLog.flagForUpload(after: 5)
+                        DiagUpload.flag(after: 5)
                         return
                     }
                 }
@@ -747,7 +747,7 @@ final class ConversationsRepository {
                     if snap == nil {
                         self.pinnedExtraListeners.removeValue(forKey: id)?.remove()
                         self.pinnedRefusedOnce.insert(id)
-                        print("[Recovery] pinned chat listener ended: \(error?.localizedDescription ?? "?")")
+                        debugLog("[Recovery] pinned chat listener ended: \(error?.localizedDescription ?? "?")")
                         Task { @MainActor in SessionRecovery.noteRefusal(error, "pinned chat") }
                         self.schedulePinnedRetry()
                         return

@@ -395,11 +395,14 @@ import UIKit
         for v in live.allObjects where v.isDescendant(of: root) {
             guard !v.isHidden, v.window != nil else { continue }
             // Device evidence for the next test: which of the two empty-bubble states this was.
+            // Debug builds only (release audit 2026-11-10): this runs per cell while a chat scrolls.
+            #if DEBUG
             if v.state == nil {
                 NSLog("[WPSlice] visible slice has no picture (state nil)")
             } else if !v.imageView.frame.intersects(v.bounds) {
                 NSLog("[WPSlice] slice was off its picture before placement, corrected")
             }
+            #endif
             v.reposition()
         }
     }

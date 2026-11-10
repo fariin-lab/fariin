@@ -286,7 +286,7 @@ final class ConnectionStatus {
             // A slow read on a line whose listeners are still answering is not a stall (check,
             // 2026-10-08: this reset the network every ~45s on a slow but working connection).
             guard Date().timeIntervalSince(self.lastServerAnswer) >= Self.stallAfter else { return }
-            print("[Recovery] heartbeat: no server answer in \(Int(Self.heartbeatTimeout))s")
+            debugLog("[Recovery] heartbeat: no server answer in \(Int(Self.heartbeatTimeout))s")
             DiagLog.add("heartbeat: no server answer in \(Int(Self.heartbeatTimeout))s")
             SessionRecovery.noteStall("heartbeat")
         }
@@ -325,7 +325,7 @@ final class ConnectionStatus {
         probeUid = uid
         probeGen += 1
         guard let uid else { return }
-        DiagLog.uploadIfPending(uid: uid)
+        if DiagUpload.allowed { DiagLog.uploadIfPending(uid: uid) }   // test builds only (release audit 2026-11-10)
         ConnectionDiag.start(uid: uid)   // the most active accounts only (owner 2026-10-24)
         let gen = probeGen
         probe = FirestoreHub.db.collection("users").document(uid)
@@ -345,7 +345,7 @@ final class ConnectionStatus {
         guard gen == probeGen else { return }   // a listener already replaced
         probe?.remove()
         probe = nil
-        print("[Recovery] connection probe listener ended:", error.map { "\($0)" } ?? "no error")
+        debugLog("[Recovery] connection probe listener ended:", error.map { "\($0)" } ?? "no error")
         SessionRecovery.noteRefusal(error, "connection probe")
     }
 

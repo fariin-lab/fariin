@@ -311,7 +311,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         presenter.dismiss(animated: false)
         let held = presenter.presentedViewController != nil
         DiagLog.add("POSTEXIT# levels=\(chain.count) heldAfterDismiss=\(held)")
-        if held { DiagLog.flagForUpload() }
+        if held { DiagUpload.flag() }
         StoryPostFlight.run(scene: scene, appWindow: window, source: source,
                             chrome: chrome, sheet: sheet, circle: circle, squircle: squircle)
         // And if it is still up when the flight lands, it is taken down again: an invisible camera

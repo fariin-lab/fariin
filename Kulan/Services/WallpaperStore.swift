@@ -652,7 +652,7 @@ enum ChatWallpapers {
                 // up so the reason can be read.
                 let ns = error as NSError
                 DiagLog.add("GROUPWP# publish failed cid=\(cid): \(ns.domain) \(ns.code) \(error.localizedDescription)")
-                DiagLog.flagForUpload()
+                DiagUpload.flag()
                 ToastNotice.show("Could not set the wallpaper: \(error.localizedDescription)")
             }
             self.groupPending[cid] = nil

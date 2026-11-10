@@ -333,10 +333,10 @@ final class ScreenShareDemoEngine: ObservableObject {
                                               done: @escaping (RTCVideoTrack?) -> Void) {
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         a.offer(for: constraints) { offer, error in
-            guard let offer else { NSLog("[ScreenShareDemo] offer failed: %@", String(describing: error)); return }
+            guard let offer else { screenShareLog("[ScreenShareDemo] offer failed: %@", String(describing: error)); return }
             a.setLocalDescription(offer) { _ in
                 b.setRemoteDescription(offer) { error in
-                    if let error { NSLog("[ScreenShareDemo] B remote failed: %@", String(describing: error)); return }
+                    if let error { screenShareLog("[ScreenShareDemo] B remote failed: %@", String(describing: error)); return }
                     delegateA.flush()   // A's candidates go to B, which can take them now
                     let received = b.transceivers.first { $0.mediaType == .video }?.receiver.track as? RTCVideoTrack
                     b.answer(for: constraints) { answer, _ in
@@ -428,7 +428,7 @@ final class DemoLoopbackDelegate: NSObject, RTCPeerConnectionDelegate {
 
     private func deliver(_ candidate: RTCIceCandidate) {
         other?.add(candidate) { err in
-            if let err { NSLog("[ScreenShareDemo] addIceCandidate failed: %@", String(describing: err)) }
+            if let err { screenShareLog("[ScreenShareDemo] addIceCandidate failed: %@", String(describing: err)) }
         }
     }
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}

@@ -128,7 +128,7 @@ enum SessionRecovery {
         let now = Date()
         guard let since = answeringSince else { answeringSince = now; return }
         guard now.timeIntervalSince(since) >= 60 else { return }
-        print("[Recovery] server kept answering for 60s, stall episode over")
+        debugLog("[Recovery] server kept answering for 60s, stall episode over")
         DiagLog.add("server kept answering 60s, episode over")
         stallDuringCall = false   // 1:1 audit #10: no reset owed after the call
         stallStep = 0
@@ -163,7 +163,7 @@ enum SessionRecovery {
         // 14 = unavailable, 4 = deadline exceeded: the server did not refuse, it did not answer.
         // That is a stall, and a fresh token alone would not unstick it.
         if ns.code == 14 || ns.code == 4 {
-            print("[Recovery] no answer (\(from)), code \(ns.code)")   // console only, never on screen
+            debugLog("[Recovery] no answer (\(from)), code \(ns.code)")   // console only, never on screen
             reportNoAnswer(error, from)
             noteStall(from)
             return
@@ -187,17 +187,17 @@ enum SessionRecovery {
         } else if !unrecovered {
             // Refused again within five minutes of a fresh token that passed: the token is not the
             // whole story. Keep trying at the steady pace and say so.
-            print("[Recovery] refusal survived a fresh token (\(from)), retrying every \(Int(steadyDelay))s")
+            debugLog("[Recovery] refusal survived a fresh token (\(from)), retrying every \(Int(steadyDelay))s")
             refusalReturns += 1
             if refusalReturns >= persistentAfter && !persistentPosted {
                 persistentPosted = true
-                print("[Recovery] persistent refusal")
+                debugLog("[Recovery] persistent refusal")
                 NotificationCenter.default.post(name: persistentRefusal, object: nil)
             }
         }
         // One line per new episode, not one per caller: many listeners fail at the same moment.
         if !unrecovered {
-            print("[Recovery] server refused (\(from)), code \(ns.code), attempt \(attempt + 1):", error)
+            debugLog("[Recovery] server refused (\(from)), code \(ns.code), attempt \(attempt + 1):", error)
         }
         unrecovered = true
         watchForeground()
@@ -294,7 +294,7 @@ enum SessionRecovery {
             DiagLog.snapshot(from)
             stallDuringCall = true
             stallRunning = true
-            print("[Recovery] stall (\(from)) in a call, token only, reset after the call")
+            debugLog("[Recovery] stall (\(from)) in a call, token only, reset after the call")
             Task { @MainActor in
                 await recoverStall(announce: false)
                 stallRunning = false
@@ -323,7 +323,7 @@ enum SessionRecovery {
         nextStallAt = now.addingTimeInterval(jittered(gap))
         stallRunning = true
         let announce = !stallEpisodeRecovered
-        print("[Recovery] stall (\(from)), recovery \(stallStep)")
+        debugLog("[Recovery] stall (\(from)), recovery \(stallStep)")
         DiagLog.add("  recovery \(stallStep) starts")
         Task { @MainActor in
             await recoverStall(announce: announce)
@@ -451,14 +451,14 @@ enum SessionRecovery {
             unrecovered = false
             lastRecoveredAt = Date()
             let passed = TwoStepGate.sessionPassed(token)
-            print("[Recovery] fresh token, \(passed ? "recovered" : "needs two-step")")
+            debugLog("[Recovery] fresh token, \(passed ? "recovered" : "needs two-step")")
             NotificationCenter.default.post(name: passed ? recovered : needsTwoStep, object: nil)
         case .failed(let error):
             if endSessionIfOver(error) { return }
-            print("[Recovery] token refresh failed, trying again later:", error)
+            debugLog("[Recovery] token refresh failed, trying again later:", error)
             schedule()   // offline, or a passing failure: again, later
         case .timedOut:
-            print("[Recovery] token refresh timed out, trying again later")
+            debugLog("[Recovery] token refresh timed out, trying again later")
             schedule()
         }
     }
@@ -474,7 +474,7 @@ enum SessionRecovery {
         case .token(let token):
             guard Auth.auth().currentUser?.uid == uid else { return }
             guard TwoStepGate.sessionPassed(token) else {
-                print("[Recovery] stall: fresh token needs two-step")
+                debugLog("[Recovery] stall: fresh token needs two-step")
                 unrecovered = false
                 lastRecoveredAt = Date()
                 NotificationCenter.default.post(name: needsTwoStep, object: nil)
@@ -484,15 +484,15 @@ enum SessionRecovery {
         case .failed(let error):
             if endSessionIfOver(error) { return }
             // Offline or a passing failure: the token in hand may still be good, so reset anyway.
-            print("[Recovery] stall: token refresh failed, resetting the connection anyway:", error)
+            debugLog("[Recovery] stall: token refresh failed, resetting the connection anyway:", error)
         case .timedOut:
-            print("[Recovery] stall: token refresh timed out, resetting the connection anyway")
+            debugLog("[Recovery] stall: token refresh timed out, resetting the connection anyway")
         }
         guard isActive, Auth.auth().currentUser?.uid == uid else { return }
         // ⛔ NEVER DURING A LIVE CALL — owner, 2026-10-08: switching Firestore's network off drops the
         // call's signalling listeners mid-call. The fresh token above is all a call gets.
         if inLiveCall {
-            print("[Recovery] stall: in a call, token refreshed, connection left alone")
+            debugLog("[Recovery] stall: in a call, token refreshed, connection left alone")
             DiagLog.add("  in a call: token only")
             return
         }
@@ -509,13 +509,13 @@ enum SessionRecovery {
         let db = FirestoreHub.db
         let gen = FirestoreHub.generation
         let offAnswered = await answered(within: switchTimeout) {
-            do { try await db.disableNetwork() } catch { print("[Recovery] disableNetwork failed:", error) }
+            do { try await db.disableNetwork() } catch { debugLog("[Recovery] disableNetwork failed:", error) }
         }
         let onAnswered = await answered(within: switchTimeout) {
-            do { try await db.enableNetwork() } catch { print("[Recovery] enableNetwork failed:", error) }
+            do { try await db.enableNetwork() } catch { debugLog("[Recovery] enableNetwork failed:", error) }
         }
         guard offAnswered, onAnswered else {
-            print("[Recovery] stall: the network switch did not answer in \(Int(switchTimeout))s, trying again later")
+            debugLog("[Recovery] stall: the network switch did not answer in \(Int(switchTimeout))s, trying again later")
             DiagLog.add("  network switch DID NOT ANSWER (off \(offAnswered), on \(onAnswered))")
             // Already swapped to a fresh client while this switch sat on the stuck one.
             guard FirestoreHub.generation == gen else { return }
@@ -530,12 +530,12 @@ enum SessionRecovery {
         // Firestore's listeners live through the switch, so only the first reset of an episode has
         // anything to re-attach; posting on every reset of a long outage would re-attach for nothing.
         guard announce else {
-            print("[Recovery] stall: connection reset again, same episode")
+            debugLog("[Recovery] stall: connection reset again, same episode")
             DiagLog.add("  connection reset again")
             return
         }
         stallEpisodeRecovered = true
-        print("[Recovery] stall: connection reset, posting recovered")
+        debugLog("[Recovery] stall: connection reset, posting recovered")
         DiagLog.add("  connection reset, recovered posted")
         NotificationCenter.default.post(name: recovered, object: nil)
     }
@@ -554,7 +554,7 @@ enum SessionRecovery {
         let over = [AuthErrorCode.userTokenExpired, .userDisabled, .userNotFound, .invalidUserToken]
             .map(\.rawValue).contains(code)
         guard over else { return false }
-        print("[Recovery] session is over:", error)
+        debugLog("[Recovery] session is over:", error)
         unrecovered = false
         attempt = 0
         // The code rides along so the notice can tell a suspension (account disabled from the admin

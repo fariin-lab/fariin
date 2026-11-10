@@ -809,7 +809,7 @@ struct AuthMethodView: View {
                     || (ns.domain == "com.google.GIDSignIn" && ns.code == -5)
                     || (ns.domain == NSCocoaErrorDomain && ns.code == NSUserCancelledError)
                 #if DEBUG
-                if !cancelled { print("[auth] sign-in failed: \(ns.domain) \(ns.code) \(error)") }
+                if !cancelled { debugLog("[auth] sign-in failed: \(ns.domain) \(ns.code) \(error)") }
                 #endif
                 await MainActor.run {
                     if let flow = error as? AuthFlowError {

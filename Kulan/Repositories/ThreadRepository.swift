@@ -558,14 +558,21 @@ final class ThreadRepository {
             }
         } else if let cached = ThreadMessageCache.shared.memoryMessages(for: cid), !cached.isEmpty {
             // ⚠️ TEMPORARY, with the list's [REOPEN] lines: 60 rows here means the cache was cut on backgrounding.
+            // Debug builds only (release audit 2026-11-10), as are the other [REOPEN] lines here.
+            #if DEBUG
             NSLog("[REOPEN] repo seed from MEMORY rows=%ld", cached.count)
+            #endif
             seed(cached)
         } else {
+            #if DEBUG
             NSLog("[REOPEN] repo seed MISS, reading the disk file")
+            #endif
             ThreadMessageCache.shared.loadAsync(cid) { [weak self] cold in
                 // The live snapshot got here first: it is the truth, the file is only a head start.
                 guard let self, let cold, !self.didInitialLoad, self.messages.isEmpty else { return }
+                #if DEBUG
                 NSLog("[REOPEN] repo seed from DISK rows=%ld", cold.count)
+                #endif
                 self.seed(cold)
             }
         }
@@ -1115,7 +1122,7 @@ final class ThreadRepository {
                     // Owner, 2026-10-08: this error used to be ignored, leaving the header, typing and
                     // read ticks dead for the rest of the visit. Drop the handle so `recovered` or the
                     // foreground re-attaches it, and let SessionRecovery know the server refused.
-                    print("[Recovery] chat conv listener ended: \(error!.localizedDescription)")
+                    debugLog("[Recovery] chat conv listener ended: \(error!.localizedDescription)")
                     self.convListener = nil
                     Task { @MainActor in SessionRecovery.noteRefusal(error, "chat-conv") }
                     return
@@ -1234,7 +1241,7 @@ final class ThreadRepository {
                     // map and record an empty one for calls. Keep what is known, drop the handle so
                     // it re-attaches, and report the refusal.
                     guard let snap else {
-                        print("[Recovery] chat user listener ended: \(error?.localizedDescription ?? "?")")
+                        debugLog("[Recovery] chat user listener ended: \(error?.localizedDescription ?? "?")")
                         self?.userListener = nil
                         Task { @MainActor in SessionRecovery.noteRefusal(error, "chat-user") }
                         return
@@ -1562,7 +1569,7 @@ final class ThreadRepository {
                 // not reported and not retried in a loop. Keep the last known value; the handle is
                 // dropped so a recovery or a reopen can try again.
                 guard let snap else {
-                    print("[Recovery] chat presence listener ended (privacy or network): \(error?.localizedDescription ?? "?")")
+                    debugLog("[Recovery] chat presence listener ended (privacy or network): \(error?.localizedDescription ?? "?")")
                     let ns = error as NSError?
                     if ns?.domain == FirestoreErrorDomain, ns?.code == 7 { self?.presenceRefused = true }
                     self?.presenceListener = nil
@@ -1762,7 +1769,9 @@ final class ThreadRepository {
             cacheLooksWhole = holdsSavedStart(docs)
             sawServerWindow = true
             serverWindowSettled = true   // published with the rebuild below, in the same update
+            #if DEBUG
             NSLog("[REOPEN] repo first SERVER window docs=%ld", docs.count)
+            #endif
             if docs.count < pageSize { canLoadOlder = false }   // short first SERVER page => no history
         }
         trimWindowIfNeeded()

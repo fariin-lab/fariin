@@ -884,7 +884,7 @@ extension CallKitManager: CXProviderDelegate {
     /// treated the action as failed.
     func provider(_ provider: CXProvider, timedOutPerforming action: CXAction) {
         if action is CXSetMutedCallAction { return }
-        print("[Call] CallKit timed out performing \(type(of: action))")
+        debugLog("[Call] CallKit timed out performing \(type(of: action))")
     }
 
     private func configureAudio() {

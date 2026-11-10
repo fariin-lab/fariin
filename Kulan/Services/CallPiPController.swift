@@ -454,7 +454,7 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
 
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     failedToStartPictureInPictureWithError error: Error) {
-        print("[PiP] failed to start: \(error.localizedDescription)")
+        debugLog("[PiP] failed to start: \(error.localizedDescription)")
         guard controller === self.controller else {   // r3 H5
             if controller === retiring { retiring = nil }
             return

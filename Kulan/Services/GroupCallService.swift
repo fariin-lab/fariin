@@ -133,7 +133,7 @@ final class GroupCallService: ObservableObject {
         if hadInvites, let uid = inviteUid { attachInvites(uid) }
         if hadRoles, case .group(let cid)? = activeRoom { attachGroupRoles(cid) }
         if hadAnswers, case .group(let cid)? = activeRoom { listenGroupAnswers(cid) }
-        print("[Recovery] group call: listeners attached again on the fresh Firestore client")
+        debugLog("[Recovery] group call: listeners attached again on the fresh Firestore client")
     }
     private var appObservers: [NSObjectProtocol] = []
 
@@ -3106,7 +3106,7 @@ final class GroupCallService: ObservableObject {
                 "total": String(Int(Date().timeIntervalSince(t0) * 1000)),
                 "srv": mediaURL.contains("rtc.fariin.com") ? "own" : "cloud",
             ])
-            DiagLog.flagForUpload()
+            DiagUpload.flag()
             // owner audit 2026-10-06 #4: hung up while this was connecting. Before this the room came
             // up anyway, mic on, with no screen and no card, and every other call was refused.
             guard gen == joinGeneration else { await abandonJoin(); return false }

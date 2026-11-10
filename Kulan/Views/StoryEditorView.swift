@@ -83,6 +83,8 @@ final class KeyboardWatcher: ObservableObject {
                 guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
                 // The emoji key's freeze leaves no clue behind (owner 2026-11-02): this shows whether the
                 // keyboard is flipping between two frames. Every event for the first 60, then each 200th.
+                // Debug builds only (release audit 2026-11-10).
+                #if DEBUG
                 self.frameEvents += 1
                 // Send the log at the next launch even if this session freezes and is killed.
                 if self.frameEvents == 1 { DiagLog.flagForUpload(after: 30) }
@@ -91,6 +93,7 @@ final class KeyboardWatcher: ObservableObject {
                     // API with no reason that fits a log line (release audit C1).
                     DiagLog.add("KBD# n=\(self.frameEvents) y=\(Int(f.origin.y)) h=\(Int(f.height))")
                 }
+                #endif
                 // ⚠️ ONLY A REAL CHANGE. `@Published` announces every assignment, equal or not, and each
                 // announcement rebuilds the whole editor from inside the keyboard's own layout pass.
                 let newHeight = max(0, UIScreen.main.bounds.height - f.origin.y)

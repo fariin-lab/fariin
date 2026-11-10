@@ -336,7 +336,7 @@ final class Crypto {
                     .setData(["publicKey": b64, "publicKeyHistory": FieldValue.arrayUnion(keep)], merge: true)
             }
         } catch {
-            print("crypto: publishing public key failed:", error)
+            debugLog("crypto: publishing public key failed:", error)
         }
     }
 
@@ -473,7 +473,7 @@ final class Crypto {
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
                 if once.claim() {
-                    print("[Recovery] key fetch timed out after \(Int(seconds))s")
+                    debugLog("[Recovery] key fetch timed out after \(Int(seconds))s")
                     await MainActor.run { SessionRecovery.noteStall("key") }
                     c.resume(returning: nil)
                 }
@@ -598,7 +598,7 @@ final class Crypto {
             }
             return snap.metadata.isFromCache ? .failed : .noKey
         } catch {
-            print("[Recovery] crypto: key fetch failed:", error)
+            debugLog("[Recovery] crypto: key fetch failed:", error)
             await MainActor.run { SessionRecovery.noteRefusal(error, "key") }
             // A refusal is an answer, not a bad line: asking again would hold a group's sends for ever.
             if (error as NSError).domain == FirestoreErrorDomain,

@@ -298,7 +298,7 @@ enum ChannelService {
         ChannelFollows.shared.noteLocal(cid, read: count)
         FirestoreHub.db.collection("users").document(uid).collection("channels").document(cid)
             .updateData(["read": count]) { err in
-                if let err { print("[channel] markRead refused:", err.localizedDescription) }
+                if let err { debugLog("[channel] markRead refused:", err.localizedDescription) }
             }
     }
 
@@ -310,7 +310,7 @@ enum ChannelService {
         FirestoreHub.db.collection("users").document(uid).collection("channels").document(cid)
             .updateData([key: on]) { err in
                 guard let err else { return }
-                print("[channel] \(key) refused:", err.localizedDescription)
+                debugLog("[channel] \(key) refused:", err.localizedDescription)
                 // Said and undone (owner 2026-10-29 audit U12): it used to flip back later in silence.
                 DispatchQueue.main.async {
                     ChannelFollows.shared.noteLocal(cid, pinned: key == "pinned" ? !on : nil,
@@ -328,7 +328,7 @@ enum ChannelService {
         ChannelFollows.shared.setReadBack(cid, to: back)
         FirestoreHub.db.collection("users").document(uid).collection("channels").document(cid)
             .updateData(["read": back]) { err in
-                if let err { print("[channel] markUnread refused:", err.localizedDescription) }
+                if let err { debugLog("[channel] markUnread refused:", err.localizedDescription) }
             }
     }
 
@@ -342,7 +342,7 @@ enum ChannelService {
         FirestoreHub.db.collection("users").document(uid).collection("channels").document(cid)
             .updateData(["muted": muted, "mutedUntil": end]) { err in
                 guard let err else { return }
-                print("[channel] setMuted refused:", err.localizedDescription)
+                debugLog("[channel] setMuted refused:", err.localizedDescription)
                 // Said and undone (owner 2026-10-29 audit U12): the bell had already said "Channel
                 // muted", then flipped back later with no word.
                 DispatchQueue.main.async {
@@ -440,7 +440,7 @@ final class ChannelFollows {
             .limit(to: Self.maxEntries)
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else {
-                    if let error { print("[channel] follow list error:", error.localizedDescription) }
+                    if let error { debugLog("[channel] follow list error:", error.localizedDescription) }
                     return
                 }
                 var next: [String: Entry] = [:]
@@ -797,7 +797,7 @@ final class ChannelViewQueue {
                 let part = Array(all[start..<min(all.count, start + 100)])
                 fn.call(["cid": cid, "mids": part]) { [weak self] _, error in
                     guard let error, let self else { return }
-                    print("[channel] views not sent:", error.localizedDescription)
+                    debugLog("[channel] views not sent:", error.localizedDescription)
                     // A refusal (not a follower, banned, channel closed) stays refused: those posts
                     // are not sent again this session (owner 2026-10-29 audit F7: a visitor's views
                     // were refused and re-sent every 1.5 s while they scrolled). Only a failure
@@ -843,7 +843,7 @@ final class ChannelPosting {
             // Merge (audit B5-08): the same doc holds the post-reply alert switch; an overwrite wiped it.
             .setData(["silent": on], merge: true) { [weak self] err in
                 guard let err else { return }
-                print("[channel] silent not saved:", err.localizedDescription)
+                debugLog("[channel] silent not saved:", err.localizedDescription)
                 DispatchQueue.main.async {
                     self?.silent[cid] = !on
                     ToastNotice.show("Couldn't change that. Try again.")

@@ -446,7 +446,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         DiagLog.add("VOICETAP# not local at tap ok=\(ok) waited=\(Int(Date().timeIntervalSince(waitedFrom) * 1000))ms "
                     + "len=\(Int(message.duration ?? 0))s "
                     + "wifi=\(NetworkState.shared.isWifi)")
-        DiagLog.flagForUpload(after: 5)
+        DiagUpload.flag(after: 5)
         guard ok, let local = AudioCache.url(for: message.id) else {
             failedId = message.id
             clearNowPlaying(); return

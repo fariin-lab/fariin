@@ -4,6 +4,7 @@ import Network
 import OSLog
 import os
 import FirebaseFirestore
+import CryptoKit
 
 /// ⛔ FINDING THE TRIGGER OF "DEAD UNTIL RESTART" (owner 2026-10-24, 10th report). The black box
 /// (`DiagLog`) shows WHERE it sticks (Firebase's connection teardown, SDK #12522) but not WHAT starts
@@ -20,10 +21,16 @@ import FirebaseFirestore
 @MainActor
 enum ConnectionDiag {
     /// @v (most episodes, iOS 27) and @kream (the owner's own; stuck once in a call on iOS 26.6).
+    /// Kept as SHA-256 of the uid (lowercase hex), so the app binary carries no real user ids
+    /// (release audit 2026-11-10). To add an account, hash its uid the same way.
     private static let watched: Set<String> = [
-        "SVf0zxDVZzO8oLbGvM150QWgIWd2",   // @v
-        "a74hUgOoNYOmxMDoNCWI4nO81xH3",   // @kream
+        "413d3aee1a271d76b0059e70c5d34f96aff7221a5202884a335c7e6f8d01133b",   // @v
+        "145df1ef52aa069ea7add19488709a73d13fe614f1e7db6e78df8fcf866561a7",   // @kream
     ]
+
+    private static func hashed(_ uid: String) -> String {
+        SHA256.hash(data: Data(uid.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 
     private static var startedFor: String?
     private static var monitor: NWPathMonitor?
@@ -31,11 +38,13 @@ enum ConnectionDiag {
     private static var lastPath = ""
     private static let started = Date()
 
-    static func isWatched(_ uid: String?) -> Bool { uid.map { watched.contains($0) } ?? false }
+    static func isWatched(_ uid: String?) -> Bool { uid.map { watched.contains(hashed($0)) } ?? false }
 
     /// Called whenever a signed-in session is (re)attached. Starts once per account per process.
+    /// Test builds only (`DiagUpload.allowed`, debug or TestFlight): an App Store install never turns
+    /// on Firebase's detailed log, and its black box is never sent anyway (release audit 2026-11-10).
     static func start(uid: String) {
-        guard watched.contains(uid), startedFor != uid else { return }
+        guard DiagUpload.allowed, startedFor != uid, watched.contains(hashed(uid)) else { return }
         startedFor = uid
         Firestore.enableLogging(true)
         DiagLog.add("CONNDIAG# on: detailed Firebase log, network and power changes")
