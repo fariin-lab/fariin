@@ -986,7 +986,7 @@ struct Message: Identifiable, Equatable, Codable {
                 self.forwardSource = ForwardSource(map: d)
             }
         }
-        if let q =(data["quote"] as? [String: Any])?["qid"] as? String, QuoteStore.isQid(q) { self.quoteId = q }
+        if let q = (data["quote"] as? [String: Any])?["qid"] as? String, QuoteStore.isQid(q) { self.quoteId = q }
         if let bs = data["bs"] as? String, !bs.isEmpty, bs.count <= 32 { self.bubbleStyle = bs }
         self.bubbleDecor = data["bsd"] as? Bool ?? false
         // Bold spans, opened like the text when sealed; checked against the text's length.
