@@ -807,8 +807,9 @@ enum MessageRowModelBuilder {
         // (owner 2026-11-08). The server checks the quote really was sent in this message.
         QuoteStore.shared.noteHost(qid, cid: cid, mid: mid)
         guard let c = QuoteStore.shared.card(qid) else {
-            return BubbleBody.LinkPreview(shape: .article, url: "fariin-quote://\(qid)", title: "Channel post",
-                                          desc: "Loading…", host: "Quoted post", imageUrl: nil, imageEnc: nil)
+            // Drawn as skeleton bars, never as these words (owner 2026-11-10, `QuoteSkeleton`).
+            return BubbleBody.LinkPreview(shape: .article, url: "fariin-quote://\(qid)", title: QuoteSkeleton.title,
+                                          desc: QuoteSkeleton.desc, host: "Quoted post", imageUrl: nil, imageEnc: nil)
         }
         let image = c.state == .ok && !c.image.isEmpty ? c.image : nil
         // An album post's pictures (owner 2026-11-08: two photos quoted showed one). Only with a

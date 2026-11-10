@@ -3892,12 +3892,25 @@ enum ChatService {
             update["lastPlainTag"] = Conversation.plainTag(line)
         }
         // Carry the new newest message's thumbnail, or drop the stale one.
+        // ⛔ AN ALBUM KEEPS ITS PICTURES (owner 2026-11-10: "2 Photos" with no picture in the list).
+        // Its tiles live in `album`, not on the message itself, so this rebuild (a delete, a
+        // disappearing message running out) dropped the thumbnail and the stack. Same fields the
+        // album send writes: the first tile, and up to 3 for the overlapped stack.
+        let tiles = (d["album"] as? [[String: Any]] ?? []).filter {
+            ($0["imageUrl"] as? String)?.isEmpty == false && $0["enc"] is [String: Any]
+        }
         if let u = d["imageUrl"] as? String, let e = d["enc"] as? [String: Any],
            (d["viewOnce"] as? Bool) != true {
             update["lastImageUrl"] = u; update["lastImageEnc"] = e
+            update["lastImages"] = FieldValue.delete()
+        } else if !deletedNewest, let first = tiles.first(where: { ($0["kind"] as? String) == "image" }) ?? tiles.first {
+            update["lastImageUrl"] = first["imageUrl"]; update["lastImageEnc"] = first["enc"]
+            let rest = tiles.filter { ($0["imageUrl"] as? String) != (first["imageUrl"] as? String) }
+            update["lastImages"] = ([first] + rest).prefix(3).map { ["imageUrl": $0["imageUrl"] as Any, "enc": $0["enc"] as Any] }
         } else {
             update["lastImageUrl"] = FieldValue.delete()
             update["lastImageEnc"] = FieldValue.delete()
+            update["lastImages"] = FieldValue.delete()
         }
         return update
     }

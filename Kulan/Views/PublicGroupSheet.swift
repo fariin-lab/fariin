@@ -108,7 +108,9 @@ struct PublicGroupSheet: View {
             } else {
                 // owner 2026-10-23 ("two different pages"): while the group loads, the chat's own
                 // ground, not the info page, so the chat is the only page anybody sees.
-                Color(uiColor: .systemBackground).ignoresSafeArea()
+                // ⛔ NOT AN EMPTY WHITE PAGE (owner 2026-11-10): skeleton posts where the posts will be,
+                // and the Follow bar's shape at the foot, until the chat itself lands.
+                ChatLoadingSkeleton()
             }
         }
         .task { appearedAt = Date(); await load() }
@@ -392,6 +394,53 @@ struct PublicGroupSheet: View {
             }
             joining = false
         }
+    }
+}
+
+/// A group or channel opened from outside, before the server answers (owner 2026-11-10: "don't show
+/// me this white empty page, use skeleton posts"). Post-shaped grey bubbles down the left, newest at
+/// the foot like the chat, and a capsule where Follow / Join will sit.
+struct ChatLoadingSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Spacer(minLength: 0)
+            post(width: 0.55, lines: [0.7, 0.45], picture: false)
+            post(width: 0.78, lines: [0.9, 0.8, 0.5], picture: true)
+            post(width: 0.62, lines: [0.85, 0.4], picture: false)
+            post(width: 0.7, lines: [0.9, 0.75, 0.3], picture: false)
+            SkeletonBlock(width: nil, height: 50, radius: 25)
+                .padding(.horizontal, 24)
+                .padding(.top, 14)
+                .padding(.bottom, 8)
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        .accessibilityHidden(true)
+    }
+
+    private func post(width: CGFloat, lines: [CGFloat], picture: Bool) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width * width
+            VStack(alignment: .leading, spacing: 8) {
+                if picture {
+                    SkeletonBlock(width: w - 24, height: 150, radius: 12)
+                }
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, f in
+                    SkeletonBlock(width: (w - 24) * f, height: 11)
+                }
+            }
+            .padding(12)
+            .frame(width: w, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color(.secondarySystemFill).opacity(0.5)))
+        }
+        .frame(height: Self.height(lines: lines.count, picture: picture, width: width))
+    }
+
+    /// The post's height: its lines, and a 150pt picture when it has one.
+    private static func height(lines: Int, picture: Bool, width: CGFloat) -> CGFloat {
+        let text = CGFloat(lines) * 11 + CGFloat(max(0, lines - 1)) * 8 + 24
+        return picture ? text + 158 : text
     }
 }
 

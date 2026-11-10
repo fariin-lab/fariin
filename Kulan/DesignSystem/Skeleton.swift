@@ -246,7 +246,7 @@ struct DiscoverRowSkeleton: View {
     var nameWidth: CGFloat = 130
     var body: some View {
         HStack(spacing: 12) {
-            SkeletonBlock(width: 48, height: 48, radius: 14)
+            SkeletonCircle(size: 52)
             VStack(alignment: .leading, spacing: 8) {
                 SkeletonBlock(width: nameWidth, height: 13)
                 SkeletonBlock(width: 80, height: 10)

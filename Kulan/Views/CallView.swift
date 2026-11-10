@@ -2039,13 +2039,15 @@ struct FloatingCallWindow: View {
             // two pictures: not two stacked halves on their colour, but black, their face big in the
             // middle and mine in the same bottom-right tile the video card uses (size, corner, hairline
             // and inset copied from `videoWindow`). No talking ring (see `voiceFace`).
+            // ⛔ PROFILE COLOUR, NOT BLACK (owner 2026-11-10: "use Profile Color, now always black"):
+            // their colour behind their face, mine behind my tile, the full call screen's rule.
             let tw = w * 0.34
             ZStack(alignment: .bottomTrailing) {
-                Color.black
+                voiceCardColor
                 voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 56)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 ZStack {
-                    Color.black
+                    Self.paletteColor(call.myPhotoUrl)
                     voiceFace(name: call.myName, photoUrl: call.myPhotoUrl, size: 22)
                 }
                 // Owner 2026-10-28: a camera's 9:16 was too tall for just my photo in a voice call;
@@ -2064,8 +2066,11 @@ struct FloatingCallWindow: View {
     /// The colour the full screen is showing for this person (`CallView.shownPalette`), read from the
     /// same caches that screen has already filled by the time anyone can minimize it: the palette's
     /// own, then the avatar loader's picture. Memory lookups only, safe in a body.
-    private var voiceCardColor: Color {
-        guard let url = call.otherPhotoUrl, !url.isEmpty else { return .black }
+    private var voiceCardColor: Color { Self.paletteColor(call.otherPhotoUrl) }
+
+    /// One person's page colour from the caches, black when there is no photo or nothing cached yet.
+    private static func paletteColor(_ url: String?) -> Color {
+        guard let url, !url.isEmpty else { return .black }
         if let warm = ProfilePalette.warm(url: url) { return Color(warm.page) }
         if let shown = ProfilePhotoLoader.shared.cachedAvatar(url),
            let p = ProfilePalette.now(shown, url: url) { return Color(p.page) }

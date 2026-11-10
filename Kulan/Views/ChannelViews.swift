@@ -192,6 +192,14 @@ struct DiscoverChannelsView: View {
     var opensInPlace = false
     @State private var follows = ChannelFollows.shared
 
+    @State private var query = ""
+    /// The loaded channels the search field keeps (name or @handle), in the server's order.
+    private var shown: [ChannelService.Discovered] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return rows }
+        return rows.filter { $0.title.localizedCaseInsensitiveContains(q) || $0.handle.localizedCaseInsensitiveContains(q) }
+    }
+
     /// The ids the follow list confirms, so `justFollowed` can let go of them.
     private var confirmedIds: Set<String> {
         Set(justFollowed.filter { follows.follows($0) })
@@ -217,17 +225,18 @@ struct DiscoverChannelsView: View {
                 } else if rows.isEmpty {
                     Text("No public channels yet. Only public channels show here: to list yours, open it, tap its name, then Channel Settings > Channel Type > Public.")
                         .foregroundStyle(.secondary).listRowBackground(Color.clear)
+                } else if shown.isEmpty {
+                    Text("No channels match \u{201C}\(query.trimmingCharacters(in: .whitespaces))\u{201D}.")
+                        .foregroundStyle(.secondary).listRowSeparator(.hidden)
                 } else {
-                    Section {
-                        ForEach(rows) { row($0) }
-                    } footer: {
-                        Text("Public channels anyone can follow. Only their admins post. Active channels from your country come first.")
-                    }
+                    ForEach(shown) { row($0) }
                 }
             }
-            .listStyle(.insetGrouped)
-            // The list close under the title (owner 2026-10-31: "the header has more empty space").
-            .contentMargins(.top, 8, for: .scrollContent)
+            // ⛔ DESIGN A (owner 2026-11-10, picked from 4 mockups): a plain list, round photos,
+            // name + tick + follower count, a solid Follow pill that turns grey "Following".
+            // No card, no descriptions, a search field under the title.
+            .listStyle(.plain)
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
             .navigationTitle("Find Channels")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -267,7 +276,7 @@ struct DiscoverChannelsView: View {
                 }
             } label: {
                 HStack(spacing: 12) {
-                    AvatarView(name: c.title, photoUrl: c.photoUrl, size: 48).avatarSquircle(true)
+                    AvatarView(name: c.title, photoUrl: c.photoUrl, size: 52)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
                             Text(c.title).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
@@ -287,9 +296,6 @@ struct DiscoverChannelsView: View {
                         Text(GroupDirectory.followersLine(ChannelCountBias.visitorCount(
                             c.cid, memberCount: c.followerCount, followerCount: max(0, c.followerCount - c.admins))))
                             .font(.subheadline).foregroundStyle(.secondary)
-                        if !c.description.isEmpty {
-                            Text(c.description).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                        }
                     }
                     Spacer(minLength: 0)
                 }
@@ -298,7 +304,9 @@ struct DiscoverChannelsView: View {
             .buttonStyle(.plain)
             followButton(c)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
+        // The line between rows starts under the name, not under the photo (design A).
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 64 }
     }
 
     /// Followed, or one of its admins (owner 2026-10-31: tapping his own Fariin News here went to the
@@ -339,9 +347,11 @@ struct DiscoverChannelsView: View {
             Text(mine ? "Following" : "Follow")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(mine ? Color.secondary : Color.onFariinAction)
-                .padding(.horizontal, 14).frame(height: 32)
-                .liquidGlass(Capsule(), interactive: !mine, tint: mine ? nil : Color.fariinAction)
+                .padding(.horizontal, 16).frame(height: 34)
+                // Design A: solid action colour to follow, plain grey once following.
+                .background(Capsule().fill(mine ? Color(.secondarySystemFill) : Color.fariinAction))
                 .contentShape(Capsule())
+                .animation(.easeOut(duration: 0.15), value: mine)
         }
         .buttonStyle(.plain)
         .disabled(mine)
@@ -1411,7 +1421,9 @@ struct ChannelAdminPicker: View {
     private var shown: [ChannelFollowersView.Follower] {
         let q = query.trimmingCharacters(in: .whitespaces)
         let list = rows.filter { !exclude.contains($0.uid) }
-        return q.isEmpty ? list : list.filter { $0.name.localizedCaseInsensitiveContains(q) }
+        return q.isEmpty ? list : list.filter {
+            $0.name.localizedCaseInsensitiveContains(q) || $0.username.localizedCaseInsensitiveContains(q)
+        }
     }
 
     var body: some View {
@@ -1436,7 +1448,13 @@ struct ChannelAdminPicker: View {
                     Button { asking = f } label: {
                         HStack(spacing: 12) {
                             AvatarView(name: f.name, photoUrl: f.photoUrl, size: 40)
-                            Text(f.name).foregroundStyle(.primary).lineLimit(1)
+                            // The @username under the name (owner 2026-11-10), as on the Followers page.
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(f.name).foregroundStyle(.primary).lineLimit(1)
+                                if !f.username.isEmpty {
+                                    Text("@\(f.username)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
                             Spacer(minLength: 0)
                         }
                         .contentShape(Rectangle())
@@ -1515,8 +1533,13 @@ final class SimilarChannels {
     /// One fetch per channel per run.
     @ObservationIgnored private var cache: [String: [ChannelService.Discovered]] = [:]
 
+    /// ⛔ HIDDEN EVERYWHERE (owner 2026-11-10: "completely hide this feature because it is not
+    /// finished"). Off = no card after following, no section on the channel page, no server call.
+    /// Turn back on only on his word.
+    static let enabled = false
+
     static func showsAfterFollow(_ cid: String) -> Bool {
-        shared.followed.contains(cid) && !shared.closed.contains(cid)
+        enabled && shared.followed.contains(cid) && !shared.closed.contains(cid)
     }
 
     static func close(_ cid: String) {
@@ -1525,6 +1548,7 @@ final class SimilarChannels {
     }
 
     static func load(_ cid: String) async -> [ChannelService.Discovered] {
+        guard enabled else { return [] }   // the channel page's section hides itself on an empty list
         if let c = shared.cache[cid] { return c }
         let list = await ChannelService.similar(cid: cid)
         shared.cache[cid] = list
