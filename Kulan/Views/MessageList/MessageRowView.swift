@@ -833,7 +833,7 @@ final class MessageRowView: UIView {
     /// line), for the long-press lift: a snapshot of the bubble alone leaves a gap where the name
     /// was (owner 2026-10-23).
     var liftOverlays: [UIView] {
-        [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon]
+        [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon, forwardFromView]
             .compactMap { $0 }.filter { !$0.isHidden && $0.alpha > 0.01 }
     }
     /// Diagnostics only (ROWGEO#, owner 2026-10-23 overlap report): every drawn part that sits
@@ -884,6 +884,8 @@ final class MessageRowView: UIView {
     private var roleChipView: UIView?          // owner 2026-10-18 Role chip after the sender's name
     private var forwardedLabel: UILabel?
     private var forwardedIcon: UIImageView?
+    /// The two-line "Forwarded from <group or channel>" block (owner 2026-11-10).
+    private var forwardFromView: ForwardFromView?
     private var tombstoneIcon: UIImageView?
     private var failBadge: UIButton?
     /// A channel post's share button (`applyShareButton`) and where it is.
@@ -1061,6 +1063,7 @@ final class MessageRowView: UIView {
         roleChipView?.isHidden = true
         forwardedLabel?.isHidden = true
         forwardedIcon?.isHidden = true
+        forwardFromView?.isHidden = true
         failBadge?.isHidden = true
         storyReplyView?.isHidden = true
     }
@@ -1729,6 +1732,8 @@ final class MessageRowView: UIView {
     /// The OG card — tapping it opens the link (or the person, on a profile card's button).
     /// The link card's press tint (`LinkPreviewBubbleView.setPressed`), for the cell's touches.
     func setLinkCardPressed(_ on: Bool) { linkView?.setPressed(on) }
+    /// The "Forwarded from" block's press tint, for the cell's touches (owner 2026-11-10).
+    func setForwardSourcePressed(_ on: Bool) { forwardFromView?.setPressed(on) }
 
     func hitsLinkCard(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body, let l = b.linkPlan else { return false }
@@ -1902,6 +1907,20 @@ final class MessageRowView: UIView {
     }
 
     private func applyForwarded(_ b: BubblePlan, model m: MessageRowModel) {
+        // From a group or channel: the two-line block at the bubble's head (owner 2026-11-10).
+        if let fp = b.forwardFromPlan, let rect = b.forwarded, case .bubble(let row) = m.content {
+            forwardedLabel?.isHidden = true; forwardedIcon?.isHidden = true
+            let v = forwardFromView ?? {
+                let v = ForwardFromView(); addSubview(v); forwardFromView = v; return v
+            }()
+            v.isHidden = false
+            v.frame = rect
+            v.configure(fp, title: row.forwardFrom ?? "",
+                        photoUrl: row.forwardPhoto ?? ForwardFromView.heldPhoto(cid: row.forwardCid),
+                        isChannel: row.forwardIsChannel)
+            return
+        }
+        forwardFromView?.isHidden = true
         guard let rect = b.forwarded, let iconRect = b.forwardedIcon else {
             forwardedLabel?.isHidden = true; forwardedIcon?.isHidden = true; return
         }
@@ -2668,6 +2687,9 @@ final class MessageRowView: UIView {
     func hitsForwardSource(_ point: CGPoint) -> Bool {
         guard let m = model, case .bubble(let row) = m.content, row.forwardFrom != nil,
               let p = plan, case .bubble(let b) = p.body, let text = b.forwarded else { return false }
+        // The two-line block is already a full finger tall; it reaches only as far as its pressed
+        // tint does, so it never takes a tap meant for the words or the picture under it.
+        if b.forwardFromPlan != nil { return text.insetBy(dx: -4, dy: -2).contains(point) }
         let line = b.forwardedIcon.map { $0.union(text) } ?? text
         return line.insetBy(dx: -4, dy: -6).contains(point)
     }
@@ -2765,7 +2787,8 @@ final class MessageRowView: UIView {
         callView?.transform = .identity
         // 2026-10-23: the name, mark, role tag and forwarded line now ride a reply swipe with the
         // bubble, so they are put back too (a recycled row must not start shifted).
-        [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon, avatarView].forEach { $0?.transform = .identity }
+        [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon, forwardFromView, avatarView].forEach { $0?.transform = .identity }
+        forwardFromView?.setPressed(false)
         // Owner audit 2026-10-06 chat #78: the reset above covers the box, not its children. A
         // reaction's animations on the fill, chips, body and the chrome above the box kept running
         // for up to 0.4s on the next row drawn here, morphing it from the old row's geometry.
@@ -2819,5 +2842,81 @@ private extension BubbleText {
         guard case .bubble(let row) = m.content else { return NSAttributedString() }
         return meta(row.meta, isMe: row.isMe, color: b.metaColor,
                     solidTicks: b.mediaPlan?.metaCapsule != nil || b.albumPlan?.metaCapsule != nil)
+    }
+}
+
+/// "Forwarded from <group or channel>" at the head of a bubble (owner 2026-11-10, matching the
+/// Android block he approved): "Forwarded from" small on line 1, then the source's photo, its name
+/// in the accent colour and a chevron, so it reads as a link. Drawn on the row like the sender's
+/// name; the cell's tap recogniser answers for it (`hitsForwardSource`), so it takes no touches.
+final class ForwardFromView: UIView {
+    private let press = UIView()
+    private let line1 = UILabel()
+    private let photo = RowAvatarView()
+    private let title = UILabel()
+    private let chevron = UIImageView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        // The pressed tint, 8pt corners, a little past the block so the words do not touch its edge.
+        press.layer.cornerRadius = 8
+        press.layer.cornerCurve = .continuous
+        press.alpha = 0
+        addSubview(press)
+        line1.text = "Forwarded from"
+        line1.lineBreakMode = .byTruncatingTail
+        title.lineBreakMode = .byTruncatingTail
+        chevron.contentMode = .center
+        chevron.image = UIImage(systemName: "chevron.right",
+                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 14))?
+            .withRenderingMode(.alwaysTemplate)
+        [line1, photo, title, chevron].forEach { addSubview($0) }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Called with the frame already set. A recycled cell hands the photo view a new url (or nil)
+    /// every time, and `RowAvatarView` drops a load that finishes for the url it showed before.
+    func configure(_ p: ForwardFromPlan, title t: String, photoUrl: String?, isChannel: Bool) {
+        line1.font = BubbleMetrics.fwdFromFont
+        line1.textColor = p.line1Color
+        line1.frame = p.line1
+        title.font = BubbleMetrics.fwdTitleFont
+        title.textColor = p.ink
+        title.text = t
+        title.frame = p.title
+        chevron.tintColor = p.ink.withAlphaComponent(0.7)
+        chevron.frame = p.chevron
+        // A channel's photo is the app's squircle, a group's a circle; with no photo, the kind's
+        // own glyph, as on the invite and quote cards.
+        photo.squircle = isChannel
+        photo.placeholderSymbol = isChannel ? "megaphone.fill" : "person.2.fill"
+        photo.frame = p.photo
+        photo.configure(name: t, photoUrl: photoUrl)
+        press.backgroundColor = p.ink.withAlphaComponent(0.12)
+        press.frame = bounds.insetBy(dx: -4, dy: -2)
+    }
+
+    /// A photo the app already holds for the source, for a message forwarded before the source had
+    /// one: my chats, the channels I follow, then the public previews seen this session. Memory
+    /// only, never the network. Read here on the row rather than in the model builder, which runs
+    /// inside the chat's SwiftUI body, so the chat does not start redrawing on every chat-list change.
+    static func heldPhoto(cid: String?) -> String? {
+        guard let cid, !cid.isEmpty else { return nil }
+        let held = ConversationsRepository.shared.conversations.first { $0.id == cid }?.avatarUrl
+            ?? ChannelFollows.shared.conversations.first { $0.id == cid }?.avatarUrl
+            ?? GroupDirectory.cachedPreview(name: nil, cid: cid)?.photoUrl
+        return (held?.isEmpty ?? true) ? nil : held
+    }
+
+    func setPressed(_ on: Bool) {
+        if on {
+            press.layer.removeAllAnimations()
+            press.alpha = 1
+        } else {
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.press.alpha = 0
+            }
+        }
     }
 }

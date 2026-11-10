@@ -13,6 +13,17 @@ import UIKit
 //
 // Everything is in ROW coordinates unless a comment says otherwise.
 
+/// The "Forwarded from" block's parts (owner 2026-11-10), in the block's own coordinates so they
+/// need no shifting when the row moves: the block's frame is `BubblePlan.forwarded`.
+struct ForwardFromPlan {
+    var line1: CGRect       // "Forwarded from"
+    var photo: CGRect       // the source's photo, 20pt
+    var title: CGRect       // its name, one line, cut short at the end
+    var chevron: CGRect
+    var line1Color: UIColor
+    var ink: UIColor        // the title, and the chevron at 70%
+}
+
 struct QuoteInnerPlan {
     var accent: CGRect
     var thumb: CGRect?
@@ -260,6 +271,10 @@ struct BubblePlan {
     var roleTint: UIColor? = nil
     var forwarded: CGRect?
     var forwardedIcon: CGRect?
+    /// Set when `forwarded` is the two-line "Forwarded from <group or channel>" block inside the
+    /// bubble (owner 2026-11-10) rather than the one-line tag; `forwardedIcon` is nil then.
+    /// Defaulted so the plans built without decorations keep their memberwise inits.
+    var forwardFromPlan: ForwardFromPlan? = nil
     var reactions: [CGRect]             // one per chip, row coordinates
     var reactionAttrs: [NSAttributedString]
     var reactionMine: [Bool]
@@ -588,7 +603,12 @@ enum MessageRowLayout {
 
         var forwardedSize: CGSize = .zero
         var forwardedIconW: CGFloat = 0
-        if b.forwarded {
+        if b.forwarded, fromInBubble(b) {
+            // owner 2026-11-10: from a group or channel it is a two-line block inside the bubble's
+            // head, measured here exactly as it is drawn: line 1 + 3 + the taller of the 20pt photo
+            // and the title. Never wider than the content column; the title is the part cut short.
+            forwardedSize = fwdFromSize(b, maxWidth: maxContent)
+        } else if b.forwarded {
             // The glyph's real width, not a guess: an SF Symbol at 9pt is not a square, and a
             // hard-coded box would leave the word sitting at the wrong distance from it.
             let icon = UIImage(systemName: "arrowshape.turn.up.right.fill",
@@ -1018,7 +1038,7 @@ enum MessageRowLayout {
             let minH = ceil(pic.minBubble.height)
             let shiftY: CGFloat = bubbleH < minH && quoteRect == nil ? floor((minH - bubbleH) / 2) : 0
             // Never more than the insets the words were measured in.
-            let side = pic.sideRoom(top: (nameInBubble(b) ? BubbleMetrics.nameTop : vPad) + shiftY,
+            let side = pic.sideRoom(top: (headerInBubble(b) ? BubbleMetrics.nameTop : vPad) + shiftY,
                                     bottom: max(bubbleH, minH) - innerY - shiftY, height: max(bubbleH, minH))
             let sideL = min(side.left, hPad), sideR = min(side.right, hPadR)
             // ⛔ NO MIRRORED ROOM (owner 2026-11-07, his build: short words 40-50pt in from the left on
@@ -1289,7 +1309,7 @@ enum MessageRowLayout {
                 let pic = plan.linkPlan == nil ? plan.picture.flatMap { PictureStyles.find($0.id) } : nil
                 let picCap = pic.map { maxBubble - $0.art.left - $0.art.right }
                 // The room beside the words' rows and the pill row's, in a bubble `bubbleH` tall.
-                let wordsTop = nameInBubble(b) && senderNameAttr != nil ? BubbleMetrics.nameTop
+                let wordsTop = (nameInBubble(b) && senderNameAttr != nil) || fromInBubble(b) ? BubbleMetrics.nameTop
                     : min(plan.text.minY, plan.quote?.minY ?? plan.text.minY)
                 func picRoomAt(_ bubbleH: CGFloat) -> (left: CGFloat, right: CGFloat)? {
                     guard let p = pic else { return nil }
@@ -1618,30 +1638,31 @@ enum MessageRowLayout {
                                                  columnW: columnW, top: tagY, maxWidth: columnW)
             tagY += storyReplyCardSize(sr, maxWidth: columnW).height + BubbleMetrics.senderNameGap
         }
+        // ⛔ INSIDE THE BUBBLE, TOP-LEFT, ABOVE THE CONTENT — owner 2026-10-18. Every kind left
+        // `nameHeaderBottom` of room at its top. The inset is the kind's own content inset, so
+        // the name lines up with the words (or the quote) under it. A fixed-width bubble (photo,
+        // poll, voice) does not grow for the name; it truncates to fit instead.
+        // A poll's own side inset (owner 2026-10-21 redesign: 16 or 14), so the name sits over the question.
+        // A picture style: over its words, clear of the corner art (owner 2026-11-07).
+        // The "Forwarded from" block (owner 2026-11-10) takes the same inset.
+        let headInset: CGFloat = plan.pollPlan?.inset ?? (plan.contactPlan != nil ? 12
+            : (plan.picture != nil ? plan.text.minX : BubbleMetrics.hPad))
         if senderNameAttr != nil, nameInBubble(b) {
-            // ⛔ INSIDE THE BUBBLE, TOP-LEFT, ABOVE THE CONTENT — owner 2026-10-18. Every kind left
-            // `nameHeaderBottom` of room at its top. The inset is the kind's own content inset, so
-            // the name lines up with the words (or the quote) under it. A fixed-width bubble (photo,
-            // poll, voice) does not grow for the name; it truncates to fit instead.
-            // A poll's own side inset (owner 2026-10-21 redesign: 16 or 14), so the name sits over the question.
-            // A picture style: over its words, clear of the corner art (owner 2026-11-07).
-            let inset: CGFloat = plan.pollPlan?.inset ?? (plan.contactPlan != nil ? 12
-                : (plan.picture != nil ? plan.text.minX : BubbleMetrics.hPad))
             let tick: CGFloat = b.sender?.verified == true ? 4 + BubbleMetrics.verifiedSide : 0
-            let nameW = max(0, min(senderNameSize.width, bubbleRect.width - inset * 2 - tick))
+            let nameW = max(0, min(senderNameSize.width, bubbleRect.width - headInset * 2 - tick))
             let nameY = bubbleRect.minY + BubbleMetrics.nameTop
-            plan.senderName = CGRect(x: bubbleRect.minX + inset, y: nameY,
+            plan.senderName = CGRect(x: bubbleRect.minX + headInset, y: nameY,
                                      width: nameW, height: senderNameSize.height)
             if b.sender?.verified == true {
-                plan.verifiedMark = CGRect(x: bubbleRect.minX + inset + nameW + 4,
+                plan.verifiedMark = CGRect(x: bubbleRect.minX + headInset + nameW + 4,
                                            y: nameY + (senderNameSize.height - BubbleMetrics.verifiedSide) / 2, width: BubbleMetrics.verifiedSide, height: BubbleMetrics.verifiedSide)
             }
             // owner 2026-10-18 ROLE: the chip follows the name and the tick on the same line, in the
             // name's colour. It is the part that gives way: the name keeps its width, the role
             // truncates into what is left, and goes altogether when that is too little to read.
             if let chip = roleChip(b) {
-                let x = bubbleRect.minX + inset + nameW + tick + BubbleMetrics.roleGap
-                let room = bubbleRect.maxX - inset - x
+                let x = bubbleRect.minX + headInset + nameW + tick + BubbleMetrics.roleGap
+                let room = bubbleRect.maxX - headInset - x
                 let w = min(chip.size.width, room)
                 if w >= BubbleMetrics.roleMinWidth {
                     plan.roleChip = CGRect(x: x, y: nameY + (senderNameSize.height - chip.size.height) / 2,
@@ -1650,14 +1671,19 @@ enum MessageRowLayout {
                     plan.roleTint = chip.tint
                 }
             }
-            if b.forwarded {
+            if b.forwarded, fromInBubble(b) {
+                // Under the name, 2pt down, like the one-line tag it replaces.
+                placeFwdFrom(b, plan: &plan, x: bubbleRect.minX + headInset,
+                             y: nameY + senderNameSize.height + BubbleMetrics.nameForwardGap,
+                             width: bubbleRect.width - headInset * 2, size: forwardedSize)
+            } else if b.forwarded {
                 let fy = nameY + senderNameSize.height + BubbleMetrics.nameForwardGap
-                let x = bubbleRect.minX + inset
+                let x = bubbleRect.minX + headInset
                 plan.forwardedIcon = CGRect(x: x, y: fy + (forwardedSize.height - 9) / 2,
                                             width: forwardedIconW, height: 9)
                 plan.forwarded = CGRect(x: x + forwardedIconW + 3, y: fy,
                                         width: max(0, min(forwardedSize.width,
-                                                          bubbleRect.width - inset * 2) - forwardedIconW - 3),
+                                                          bubbleRect.width - headInset * 2) - forwardedIconW - 3),
                                         height: forwardedSize.height)
             }
             plan.senderNameAttr = senderNameAttr
@@ -1672,7 +1698,13 @@ enum MessageRowLayout {
             }
             tagY += senderNameSize.height + BubbleMetrics.senderNameGap
         }
-        if b.forwarded {
+        if b.forwarded, fromInBubble(b) {
+            // No name inside (my bubble, a 1:1, a later bubble of a run): the block alone heads
+            // the bubble, at the name's 7pt from its top.
+            placeFwdFrom(b, plan: &plan, x: bubbleRect.minX + headInset,
+                         y: bubbleRect.minY + BubbleMetrics.nameTop,
+                         width: bubbleRect.width - headInset * 2, size: forwardedSize)
+        } else if b.forwarded {
             let x = b.isMe ? (bubbleRect.maxX - 12 - forwardedSize.width) : (bubbleRect.minX + 12)
             plan.forwardedIcon = CGRect(x: x, y: tagY + (forwardedSize.height - 9) / 2,
                                        width: forwardedIconW, height: 9)
@@ -1695,6 +1727,12 @@ enum MessageRowLayout {
     /// line); the second keeps it outside the sticker (CVComponentSenderName.swift:68, borderless).
     static func nameInBubble(_ b: BubbleRow) -> Bool {
         guard !b.isMe, let s = b.sender, s.showsName else { return false }
+        return holdsHeader(b)
+    }
+
+    /// Whether this kind has a bubble whose top can hold a header (the name, the "Forwarded from"
+    /// block). A sticker, a big emoji and a notice capsule have none.
+    private static func holdsHeader(_ b: BubbleRow) -> Bool {
         switch b.body {
         // A deleted message keeps its sender's name inside, like a text bubble (owner 2026-10-22).
         case .jumbomoji, .pill:
@@ -1711,22 +1749,86 @@ enum MessageRowLayout {
     /// Forwarded line under it when the message was forwarded. 0 when the name is not inside.
     private static func nameHeaderBottom(_ b: BubbleRow, senderNameSize: CGSize,
                                          forwardedSize: CGSize) -> CGFloat {
-        guard nameInBubble(b) else { return 0 }
-        var h = BubbleMetrics.nameTop + senderNameSize.height
-        if b.forwarded { h += BubbleMetrics.nameForwardGap + forwardedSize.height }
+        guard headerInBubble(b) else { return 0 }
+        var h = BubbleMetrics.nameTop
+        if nameInBubble(b) {
+            h += senderNameSize.height
+            if b.forwarded { h += BubbleMetrics.nameForwardGap + forwardedSize.height }
+        } else {
+            // Only the "Forwarded from" block (my bubble, a 1:1, or not the first of a run).
+            h += forwardedSize.height
+        }
+        if fromInBubble(b) { h += BubbleMetrics.fwdBottomPad }
         return ceil(h)
+    }
+
+    /// "Forwarded from <group or channel>" as the two-line block inside the bubble's head (owner
+    /// 2026-11-10), on mine and theirs alike. Only where there is a bubble to hold it; a sticker or
+    /// a big emoji keeps the one grey line above it, as before.
+    static func fromInBubble(_ b: BubbleRow) -> Bool {
+        b.forwarded && b.forwardFrom != nil && holdsHeader(b)
+    }
+
+    /// The bubble's head holds a header band: the sender's name, the "Forwarded from" block, or both.
+    private static func headerInBubble(_ b: BubbleRow) -> Bool {
+        nameInBubble(b) || fromInBubble(b)
+    }
+
+    /// The block's size: "Forwarded from" on line 1, 3pt, then the photo, 6pt, the title and the
+    /// chevron on line 2 (as tall as the taller of the photo and the title). Capped at `maxWidth`.
+    private static func fwdFromSize(_ b: BubbleRow, maxWidth: CGFloat) -> CGSize {
+        let line1 = ("Forwarded from" as NSString).size(withAttributes: [.font: BubbleMetrics.fwdFromFont])
+        let title = ((b.forwardFrom ?? "") as NSString).size(withAttributes: [.font: BubbleMetrics.fwdTitleFont])
+        let line2W = BubbleMetrics.fwdPhoto + BubbleMetrics.fwdPhotoGap + ceil(title.width) + BubbleMetrics.fwdChevron
+        let h = ceil(BubbleMetrics.fwdFromFont.lineHeight) + BubbleMetrics.fwdLineGap
+            + max(BubbleMetrics.fwdPhoto, ceil(BubbleMetrics.fwdTitleFont.lineHeight))
+        return CGSize(width: min(max(ceil(line1.width), line2W), maxWidth), height: h)
+    }
+
+    /// Places the block at (x, y) in row coordinates, `width` wide at most, in the bubble's own
+    /// colours: on my bubble white (line 1 at 75%), on theirs the secondary grey and the accent, and
+    /// a bubble style's own text colour when it has one, the way the words and the time pick theirs.
+    private static func placeFwdFrom(_ b: BubbleRow, plan: inout BubblePlan, x: CGFloat, y: CGFloat,
+                                      width: CGFloat, size: CGSize) {
+        let w = max(0, min(size.width, width))
+        let line1H = ceil(BubbleMetrics.fwdFromFont.lineHeight)
+        let titleH = ceil(BubbleMetrics.fwdTitleFont.lineHeight)
+        let line2Y = line1H + BubbleMetrics.fwdLineGap
+        let line2H = max(BubbleMetrics.fwdPhoto, titleH)
+        let photo = CGRect(x: 0, y: line2Y + (line2H - BubbleMetrics.fwdPhoto) / 2,
+                           width: BubbleMetrics.fwdPhoto, height: BubbleMetrics.fwdPhoto)
+        let titleX = BubbleMetrics.fwdPhoto + BubbleMetrics.fwdPhotoGap
+        // The title takes what the photo and the chevron leave, up to its own width.
+        let titleNeed = ceil(((b.forwardFrom ?? "") as NSString)
+            .size(withAttributes: [.font: BubbleMetrics.fwdTitleFont]).width)
+        let titleW = max(0, min(titleNeed, w - titleX - BubbleMetrics.fwdChevron))
+        let title = CGRect(x: titleX, y: line2Y + (line2H - titleH) / 2, width: titleW, height: titleH)
+        let chevron = CGRect(x: titleX + titleW, y: line2Y + (line2H - BubbleMetrics.fwdChevron) / 2,
+                             width: BubbleMetrics.fwdChevron, height: BubbleMetrics.fwdChevron)
+        let styled = b.textHex.map { BubblePalette.hex(UInt32(truncatingIfNeeded: $0)) }
+        let ink: UIColor = styled ?? (b.isMe ? .white : BubblePalette.accent)
+        let line1Color: UIColor = styled?.withAlphaComponent(0.75)
+            ?? (b.isMe ? UIColor.white.withAlphaComponent(0.75) : .secondaryLabel)
+        plan.forwarded = CGRect(x: x, y: y, width: w, height: size.height)
+        plan.forwardedIcon = nil
+        plan.forwardFromPlan = ForwardFromPlan(
+            line1: CGRect(x: 0, y: 0, width: w, height: line1H),
+            photo: photo, title: title, chevron: chevron, line1Color: line1Color, ink: ink)
     }
 
     /// How wide the content column must be to hold the name band: the name, the reference app's 8pt
     /// of slack, and the verified tick (4 + BubbleMetrics.verifiedSide). 0 when the name is not inside.
     private static func nameHeaderWidth(_ b: BubbleRow, senderNameSize: CGSize,
                                         forwardedSize: CGSize) -> CGFloat {
-        guard nameInBubble(b) else { return 0 }
-        var w = senderNameSize.width + BubbleMetrics.nameSlack
-        if b.sender?.verified == true { w += 4 + BubbleMetrics.verifiedSide }
-        // owner 2026-10-18: a text bubble widens for the Role chip too (the caller caps the column
-        // at the screen's width, so a long one truncates rather than overflowing).
-        if let chip = roleChip(b) { w += BubbleMetrics.roleGap + chip.size.width }
+        guard headerInBubble(b) else { return 0 }
+        var w: CGFloat = 0
+        if nameInBubble(b) {
+            w = senderNameSize.width + BubbleMetrics.nameSlack
+            if b.sender?.verified == true { w += 4 + BubbleMetrics.verifiedSide }
+            // owner 2026-10-18: a text bubble widens for the Role chip too (the caller caps the column
+            // at the screen's width, so a long one truncates rather than overflowing).
+            if let chip = roleChip(b) { w += BubbleMetrics.roleGap + chip.size.width }
+        }
         if b.forwarded { w = max(w, forwardedSize.width) }
         return ceil(w)
     }

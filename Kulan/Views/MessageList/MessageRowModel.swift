@@ -422,6 +422,13 @@ struct BubbleRow: Equatable {
     /// The group or channel it was forwarded from (owner 2026-11-10): the line reads "Forwarded
     /// from <this>" and is a tap target. nil = plain "Forwarded" (from a person), no tap.
     var forwardFrom: String? = nil
+    /// The source's photo as the message carries it (`fwd.p`), and whether it is a channel, for the
+    /// two-line "Forwarded from" block (owner 2026-11-10): squircle and megaphone for a channel,
+    /// circle and people for a group. None of the three changes the row's size. `forwardCid` lets
+    /// the row find a photo the app already holds when the message carries none.
+    var forwardPhoto: String? = nil
+    var forwardIsChannel: Bool = false
+    var forwardCid: String? = nil
     /// What the forward line says, measured by the layout and drawn by the row with the same words.
     var forwardedLine: String { forwardFrom.map { "Forwarded from \($0)" } ?? "Forwarded" }
     var reactions: [ReactionChip]

@@ -479,6 +479,7 @@ final class MessageRowCell: UICollectionViewCell {
         super.prepareForReuse()
         rowId = nil
         model = nil
+        fwdPressed = false   // the row view lifts the tint itself (`MessageRowView.prepareForReuse`)
         // Owner audit 2026-10-06 chat #78: the slide the list adds to a reacted row's neighbours
         // rides the cell's own layer; a recycled cell must not carry it into the next row.
         // owner 2026-10-25: one key per slide now (they add up), so every one of them goes.
@@ -525,21 +526,37 @@ final class MessageRowCell: UICollectionViewCell {
         linkPressed = false
         rowView.setLinkCardPressed(false)
     }
+    // The "Forwarded from" block's press tint (owner 2026-11-10), the same raw-touch way: it
+    // should light as the finger lands, so it reads as a button.
+    private var fwdPressed = false
+    private func fwdPress(_ touches: Set<UITouch>) -> Bool {
+        guard let m = model, !m.selecting, touches.count == 1, let t = touches.first else { return false }
+        return rowView.hitsForwardSource(t.location(in: rowView))
+    }
+    private func liftFwdPress() {
+        guard fwdPressed else { return }
+        fwdPressed = false
+        rowView.setForwardSourcePressed(false)
+    }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
         if linkPress(touches) { linkPressed = true; rowView.setLinkCardPressed(true) }
+        else if fwdPress(touches) { fwdPressed = true; rowView.setForwardSourcePressed(true) }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
         if linkPressed, !linkPress(touches) { liftLinkPress() }   // slid off the card
+        if fwdPressed, !fwdPress(touches) { liftFwdPress() }
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
         liftLinkPress()
+        liftFwdPress()
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
         liftLinkPress()
+        liftFwdPress()
     }
 
     @objc private func handleTap(_ g: UITapGestureRecognizer) {

@@ -46,6 +46,14 @@ enum BubbleMetrics {
     static let nameForwardGap: CGFloat = 2
     static let nameToText: CGFloat = 1
     static let nameToBlock: CGFloat = 5
+    /// owner 2026-11-10 "Forwarded from" block: 3pt between its two lines, a 20pt photo, 6pt to the
+    /// title, a 14pt chevron, and 2pt of air under it (Android pads the block 2dp) so the photo
+    /// does not sit on the words.
+    static let fwdLineGap: CGFloat = 3
+    static let fwdPhoto: CGFloat = 20
+    static let fwdPhotoGap: CGFloat = 6
+    static let fwdChevron: CGFloat = 14
+    static let fwdBottomPad: CGFloat = 2
     /// owner 2026-10-18 ROLE: the chip after the name. The second reference app draws the member
     /// label as a capsule in the name's colour right after the name (CVComponentSenderName.swift:
     /// 95-112); these are our own sizes for it. Under `roleMinWidth` of room it is left out.
@@ -124,6 +132,7 @@ enum BubbleMetrics {
 
     private struct ChatFonts {
         let body, meta, metaItalic, senderName, forwarded, quoteName, quoteText, notice, role: UIFont
+        let fwdFrom, fwdTitle: UIFont
         init(_ category: UIContentSizeCategory) {
             var c: UIContentSizeCategory = category == .unspecified ? .large : category
             if c > .accessibilityMedium { c = .accessibilityMedium }
@@ -145,6 +154,9 @@ enum BubbleMetrics {
             quoteText = UIFont.systemFont(ofSize: s(12))
             notice = UIFont.systemFont(ofSize: s(12), weight: .semibold)   // .caption.weight(.semibold)
             role = UIFont.systemFont(ofSize: s(11), weight: .medium)       // owner 2026-10-18, the Role chip
+            // owner 2026-11-10: the two-line "Forwarded from" block, the same sizes Android draws.
+            fwdFrom = UIFont.systemFont(ofSize: s(12))
+            fwdTitle = UIFont.systemFont(ofSize: s(14), weight: .semibold)
         }
     }
 
@@ -157,6 +169,8 @@ enum BubbleMetrics {
     static var quoteTextFont: UIFont { fonts.quoteText }
     static var noticeFont: UIFont { fonts.notice }
     static var roleFont: UIFont { fonts.role }
+    static var fwdFromFont: UIFont { fonts.fwdFrom }
+    static var fwdTitleFont: UIFont { fonts.fwdTitle }
 
     /// The width a row is laid out at. Never `UIScreen` inside a cell: on an iPad in Stage Manager
     /// the list is narrower than the screen, and the sizer and the cell must be handed one number.
