@@ -309,7 +309,9 @@ enum MessageRowModelBuilder {
         // Never in a channel or the official chat, nor in a group whose admins turned styles off
         // (owner 2026-11-07, SPEC section 5): the `bs` stays on the message, only the drawing is skipped.
         let bubbleStyle: BubbleStyle? = {
-            guard !msg.deleted, !ctx.isChannel, !ctx.stylesOff, case .text = body else { return nil }
+            // ⛔ 1:1 CHATS ONLY (owner 2026-11-10: "bubble style is only chat user, not groups and
+            // channels; groups just use Bubble Color"). A group draws its plain / Bubble Color fill.
+            guard !msg.deleted, !ctx.isChannel, !ctx.isGroup, !ctx.stylesOff, case .text = body else { return nil }
             return BubbleStyles.find(msg.bubbleStyle)
         }()
         // ⛔ EVERY STYLED BUBBLE WEARS ITS PICTURE (owner 2026-11-07, replacing SPEC section 3's
@@ -494,7 +496,10 @@ enum MessageRowModelBuilder {
     /// it can take replies or has been quoted. Replies off (the channel's or the post's) leaves only
     /// the quotes; neither leaves no bar.
     private static func postBar(_ msg: Message, ctx: MessageRowContext) -> QuoteBarChrome? {
-        guard ctx.isChannel, !msg.deleted, msg.sendState == nil else { return nil }
+        // ⛔ FROM THE FIRST FRAME (owner 2026-11-10: the post sent small, then "popped" bigger when
+        // the Reply bar arrived with the server's answer). A post still sending wears its bar
+        // already; only a FAILED send goes without (its retry mark sits there).
+        guard ctx.isChannel, !msg.deleted, msg.sendState != .failed else { return nil }
         // Off hides the Reply part entirely (owner 2026-11-07: "in post don't show Reply"); the bar
         // stays only for quotes.
         let showReplies = !msg.repliesOff(channelDefault: ctx.repliesOff)

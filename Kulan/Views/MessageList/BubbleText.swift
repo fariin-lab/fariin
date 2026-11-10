@@ -205,7 +205,10 @@ enum BubbleText {
         // ⛔ A FAILED SEND HAS NO FOOTER GLYPH. Theirs: `case .failed: // No status indicator icon.`
         // The red (!) outside the bubble says it, and drawing both put two exclamation marks on one
         // message — which is what his 2026-08-26 screenshot shows.
-        guard isMe, m.tick != .none, m.tick != .failed, let img = BubbleTicks.image(m.tick) else { return s }
+        // A channel post is drawn on the reader's side (`isMe` false) yet carries the sending clock
+        // while it goes out: its slot is reserved too, or the clock sat on "PM" (owner 2026-11-10).
+        guard isMe || m.tick == .sending, m.tick != .none, m.tick != .failed,
+              let img = BubbleTicks.image(m.tick) else { return s }
         let a = NSTextAttachment()
         // ⛔ WHILE SENDING THE SLOT IS RESERVED BUT EMPTY. The spinning clock is a separate view
         // laid over this slot (`MessageRowView.setSendingSpin`), because an attachment cannot

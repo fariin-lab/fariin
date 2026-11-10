@@ -4581,7 +4581,7 @@ struct ThreadView: View {
         // the official chat, a group with Bubble styles off.
         if BubbleStyles.shown, mine, !m.deleted, !m.text.isEmpty, !m.isFeatureMarker, !m.viewOnce,
            !m.isImage, !m.isVideo, !m.isAlbum, !m.isFile, !m.isAudio, !m.isCall, !m.isSystem,
-           m.type != "sticker", conversation?.isChannel != true, conversation?.bubbleStylesOff != true,
+           m.type != "sticker", cid.contains("_"),   // 1:1 chats only (owner 2026-11-10), never groups or channels
            !OfficialChannel.isOfficial(cid) {
             out.append(CMAction(title: "Bubble Style", icon: "paintpalette", badge: "chatMenu.bubbleStyle") { BubbleStylesPage.presentSheet(cid: cid) })
         }
