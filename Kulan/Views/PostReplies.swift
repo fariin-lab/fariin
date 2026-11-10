@@ -141,6 +141,10 @@ struct ReplyEdit: Equatable {
     var openThreads: Set<String> = []
     private(set) var olderCursor = ""
     private(set) var loaded = false
+    /// The post under the sheet said 0 replies when it opened (owner 2026-11-10: on a slow line the
+    /// loading shapes stood there for seconds over a post with no replies). Then "No replies yet"
+    /// shows at once and the server's first page, if any arrived meanwhile, replaces it.
+    private(set) var seededEmpty = false
     private(set) var failed = false
     private(set) var loadingOlder = false
     private(set) var off = false
@@ -266,9 +270,10 @@ struct ReplyEdit: Equatable {
 
     /// `seedCount`: the count the post under it already shows (owner 2026-11-09: the tab's
     /// "18 Replies" came in late, after the server's first answer). The server's answer replaces it.
-    init(cid: String, mid: String, seedCount: Int = 0) {
+    init(cid: String, mid: String, seedCount: Int = 0, seedKnown: Bool = false) {
         self.cid = cid
         self.mid = mid
+        seededEmpty = seedKnown && seedCount <= 0
         count = max(0, seedCount)
         serverCount = count
         if let c = Self.cache["\(mid)|top"] { threads = c; loaded = true }
@@ -1269,7 +1274,7 @@ struct PostThreadSheet: View {
         _tab = State(initialValue: first)
         _quotesShown = State(initialValue: first == .quotes)
         _offNow = State(initialValue: repliesOff)
-        _model = State(initialValue: RepliesModel(cid: cid, mid: mid, seedCount: post?.replyCount ?? 0))
+        _model = State(initialValue: RepliesModel(cid: cid, mid: mid, seedCount: post?.replyCount ?? 0, seedKnown: post != nil))
     }
 
     var body: some View {
@@ -1822,8 +1827,9 @@ struct PostThreadSheet: View {
             }
             .padding(.horizontal, 32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if !model.loaded && model.threads.isEmpty && model.pinned == nil {
-            // The loading shapes only over an empty sheet, never over replies already drawn.
+        } else if !model.loaded && model.threads.isEmpty && model.pinned == nil && !model.seededEmpty {
+            // The loading shapes only over an empty sheet, never over replies already drawn, and
+            // never over a post that said it has none (seededEmpty: "No replies yet" below instead).
             RepliesSkeleton()
         } else if model.threads.isEmpty && model.pinned == nil {
             // The owner's comment icon, the one on the Reply bar, and smaller words than the system's
@@ -2359,6 +2365,8 @@ private struct ReplyComposer: View {
 /// Skeleton rows in the replies' own shape while the first page loads.
 private struct RepliesSkeleton: View {
     @State private var dim = false
+    /// Shown only after 0.3 s (owner 2026-11-10): a fast answer paints the replies with no flash.
+    @State private var shown = false
     var body: some View {
         // Light and plain like the Quotes one (owner 2026-11-07): no solid background, faint shapes
         // in the reply row's own layout (name over a bubble, the photo beside it).
@@ -2380,6 +2388,11 @@ private struct RepliesSkeleton: View {
         .opacity(dim ? 0.5 : 1)
         .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: dim)
         .onAppear { dim = true }
+        .opacity(shown ? 1 : 0)
+        .task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            withAnimation(.easeOut(duration: 0.2)) { shown = true }
+        }
         .accessibilityLabel("Loading replies")
     }
     private var fill: Color { Color.primary.opacity(0.08) }
