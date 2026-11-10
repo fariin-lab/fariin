@@ -1519,8 +1519,13 @@ final class SimilarChannels {
     /// One fetch per channel per run.
     @ObservationIgnored private var cache: [String: [ChannelService.Discovered]] = [:]
 
+    /// ⛔ HIDDEN EVERYWHERE (owner 2026-11-10: "completely hide this feature because it is not
+    /// finished"). Off = no card after following, no section on the channel page, no server call.
+    /// Turn back on only on his word.
+    static let enabled = false
+
     static func showsAfterFollow(_ cid: String) -> Bool {
-        shared.followed.contains(cid) && !shared.closed.contains(cid)
+        enabled && shared.followed.contains(cid) && !shared.closed.contains(cid)
     }
 
     static func close(_ cid: String) {
@@ -1529,6 +1534,7 @@ final class SimilarChannels {
     }
 
     static func load(_ cid: String) async -> [ChannelService.Discovered] {
+        guard enabled else { return [] }   // the channel page's section hides itself on an empty list
         if let c = shared.cache[cid] { return c }
         let list = await ChannelService.similar(cid: cid)
         shared.cache[cid] = list
