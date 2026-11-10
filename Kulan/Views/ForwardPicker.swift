@@ -74,6 +74,10 @@ struct ForwardPicker: View {
             // 2026-09-24 decision D10: not an incoming request I have not answered. Sending into it
             // would accept it silently, and those chats are kept out of the main list anyway.
             .filter { MessageRequests.stance($0, myUid: me) != .incoming }
+            // ⛔ QUOTE GOES TO CHANNELS AND GROUPS ONLY (owner 2026-11-10: "not from channel to
+            // 1:1"). A quote is a post with my words over someone's post; sending it to one person
+            // is what Share / Forward is for.
+            .filter { onPick == nil || $0.isGroup }
         return (q.isEmpty ? list : list.filter { $0.displayName(me).lowercased().contains(q) })
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }
@@ -182,7 +186,10 @@ struct ForwardPicker: View {
     var body: some View {
         NavigationStack {
             Group {
-                if people.isEmpty {
+                if people.isEmpty && onPick != nil {
+                    ContentUnavailableView("No channels or groups", systemImage: "quote.opening",
+                                           description: Text("Quotes go to a channel you post in or a group. Create one to quote into it."))
+                } else if people.isEmpty {
                     ContentUnavailableView("No other chats", systemImage: "paperplane",
                                            description: Text("Start another chat to forward into it."))
                 } else {
