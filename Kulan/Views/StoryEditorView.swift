@@ -87,8 +87,9 @@ final class KeyboardWatcher: ObservableObject {
                 // Send the log at the next launch even if this session freezes and is killed.
                 if self.frameEvents == 1 { DiagLog.flagForUpload(after: 30) }
                 if self.frameEvents <= 60 || self.frameEvents % 200 == 0 {
-                    DiagLog.add("KBD# n=\(self.frameEvents) y=\(Int(f.origin.y)) h=\(Int(f.height)) "
-                                + "mode=\(UITextInputMode.activeInputModes.first?.primaryLanguage ?? "?")")
+                    // No keyboard language here: UITextInputMode.activeInputModes is a required-reason
+                    // API with no reason that fits a log line (release audit C1).
+                    DiagLog.add("KBD# n=\(self.frameEvents) y=\(Int(f.origin.y)) h=\(Int(f.height))")
                 }
                 // ⚠️ ONLY A REAL CHANGE. `@Published` announces every assignment, equal or not, and each
                 // announcement rebuilds the whole editor from inside the keyboard's own layout pass.

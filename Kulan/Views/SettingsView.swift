@@ -177,7 +177,10 @@ struct SettingsView: View {
                 Section {
                     // Subscriptions, first in this card, for @v alone while it is being built (owner
                     // 2026-10-27). The page is a preview: nothing on it is sold or switched on yet.
-                    if profile.me?.handle.lowercased() == "v" {
+                    // Release audit L2: never in an App Store build either (`DemoStoryMedia.isAvailable`
+                    // is debug or TestFlight), so a paid-features page with no purchase cannot reach
+                    // the public even if the handle check ever lets someone through.
+                    if DemoStoryMedia.isAvailable, profile.me?.handle.lowercased() == "v" {
                         NavigationLink { SubscriptionsView().toolbar(.hidden, for: .tabBar) } label: {
                             SettingsRowLabel("Subscriptions", system: "star.circle")
                         }
@@ -1719,7 +1722,7 @@ struct StorySettingsView: View {
     // "Turn On Stories" partner and their shared footer.
     //
     // Neither defaults key was deleted, because neither belongs to this screen alone.
-    // `demoStoryUsers` is still read by `StoriesRepository.injectDemoStories`, and `storiesOptedOut`
+    // `demoStoryUsers` was read by `StoriesRepository.injectDemoStories` (deleted, release audit L3), and `storiesOptedOut`
     // is still read by the stories tab, the chat list's story row and the contact page. Only the way
     // in from here is gone, so nothing on this screen writes either key any more.
     @State private var audiences = StoryAudienceStore.shared

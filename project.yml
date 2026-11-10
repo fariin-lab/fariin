@@ -140,10 +140,11 @@ targets:
         # distribution (e.g. enabling France, or a stricter reading of E2EE as non-exempt) changes,
         # revisit this — the earlier stance treated E2EE as NON-exempt (would be `true` + an
         # ITSEncryptionExportComplianceCode issued by ASC).
-        NSPhotoLibraryUsageDescription: "Fariin needs photo access so you can send pictures in chats."
-        NSPhotoLibraryAddUsageDescription: "Fariin needs permission to save photos to your camera roll."
-        NSCameraUsageDescription: "Fariin needs camera access so you can take photos in chats."
-        NSMicrophoneUsageDescription: "Fariin needs microphone access so you can send voice messages."
+        # Release audit M20 (2026-11-10): each text names every use, as App Review checks (5.1.1).
+        NSPhotoLibraryUsageDescription: "Fariin uses your photos so you can send pictures and videos in chats, post them to stories, and set a profile photo."
+        NSPhotoLibraryAddUsageDescription: "Fariin needs permission to save photos and videos to your library."
+        NSCameraUsageDescription: "Fariin uses the camera for photos and videos in chats and stories, video calls, and scanning QR codes."
+        NSMicrophoneUsageDescription: "Fariin uses the microphone for voice messages, calls, and videos you record."
         NSFaceIDUsageDescription: "Fariin uses Face ID to unlock the app."
         NSLocationWhenInUseUsageDescription: "Fariin uses your location to share it in a chat and to suggest nearby places for a story."
         # 2026-09-24 fix-all #210: the one-time precise-location ask when Approximate Location is on.

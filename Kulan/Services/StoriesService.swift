@@ -2758,7 +2758,7 @@ final class StoriesService {
     func markViewed(_ story: Story) async {
         let me = uid
         guard !me.isEmpty, story.authorUid != me else { return }
-        // A demo person exists only on this device (see `demoGroups`). Their story ids match no
+        // A demo person exists only on this device (see `isDemoAuthor`). Their story ids match no
         // document, so a receipt or a watermark for one is a write that can only ever fail — and it
         // would fail against the REAL database, under the real account, for a story that is not there.
         guard !StoriesRepository.isDemoAuthor(story.authorUid) else { return }
@@ -3268,8 +3268,18 @@ final class StoriesRepository {
                 repo.start(me)
             }
         }
+        // Release audit L28: the channel-story tick does nothing while the app is not active, so
+        // coming back asks once, if the last answer is old enough (`channelStoriesDue`).
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let repo = StoriesRepository.shared
+                if repo.channelStoriesTask != nil, repo.channelStoriesDue { repo.refreshChannelStories() }
+            }
+        }
     }
     @ObservationIgnored private var swapObserver: NSObjectProtocol?
+    @ObservationIgnored private var activeObserver: NSObjectProtocol?
 
     private var db: Firestore { FirestoreHub.db }
     var mine: StoryGroup?            // my own story (the "My Status" cell)
@@ -3672,7 +3682,8 @@ final class StoriesRepository {
     /// a channel story's `recipientUids` (followers are unlimited), so the audience query cannot find
     /// them. The server lists the live ids for every channel I follow (`groups:channelStoryIds`); the
     /// rules let a follower read each (`followedChannelStory`). Asked when the tray starts, every five
-    /// minutes while it runs, and when I follow a channel.
+    /// minutes while it runs and the app is active, on coming back to the app, and when I follow a
+    /// channel.
     private var channelStories: [Story] = []
     @MainActor private var channelStoriesTask: Task<Void, Never>?
     /// The one refresh in flight, and its number (owner 2026-10-29 audit P10): two runs used to
@@ -3681,9 +3692,20 @@ final class StoriesRepository {
     /// write `channelStories`.
     @MainActor private var channelStoriesRun: Task<Void, Never>?
     @MainActor private var channelStoriesGen = 0
+    /// When the server was last asked for the ids. Reset by `stop`, so a new account asks at once.
+    @ObservationIgnored @MainActor private var channelStoriesAskedAt = Date.distantPast
+    /// Release audit L28: a Cloud Function call every five minutes for a tray nobody can see (calls
+    /// and background audio keep the app running) cost calls and radio wake-ups. Only while the app
+    /// is active, and not again within four minutes of the last ask (a follow asks too), so the
+    /// five-minute tick still lands even when the sleep wakes a little late.
+    @MainActor private var channelStoriesDue: Bool {
+        UIApplication.shared.applicationState == .active
+            && Date().timeIntervalSince(channelStoriesAskedAt) >= 240
+    }
 
     @MainActor func refreshChannelStories() {
         guard let me = listeningUid else { return }
+        channelStoriesAskedAt = Date()
         channelStoriesRun?.cancel()
         channelStoriesGen += 1
         let gen = channelStoriesGen
@@ -3721,7 +3743,7 @@ final class StoriesRepository {
         channelStoriesTask?.cancel()
         channelStoriesTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                self?.refreshChannelStories()
+                if let self, self.channelStoriesDue { self.refreshChannelStories() }
                 try? await Task.sleep(nanoseconds: 300_000_000_000)
             }
         }
@@ -3833,6 +3855,7 @@ final class StoriesRepository {
         ctxReg?.remove(); ctxReg = nil
         channelStoriesTask?.cancel(); channelStoriesTask = nil; channelStories = []
         channelStoriesRun?.cancel(); channelStoriesRun = nil; channelStoriesGen += 1
+        channelStoriesAskedAt = .distantPast
         listeningUid = nil
         // A new account gets a new cold start. Left true, the first empty cached snapshot after a
         // sign-in would be applied as though the server had already confirmed the row was empty.
@@ -3977,7 +4000,6 @@ final class StoriesRepository {
             if author == me { myGroup = g }
             else if !blockedAuthors.contains(author) { groups.append(g) }
         }
-        if Self.injectDemoStories { groups.append(contentsOf: Self.demoGroups(now: now)) }   // TEMP test data
         // ⭐ THE STORY ROW AND THE CHAT LIST NOW SHOW THE SAME PEOPLE. Settings > Demo chats injected
         // chats only, so Cabdi and Khadra sat in the chat list with their photographs while the row
         // above them showed a different, older set of demo people carrying drawn placeholders.
@@ -4081,28 +4103,11 @@ final class StoriesRepository {
         }
     }
 
-    // ===== Demo story people, for testing the viewer / carousel / rings / cube =====
+    // ===== People who exist only on this device =====
     //
-    // DEBUG ONLY, AND LOCAL ONLY. Every picture and every clip is drawn and encoded on this phone by
-    // `DemoStoryMedia` and planted in the caches the real code reads, so these people work with the
-    // network off and nothing about them ever reaches Firebase. Nobody else can see them because
-    // they do not exist anywhere but this device.
-    //
-    // ⚠️ THE POINT OF THEM IS VIDEO. The previous version of this block pointed at `picsum.photos`
-    // and every demo story was a still, which could not test one bug this app actually has — they
-    // are all video bugs. The mixes below are chosen for the reports that keep coming back:
-    // video→video→video for the preview-card flash, image→video→video for "the viewer closes when a
-    // clip ends instead of advancing", and several people so the cube has somewhere to turn.
-    //
-    // Toggle at runtime with the switch in Settings (debug builds only) — no rebuild needed.
-    /// ⚠️ NOT `#if DEBUG`. That gate shipped in build 550 and put the demo people in no build he can
-    /// run: the TestFlight lane builds Release, and with no Mac in the picture every build that
-    /// reaches his phone is a TestFlight build. `DemoStoryMedia.isAvailable` is debug OR TestFlight,
-    /// never the App Store, which is the distinction that was actually wanted.
-    /// ⛔ ALWAYS OFF — 2026-09-24 audit. The "Demo story people" switch was removed on his
-    /// 2026-09-05 order, but this still read its key, so anyone who had it on in an older TestFlight
-    /// build kept the "(demo)" people with no way left to turn them off.
-    static var injectDemoStories: Bool { false }
+    // Release audit L3 (2026-11-10): the old demo story cast (`demoGroups`, behind an
+    // `injectDemoStories` switch that was always off) is deleted. What stays guards the demo
+    // people that still exist (Settings > Demo chats and the Glow cast) from real writes.
 
     /// True for a person who only exists on this device, so nothing tries to write a view receipt,
     /// a watermark or a reply for them.
@@ -4133,84 +4138,5 @@ final class StoriesRepository {
     }
 
     /// Re-publish the row after the demo switch is flipped, so it takes effect without a relaunch.
-    /// The first flip ON is also the encode, which is why it runs off the main actor.
     func refreshForDemo() { Task { await rebuild() } }
-
-    static func demoGroups(now: Date) -> [StoryGroup] {
-        // Ages, so the rings sort the way a real row would.
-        func made(_ hoursAgo: Double) -> Date { now.addingTimeInterval(-3600 * hoursAgo) }
-        func expires() -> Date { now.addingTimeInterval(3600 * 20) }
-
-        func videoStory(_ uid: String, _ n: Int, _ clip: DemoStoryMedia.Clip?, _ hoursAgo: Double) -> Story? {
-            guard let clip else { return nil }
-            return Story(id: "demo_\(uid)_\(n)", authorUid: uid, createdAt: made(hoursAgo),
-                         expiresAt: expires(), mediaUrl: clip.mediaUrl, allowsReplies: true,
-                         caption: "", isVideo: true, duration: clip.seconds, thumbUrl: clip.thumbUrl)
-        }
-        func imageStory(_ uid: String, _ n: Int, _ url: String, _ hoursAgo: Double) -> Story {
-            Story(id: "demo_\(uid)_\(n)", authorUid: uid, createdAt: made(hoursAgo),
-                  expiresAt: expires(), mediaUrl: url, allowsReplies: true)
-        }
-
-        // CABDI — three videos in a row. This is the set for the preview-card flash: open the
-        // middle one, swipe up, then swipe the card row away and back.
-        let cabdi = [
-            videoStory("demo_cabdi", 1, DemoStoryMedia.video("cabdi-1", seconds: 6,
-                                                             top: .systemIndigo, bottom: .systemBlue,
-                                                             title: "Cabdi 1"), 5),
-            videoStory("demo_cabdi", 2, DemoStoryMedia.video("cabdi-2", seconds: 4,
-                                                             top: .systemPink, bottom: .systemRed,
-                                                             title: "Cabdi 2"), 4),
-            videoStory("demo_cabdi", 3, DemoStoryMedia.video("cabdi-3", seconds: 7,
-                                                             top: .systemTeal, bottom: .systemGreen,
-                                                             title: "Cabdi 3"), 3),
-        ].compactMap { $0 }
-
-        // HODAN — image, then two videos. The exact shape of the "B ends and the viewer closes
-        // instead of going to C" report.
-        let hodan = [
-            imageStory("demo_hodan", 1, DemoStoryMedia.image("hodan-1", top: .systemOrange,
-                                                             bottom: .systemYellow, title: "Hodan 1"), 6),
-            videoStory("demo_hodan", 2, DemoStoryMedia.video("hodan-2", seconds: 5,
-                                                             top: .systemPurple, bottom: .systemPink,
-                                                             title: "Hodan 2"), 2),
-            videoStory("demo_hodan", 3, DemoStoryMedia.video("hodan-3", seconds: 5,
-                                                             top: .systemBrown, bottom: .systemOrange,
-                                                             title: "Hodan 3"), 1),
-        ].compactMap { $0 }
-
-        // YASIN — a single long clip, so there is a person whose story does not advance internally.
-        let yasin = [
-            videoStory("demo_yasin", 1, DemoStoryMedia.video("yasin-1", seconds: 8,
-                                                             top: .systemCyan, bottom: .systemIndigo,
-                                                             title: "Yasin"), 7),
-        ].compactMap { $0 }
-
-        // SAGAL — stills only, as a control: whatever breaks on the video people must NOT break here.
-        let sagal = [
-            imageStory("demo_sagal", 1, DemoStoryMedia.image("sagal-1", top: .systemGreen,
-                                                             bottom: .systemTeal, title: "Sagal 1"), 9),
-            imageStory("demo_sagal", 2, DemoStoryMedia.image("sagal-2", top: .systemRed,
-                                                             bottom: .systemPink, title: "Sagal 2"), 8),
-        ]
-
-        return [
-            StoryGroup(authorUid: "demo_cabdi", name: "Cabdi (demo)",
-                       photoUrl: DemoStoryMedia.avatar("cabdi", top: .systemIndigo,
-                                                       bottom: .systemBlue, initial: "C"),
-                       stories: cabdi, lastViewedAt: nil, isMine: false),
-            StoryGroup(authorUid: "demo_hodan", name: "Hodan (demo)",
-                       photoUrl: DemoStoryMedia.avatar("hodan", top: .systemPurple,
-                                                       bottom: .systemPink, initial: "H"),
-                       stories: hodan, lastViewedAt: nil, isMine: false),
-            StoryGroup(authorUid: "demo_yasin", name: "Yasin (demo)",
-                       photoUrl: DemoStoryMedia.avatar("yasin", top: .systemCyan,
-                                                       bottom: .systemIndigo, initial: "Y"),
-                       stories: yasin, lastViewedAt: nil, isMine: false),
-            StoryGroup(authorUid: "demo_sagal", name: "Sagal (demo)",
-                       photoUrl: DemoStoryMedia.avatar("sagal", top: .systemGreen,
-                                                       bottom: .systemTeal, initial: "S"),
-                       stories: sagal, lastViewedAt: nil, isMine: false),
-        ].filter { !$0.stories.isEmpty }
-    }
 }

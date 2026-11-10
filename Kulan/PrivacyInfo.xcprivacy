@@ -203,6 +203,20 @@
                 <string>35F9.1</string>
             </array>
         </dict>
+        <!-- Disk space, in LowStorage.space(): free and total capacity of the phone, read to hold
+             a download when there is no room for it and to warn when the phone is nearly full.
+             The sheet names an amount to clear, worked out from the total; no page shows the free
+             figure itself, so 85F4.1 is not claimed. (release audit C1, 2026-11-10) -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>E174.1</string>
+            </array>
+        </dict>
+        <!-- No active-keyboard entry: UITextInputMode.activeInputModes is not called anywhere
+             (a diagnostic log line in StoryEditorView used to read it and was removed for this). -->
     </array>
 </dict>
 </plist>

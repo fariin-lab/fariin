@@ -78,7 +78,8 @@ enum SettingsIndex {
         let chatKeyVisible = MsgPolicy.shared.chatKeyVisible
 
         // ── The Settings page's cards, in its order ─────────────────────────────────────────
-        if ProfileStore.shared.me?.handle.lowercased() == "v" {
+        // Same gate as the Settings row (release audit L2): @v alone, never in an App Store build.
+        if DemoStoryMedia.isAvailable, ProfileStore.shared.me?.handle.lowercased() == "v" {
             card("Subscriptions", "star.circle", system: true, "subscription premium plan pay") { SubscriptionsView() }
         }
         if AppFeatures.myProfileCard {
