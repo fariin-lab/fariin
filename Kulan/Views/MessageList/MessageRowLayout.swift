@@ -595,9 +595,11 @@ enum MessageRowLayout {
                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 9))
             forwardedIconW = ceil(icon?.size.width ?? 11)
             let h = ceil(BubbleMetrics.forwardedFont.lineHeight)
-            let w = ceil(("Forwarded" as NSString)
+            let w = ceil((b.forwardedLine as NSString)
                 .size(withAttributes: [.font: BubbleMetrics.forwardedFont]).width)
-            forwardedSize = CGSize(width: forwardedIconW + 3 + w, height: h)
+            // "Forwarded from <name>" (owner 2026-11-10) never widens the bubble past its maximum:
+            // a long name is cut short by the one-line label instead.
+            forwardedSize = CGSize(width: min(forwardedIconW + 3 + w, maxContent), height: h)
             // Under an in-bubble name the Forwarded line goes in with it, name first (the reference
             // app's header order: author, then forward info, then reply, :2755-3051).
             if !nameInBubble(b) { y += h + BubbleMetrics.senderNameGap }

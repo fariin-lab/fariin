@@ -2894,14 +2894,14 @@ service cloud.firestore {
                      ['enc', 'imageUrl', 'videoUrl', 'thumbUrl', 'audioUrl', 'fileUrl', 'album',
                       'fileName', 'fileSize', 'waveform', 'duration', 'blurhash', 'thumb',
                       'linkPreview', 'poll', 'locationCard', 'contactCard', 'replyTo', 'reactions',
-                      'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded', 'fwdChannel',
+                      'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded', 'fwdChannel', 'fwd',
                       'edits', 'quote', 'bs', 'bsd'])   // 2026-09-24 feature-audit: the edit history is content too
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
                      ['deleted', 'text', 'type', 'enc', 'imageUrl', 'videoUrl', 'thumbUrl',
                       'audioUrl', 'fileUrl', 'album', 'fileName', 'fileSize', 'waveform',
                       'duration', 'blurhash', 'thumb', 'linkPreview', 'poll', 'locationCard',
                       'contactCard', 'replyTo', 'reactions', 'videoEnc', 'thumbEnc',
-                      'viewOnce', 'mentions', 'forwarded', 'fwdChannel', 'edits', 'editedAt',
+                      'viewOnce', 'mentions', 'forwarded', 'fwdChannel', 'fwd', 'edits', 'editedAt',
                       'deletedBy', 'quote', 'bs', 'bsd', 'fmt']))   // 2026-09-24 feature-audit: the admin's signature
             // LIVE CALL ROW (2026-08-12): a call record is created at ring time ("Ringing") and the
             // SAME doc is finalised later (ongoing / answered / missed, duration, voice→video

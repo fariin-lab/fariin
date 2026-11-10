@@ -1495,7 +1495,10 @@ enum ChatService {
         if let clientId { msg["clientId"] = clientId }   // lets the client reconcile its optimistic copy
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
-        if forwarded { msg["forwarded"] = true }
+        if forwarded {
+            msg["forwarded"] = true
+            if let fwd = await sealedForwardSource(cid: cid, members: members) { msg["fwd"] = fwd }
+        }
         // A story mention card (`Message.storyMention`, owner 2026-10-16). 1:1 only, like replies.
         if let storyMention { msg["storyMention"] = ["id": storyMention.id, "thumb": storyMention.thumbUrl] }
         // A quoted channel post: only the server snapshot's id (owner 2026-11-06, `QuoteStore`).
@@ -1630,7 +1633,10 @@ enum ChatService {
         if let clientId { msg["clientId"] = clientId }
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
-        if forwarded { msg["forwarded"] = true }
+        if forwarded {
+            msg["forwarded"] = true
+            if let fwd = await sealedForwardSource(cid: cid, members: members) { msg["fwd"] = fwd }
+        }
         if let quote { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-06)
         if let bs = style.id {   // my bubble style (owner 2026-11-06), as taken when written
             msg["bs"] = bs
@@ -2090,7 +2096,10 @@ enum ChatService {
         if let replyEnc { imgMsg["replyTo"] = replyEnc }
         if let clientId { imgMsg["clientId"] = clientId }   // reconcile the optimistic bubble
         if viewOnce { imgMsg["viewOnce"] = true }           // view-once photo
-        if forwarded { imgMsg["forwarded"] = true }
+        if forwarded {
+            imgMsg["forwarded"] = true
+            if let fwd = await sealedForwardSource(cid: cid, members: members) { imgMsg["fwd"] = fwd }
+        }
         if let ui = sized {                                 // natural aspect ratio
             imgMsg["width"] = Double(ui.size.width); imgMsg["height"] = Double(ui.size.height)
         }
@@ -2473,7 +2482,10 @@ enum ChatService {
             if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
         }
         if let clientId { msg["clientId"] = clientId }
-        if forwarded { msg["forwarded"] = true }
+        if forwarded {
+            msg["forwarded"] = true
+            if let fwd = await sealedForwardSource(cid: cid, members: members) { msg["fwd"] = fwd }
+        }
         // The LAST moment Cancel can win — same line, same reason as sendAlbum's.
         try Task.checkCancellation()
         if let quote, QuoteStore.isQid(quote) { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-07)
@@ -2573,7 +2585,10 @@ enum ChatService {
         ]
         if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
         if let replyEnc { msg["replyTo"] = replyEnc }    // voice notes can be replies too (Bug 1)
-        if forwarded { msg["forwarded"] = true }
+        if forwarded {
+            msg["forwarded"] = true
+            if let fwd = await sealedForwardSource(cid: cid, members: members) { msg["fwd"] = fwd }
+        }
         if viewOnce { msg["viewOnce"] = true }           // one-time voice (same field the photo uses)
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
@@ -2673,7 +2688,10 @@ enum ChatService {
             if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
         }
         if let clientId { msg["clientId"] = clientId }
-        if forwarded { msg["forwarded"] = true }
+        if forwarded {
+            msg["forwarded"] = true
+            if let fwd = await sealedForwardSource(cid: cid, members: members) { msg["fwd"] = fwd }
+        }
 
         let batch = db.batch()
         if let quote, QuoteStore.isQid(quote) { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-07)
@@ -2834,7 +2852,10 @@ enum ChatService {
             if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
         }
         if let clientId { msg["clientId"] = clientId }
-        if forwarded { msg["forwarded"] = true }
+        if forwarded {
+            msg["forwarded"] = true
+            if let fwd = await sealedForwardSource(cid: cid, members: members) { msg["fwd"] = fwd }
+        }
         if let quote, QuoteStore.isQid(quote) { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-07)
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
@@ -2925,7 +2946,10 @@ enum ChatService {
         ]
         for (k, v) in thumbFields { msg[k] = v }
         if let clientId { msg["clientId"] = clientId }
-        if forwarded { msg["forwarded"] = true }
+        if forwarded {
+            msg["forwarded"] = true
+            if let fwd = await sealedForwardSource(cid: cid, members: members) { msg["fwd"] = fwd }
+        }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": "📄 File", "lastSender": uid, "updatedAt": FieldValue.serverTimestamp(),
@@ -3006,7 +3030,10 @@ enum ChatService {
             "clientTs": Date().timeIntervalSince1970 * 1000,
         ]
         if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
-        if forwarded { msg["forwarded"] = true }
+        if forwarded {
+            msg["forwarded"] = true
+            if let fwd = await sealedForwardSource(cid: cid, members: members) { msg["fwd"] = fwd }
+        }
         if let replyEnc { msg["replyTo"] = replyEnc }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
@@ -3043,6 +3070,24 @@ enum ChatService {
     /// so the bubble can never say one thing and the delivered message another.
     static func isForward(_ m: Message, from sourceCid: String, to targetCid: String) -> Bool {
         m.forwarded || sourceCid != targetCid
+    }
+
+    /// The group or channel the forward in flight came from (owner 2026-11-10). Set for the length
+    /// of one `forwardMessage`, so every send path below writes `fwd` beside `forwarded` without
+    /// each of them growing a parameter. nil outside a forward, and for a forward from a person.
+    @TaskLocal static var forwardSourceNow: ForwardSource?
+
+    /// The `fwd` field for a forwarded message going into `cid`, nil when there is none. Sealed like
+    /// the text: the conversation key in a 1:1, the group seal in an end-to-end group; a plain group
+    /// or channel (whose seal hands the text back unchanged) stores the map itself. A seal that fails
+    /// drops the field, never the message: it still arrives as "Forwarded".
+    static func sealedForwardSource(cid: String, members: [String]?) async -> Any? {
+        guard let src = forwardSourceNow, let json = src.json else { return nil }
+        if let members {
+            guard let sealed = try? await Crypto.shared.sealForGroup(json, members: members, cid: cid) else { return nil }
+            return sealed == json ? src.map : sealed
+        }
+        return try? await Crypto.shared.encryptForConversation(cid, json)
     }
 
     struct ForwardGoneError: LocalizedError {
@@ -3093,8 +3138,18 @@ enum ChatService {
 
     /// `clientId` matches the optimistic bubble ForwardPicker parked in PendingOutbox, so the echo
     /// REPLACES that bubble rather than landing beside it as a duplicate.
+    /// `source`: the group or channel it came from (`ForwardSource.of`), written as `fwd` when the
+    /// copy is a forward at all.
     static func forwardMessage(_ m: Message, from sourceCid: String, to targetCid: String,
-                               clientId: String? = nil) async throws {
+                               clientId: String? = nil, source: ForwardSource? = nil) async throws {
+        let src = isForward(m, from: sourceCid, to: targetCid) ? source : nil
+        try await $forwardSourceNow.withValue(src) {
+            try await forwardMessageBody(m, from: sourceCid, to: targetCid, clientId: clientId)
+        }
+    }
+
+    private static func forwardMessageBody(_ m: Message, from sourceCid: String, to targetCid: String,
+                                           clientId: String?) async throws {
         guard let liveText = await liveForwardText(m, in: sourceCid) else { throw ForwardGoneError() }
         var m = m
         m.text = liveText
@@ -3606,7 +3661,7 @@ enum ChatService {
                               "videoEnc", "thumbEnc", "viewOnce", "mentions",
                               // The Forwarded tag sits ABOVE the bubble, so it survived the content
                               // being stripped and read "Forwarded / This message was deleted".
-                              "forwarded",
+                              "forwarded", "fwd",   // and where it was forwarded from (2026-11-10)
                               // 2026-09-24 feature-audit: `thumb` (the sealed preview every photo,
                               // video and file send writes) and `edits` (the edit history) were
                               // missing here while the rule refuses a tombstone that keeps either.

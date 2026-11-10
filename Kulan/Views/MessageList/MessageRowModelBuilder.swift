@@ -461,6 +461,7 @@ enum MessageRowModelBuilder {
             quote: quote,
             storyReply: storyReply,
             forwarded: msg.forwarded && !msg.deleted,
+            forwardFrom: msg.forwarded && !msg.deleted ? msg.forwardSource?.title : nil,
             reactions: reactions,
             showsFailedBadge: authored && msg.sendState == .failed,
             // Theirs only, and only on a wallpaper — the reference guards it `hasWallpaper,

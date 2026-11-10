@@ -4918,6 +4918,44 @@ struct ThreadView: View {
         r.pendingChatId = it.cid
     }
 
+    /// "Forwarded from <group or channel>" tapped (owner 2026-11-10): the source, at the post. A
+    /// chat I am in or a channel I follow opens at that message; a public one I am not in opens
+    /// on its visitor page, which is handed the post too; a private one I am not in only says so.
+    private func openForwardSource(_ f: ForwardSource) {
+        if f.cid == cid {
+            Task { @MainActor in
+                if !repo.items.contains(where: { $0.id == f.mid }) { await repo.ensureLoaded(f.mid) }
+                guard repo.items.contains(where: { $0.id == f.mid }) else {
+                    showJumpToast("That post is too far back to show")
+                    return
+                }
+                flashAndScroll(f.mid)
+            }
+            return
+        }
+        let mine = ConversationsRepository.shared.conversations.contains {
+            $0.id == f.cid && ($0.users.contains(me) || $0.isFollower(me))
+        } || ChannelFollows.shared.conversations.contains { $0.id == f.cid }
+        guard mine || f.isPublic else {
+            showJumpToast(f.isChannel ? "This channel is private" : "This group is private")
+            return
+        }
+        // One turn after the tap, as a group link waits (`openGroupLink`): the keyboard goes first.
+        DispatchQueue.main.async { [self] in
+            inputFocused = false
+            let r = AppRouter.shared
+            r.pendingMessageId = f.mid
+            if mine {
+                r.pendingChatName = f.title
+                r.pendingChatPhoto = f.photo
+                r.pendingChatPush = true
+                r.pendingChatId = f.cid
+            } else {
+                GroupDirectory.open(cid: f.cid, name: nil, push: true)
+            }
+        }
+    }
+
     private func openQuote(_ qid: String) {
         guard let c = QuoteStore.shared.card(qid) else { return }
         // A private channel's post I see only through this chat: no way into the channel.
@@ -5398,6 +5436,10 @@ struct ThreadView: View {
                 let repliesOff = m.repliesOff(channelDefault: conversation?.repliesOff == true)
                 quotesStartOnQuotes = repliesOff   // off: only Quotes (owner 2026-11-07)
                 openReplies(MessageRef(id: m.id))
+            },
+            onTapForwardSource: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), let f = m.forwardSource else { return }
+                openForwardSource(f)
             },
             onTapContactCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }

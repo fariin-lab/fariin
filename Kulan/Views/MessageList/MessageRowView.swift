@@ -1377,7 +1377,7 @@ final class MessageRowView: UIView {
         applyTombstone(b)
         applyQuote(b, model: m, cid: cid)
         applySender(b, model: m)
-        applyForwarded(b)
+        applyForwarded(b, model: m)
         applyReactions(b)
         applyFailBadge(b)
         applyShareButton(b, model: m)
@@ -1901,7 +1901,7 @@ final class MessageRowView: UIView {
         }
     }
 
-    private func applyForwarded(_ b: BubblePlan) {
+    private func applyForwarded(_ b: BubblePlan, model m: MessageRowModel) {
         guard let rect = b.forwarded, let iconRect = b.forwardedIcon else {
             forwardedLabel?.isHidden = true; forwardedIcon?.isHidden = true; return
         }
@@ -1915,7 +1915,11 @@ final class MessageRowView: UIView {
             addSubview(v); forwardedIcon = v; return v
         }()
         label.isHidden = false; icon.isHidden = false
-        label.attributedText = NSAttributedString(string: "Forwarded", attributes: [
+        // "Forwarded from <group or channel>" (owner 2026-11-10), cut short at the line's end.
+        var line = "Forwarded"
+        if case .bubble(let row) = m.content { line = row.forwardedLine }
+        label.lineBreakMode = .byTruncatingTail
+        label.attributedText = NSAttributedString(string: line, attributes: [
             .font: BubbleMetrics.forwardedFont, .foregroundColor: UIColor.secondaryLabel])
         label.frame = rect
         icon.tintColor = .secondaryLabel
@@ -2657,6 +2661,15 @@ final class MessageRowView: UIView {
     func hitsSenderName(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body, let n = b.senderName else { return false }
         return n.contains(point)
+    }
+
+    /// The "Forwarded from <source>" line, glyph and words, a little taller than drawn so a finger
+    /// finds it. Only a line that names a group or channel answers; a plain "Forwarded" does not.
+    func hitsForwardSource(_ point: CGPoint) -> Bool {
+        guard let m = model, case .bubble(let row) = m.content, row.forwardFrom != nil,
+              let p = plan, case .bubble(let b) = p.body, let text = b.forwarded else { return false }
+        let line = b.forwardedIcon.map { $0.union(text) } ?? text
+        return line.insetBy(dx: -4, dy: -6).contains(point)
     }
 
     /// Animate the two decorations that changed, FROM the state the row was in before `apply` ran.

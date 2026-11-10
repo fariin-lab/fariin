@@ -182,7 +182,10 @@ enum StickerSend {
             "clientId": clientId,
         ]
         if !s.emoji.isEmpty { msg["emoji"] = s.emoji }
-        if forwarded { msg["forwarded"] = true }
+        if forwarded {
+            msg["forwarded"] = true
+            if let fwd = await ChatService.sealedForwardSource(cid: cid, members: members) { msg["fwd"] = fwd }
+        }
 
         // The text seals, under the upload.
         switch s.source {

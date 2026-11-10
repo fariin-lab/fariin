@@ -28,6 +28,8 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidTapPollResults(_ cell: MessageRowCell)
     /// A channel post's "N Quotes" bar (owner 2026-11-06).
     func rowCellDidTapQuotes(_ cell: MessageRowCell)
+    /// The "Forwarded from <group or channel>" line (owner 2026-11-10).
+    func rowCellDidTapForwardSource(_ cell: MessageRowCell)
     func rowCellDidTapContactCard(_ cell: MessageRowCell)
     func rowCellDidTapContactMessage(_ cell: MessageRowCell)
     func rowCellDidTapReactions(_ cell: MessageRowCell)   // `cell.tappedReaction` = the pill's emoji
@@ -363,7 +365,7 @@ final class MessageRowCell: UICollectionViewCell {
             // Who. "You" for my own messages; a group bubble names its sender even when the avatar
             // is the only thing drawn, because a face is not something VoiceOver can read out.
             parts.append(b.isMe ? "You" : (b.sender?.name ?? "Them"))
-            if b.forwarded { parts.append("Forwarded") }
+            if b.forwarded { parts.append(b.forwardedLine) }
             if let q = b.quote {
                 parts.append(q.isStatus ? "Replying to a status"
                                         : "Replying to \(q.authorLine), \(q.snippet)")
@@ -448,7 +450,7 @@ final class MessageRowCell: UICollectionViewCell {
                 && x.storyReply == y.storyReply
                 // The whole chip, not only how many: a second person on the same emoji swaps the
                 // face for a count, which changes the chip's width and can wrap the footer.
-                && x.forwarded == y.forwarded && x.reactions == y.reactions
+                && x.forwarded == y.forwarded && x.forwardFrom == y.forwardFrom && x.reactions == y.reactions
                 && x.showsFailedBadge == y.showsFailedBadge
                 && x.meta.edited == y.meta.edited && x.meta.timeText == y.meta.timeText
                 && x.meta.views == y.meta.views   // a channel post's count changes the footer's width
@@ -588,6 +590,12 @@ final class MessageRowCell: UICollectionViewCell {
             // before them so a tap on it still opens the profile. Its rect never overlaps the content.
             if let s = b.sender, rowView.hitsSenderName(p) {
                 delegate?.rowCell(self, didTapSender: s.uid)
+                return
+            }
+            // "Forwarded from <group or channel>" opens the source at the post (owner 2026-11-10).
+            // Its rect sits in the header band and never overlaps the content.
+            if rowView.hitsForwardSource(p) {
+                delegate?.rowCellDidTapForwardSource(self)
                 return
             }
             // The picture opens the viewer. Before the quote test, because a media bubble's quote

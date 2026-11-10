@@ -419,6 +419,11 @@ struct BubbleRow: Equatable {
     var quote: QuoteChrome?
     var storyReply: StoryReplyChrome?
     var forwarded: Bool
+    /// The group or channel it was forwarded from (owner 2026-11-10): the line reads "Forwarded
+    /// from <this>" and is a tap target. nil = plain "Forwarded" (from a person), no tap.
+    var forwardFrom: String? = nil
+    /// What the forward line says, measured by the layout and drawn by the row with the same words.
+    var forwardedLine: String { forwardFrom.map { "Forwarded from \($0)" } ?? "Forwarded" }
     var reactions: [ReactionChip]
     /// A failed send: the red (!) outside the bubble, which is also the retry button. There is no
     /// text — his instruction, 2026-08-26. See `MessageRowLayout.decorations`.

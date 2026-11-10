@@ -367,6 +367,14 @@ struct ForwardPicker: View {
         // Oldest first so forwarded messages land in the same order they were sent.
         let ordered = messages.sorted { $0.createdAt < $1.createdAt }
         let src = sourceCid
+        // The group or channel each message comes from (owner 2026-11-10, "Forwarded from"): read
+        // here, where the chat lists are, and handed to the bubble and the send alike.
+        let srcConv = repo.conversations.first { $0.id == src }
+            ?? ChannelFollows.shared.conversations.first { $0.id == src }
+        let meNow = me
+        let sources: [String: ForwardSource] = isShare ? [:] : ordered.reduce(into: [:]) {
+            $0[$1.id] = ForwardSource.of($1, in: srcConv, me: meNow)
+        }
         let queued = onQueued, failed = onFailed
         onSent()
         dismiss()
@@ -444,6 +452,7 @@ struct ForwardPicker: View {
                 p.sendState = .sending
                 // The same rule the real send uses, so the bubble never flips when it lands.
                 p.forwarded = !isShare && ChatService.isForward(m, from: src, to: cid)
+                p.forwardSource = p.forwarded ? sources[m.id] : nil
                 p.reactions = [:]     // reactions belong to the ORIGINAL message, not this copy
                 p.replyTo = nil       // and so does whatever it was replying to over there
                 if p.localImageData == nil { p.localImageData = posters[m.id] }
@@ -484,7 +493,8 @@ struct ForwardPicker: View {
                             try await ChatService.sendText(cid: cid, text: m.text, clientId: clientId,
                                                            preview: sharePreview, forwarded: false)
                         } else {
-                            try await ChatService.forwardMessage(m, from: src, to: cid, clientId: clientId)
+                            try await ChatService.forwardMessage(m, from: src, to: cid, clientId: clientId,
+                                                                 source: sources[m.id])
                         }
                     }
                     catch {

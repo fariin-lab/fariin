@@ -233,6 +233,68 @@ struct ReplyRef: Equatable, Codable {
     var isReaction: Bool? = nil
 }
 
+/// Where a forwarded message first came from, when that was a group or a channel (owner
+/// 2026-11-10): the bubble says "Forwarded from <title>" and a tap opens the source at the post.
+/// A forward from a person carries none and stays a plain "Forwarded".
+///
+/// Travels as the message's `fwd` field: {cid, mid, t, p, pub, ch}. In a 1:1 and in an end-to-end
+/// group it is the JSON of that map, sealed exactly like the text; in a plain group or channel it
+/// is the map itself.
+struct ForwardSource: Equatable, Hashable, Codable, Sendable {
+    var cid: String
+    var mid: String
+    var title: String
+    var photo: String?
+    var isPublic: Bool
+    var isChannel: Bool
+
+    init?(cid: String, mid: String, title: String, photo: String?, isPublic: Bool, isChannel: Bool) {
+        let bad: (String) -> Bool = { $0.isEmpty || $0.contains("/") || $0.count > 128 }
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bad(cid), !bad(mid), !t.isEmpty else { return nil }
+        self.cid = cid
+        self.mid = mid
+        self.title = String(t.prefix(128))
+        self.photo = (photo?.isEmpty ?? true) ? nil : photo
+        self.isPublic = isPublic
+        self.isChannel = isChannel
+    }
+
+    init?(map d: [String: Any]) {
+        self.init(cid: d["cid"] as? String ?? "", mid: d["mid"] as? String ?? "",
+                  title: d["t"] as? String ?? "", photo: d["p"] as? String,
+                  isPublic: d["pub"] as? Bool ?? false, isChannel: d["ch"] as? Bool ?? false)
+    }
+
+    init?(json: String) {
+        guard let data = json.data(using: .utf8),
+              let d = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        self.init(map: d)
+    }
+
+    var map: [String: Any] {
+        var d: [String: Any] = ["cid": cid, "mid": mid, "t": title, "pub": isPublic, "ch": isChannel]
+        if let photo { d["p"] = photo }
+        return d
+    }
+
+    var json: String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: map, options: [.sortedKeys]) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// The source a copy of `m` carries when it is forwarded out of `conv`. A message that already
+    /// came forwarded keeps the source it came with (nil when that was a person), so the line always
+    /// names where the words first appeared. nil for a 1:1 source.
+    static func of(_ m: Message, in conv: Conversation?, me: String) -> ForwardSource? {
+        if m.forwarded { return m.forwardSource }
+        guard let conv, conv.isGroup else { return nil }
+        return ForwardSource(cid: conv.id, mid: m.id, title: conv.displayName(me),
+                             photo: conv.displayPhoto(me), isPublic: conv.isPublic,
+                             isChannel: conv.isChannel)
+    }
+}
+
 /// A channel post's server-counted numbers, cached with the message (see `Message.countsStore`).
 struct PostCounts: Codable, Equatable {
     var views = 0
@@ -432,6 +494,8 @@ struct Message: Identifiable, Equatable, Codable {
     /// message, so its author is not told "You deleted this message". Nil = the author did it.
     var deletedBy: String? = nil
     var forwarded: Bool = false             // passed along from another chat (bubble shows the tag)
+    /// The group or channel it was forwarded from (`fwd`, owner 2026-11-10). nil from a person.
+    var forwardSource: ForwardSource? = nil
     /// A quoted channel post (owner 2026-11-06): only the id of the server's snapshot travels in the
     /// message, `quote: { qid }`. What the card shows is asked from the server (`QuoteStore`), which
     /// checks every time that the reader may see the source channel.
@@ -578,6 +642,7 @@ struct Message: Identifiable, Equatable, Codable {
         m.mentions = []
         m.viewOnce = false
         m.forwarded = false
+        m.forwardSource = nil
         m.quoteId = nil
         m.bubbleStyle = nil
         m.bubbleDecor = false
@@ -811,7 +876,7 @@ struct Message: Identifiable, Equatable, Codable {
         case callerUid, callOutcome, callVideo, callDuration, callJoinedUids, callRungUids
         case quoteId, bubbleStyle, bubbleDecor, boldSpans
         case countsStore   // a channel post's views, reactions and quotes (owner 2026-11-06)
-        case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
+        case edited, deleted, deletedBy, forwarded, forwardSource, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
         case stickerPack, stickerId, stickerEmoji, stickerAnimated   // 2026-10-17 chat stickers, all optional
         // ⚠️ THE PATH TO A PENDING SEND'S OWN BYTES, and it has to persist or a failed voice note
@@ -911,7 +976,17 @@ struct Message: Identifiable, Equatable, Codable {
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
         self.forwarded = data["forwarded"] as? Bool ?? false
-        if let q = (data["quote"] as? [String: Any])?["qid"] as? String, QuoteStore.isQid(q) { self.quoteId = q }
+        // Where it was forwarded from (owner 2026-11-10): sealed like the text in a 1:1 and an
+        // end-to-end group, a plain map in a plain group or channel. Unreadable = no source shown.
+        if self.forwarded, !self.deleted {
+            if let raw = data["fwd"] as? String, !raw.isEmpty {
+                let clear = crypto.decrypt(raw, cid: cid, authorId: data["authorId"] as? String ?? "")
+                if clear != "…", clear != "🔒" { self.forwardSource = ForwardSource(json: clear) }
+            } else if let d = data["fwd"] as? [String: Any] {
+                self.forwardSource = ForwardSource(map: d)
+            }
+        }
+        if let q =(data["quote"] as? [String: Any])?["qid"] as? String, QuoteStore.isQid(q) { self.quoteId = q }
         if let bs = data["bs"] as? String, !bs.isEmpty, bs.count <= 32 { self.bubbleStyle = bs }
         self.bubbleDecor = data["bsd"] as? Bool ?? false
         // Bold spans, opened like the text when sealed; checked against the text's length.
