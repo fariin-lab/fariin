@@ -106,7 +106,7 @@ struct ChannelApiKeyView: View {
                 } header: {
                     Text("Address")
                 } footer: {
-                    Text("Send the key as \"Authorization: Bearer <key>\" with a JSON body, for example {\"action\":\"post\",\"text\":\"Hello\"}. Actions: read, post, edit, delete, pin, unpin.")
+                    Text("Send the key in the \"X-Api-Key\" header with a JSON body, for example {\"action\":\"post\",\"text\":\"Hello\"}. Actions: read, post, edit, delete, pin, unpin.")
                 }
             }
         }
