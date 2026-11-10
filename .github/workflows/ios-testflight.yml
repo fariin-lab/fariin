@@ -3,6 +3,15 @@ name: TestFlight
 # Manual trigger so we only ship to TestFlight when we mean to.
 on:
   workflow_dispatch:
+    inputs:
+      allow_missing:
+        description: "Ship even though this branch lacks commits from the last TestFlight (owner-approved rollback only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   testflight:
@@ -14,6 +23,31 @@ jobs:
       ASC_TEAM_ID: ${{ secrets.ASC_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ⛔ NEVER SHIP BACKWARDS (owner 2026-11-10: a TestFlight from `work` dropped the day before's
+      # Chats top bar and fix batch, because that branch did not contain the last shipped build).
+      # The commit being shipped must contain the commit of the last successful TestFlight. If not,
+      # this stops before anything is built and lists what would be lost. Merge first, then ship.
+      - name: Guard - branch contains the last TestFlight build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ALLOW: ${{ inputs.allow_missing }}
+        run: |
+          LAST=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ios-testflight.yml --status success -L 1 --json headSha -q '.[0].headSha' || true)
+          echo "Last shipped: ${LAST:-none}   Shipping: $GITHUB_SHA"
+          if [ -z "$LAST" ]; then echo "No earlier TestFlight found; nothing to compare."; exit 0; fi
+          git cat-file -e "$LAST^{commit}" 2>/dev/null || git fetch -q origin "$LAST" || true
+          if git merge-base --is-ancestor "$LAST" "$GITHUB_SHA"; then
+            echo "OK: this branch contains the last shipped build."
+            exit 0
+          fi
+          echo "::error::This branch is MISSING work from the last TestFlight ($LAST). Shipping it would take those changes off people's phones. Merge that build into this branch first."
+          echo "Commits that would be lost:"
+          git log --oneline "$GITHUB_SHA..$LAST" | head -40
+          if [ "$ALLOW" = "true" ]; then echo "::warning::allow_missing=true: shipping anyway (owner-approved rollback)."; exit 0; fi
+          exit 1
 
       - name: Select latest Xcode (Apple requires the iOS 26 SDK for upload)
         run: |
