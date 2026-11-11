@@ -152,11 +152,6 @@ struct ChatImageEditor: View {
     @State private var captionTopY: CGFloat = 0
     @State private var chromeShown = false   // set true on appear; see chromeOverlay's opacity
 
-    private static let ctx = CIContext()
-    private static let filters: [(String, String?)] = [
-        ("Original", nil), ("Vivid", "CIPhotoEffectChrome"), ("Mono", "CIPhotoEffectMono"),
-        ("Fade", "CIPhotoEffectFade"), ("Noir", "CIPhotoEffectNoir"),
-    ]
     private static let aspects: [(String, CGFloat?)] = [("Original", nil), ("Square", 1), ("Portrait", 4.0/5.0)]
 
     // Memoized: filtering+cropping the FULL-RES image is expensive; recompute only when the filter
@@ -166,8 +161,25 @@ struct ChatImageEditor: View {
     /// since (an attach open starts on a rough picture and the full file follows; see `arrival`).
     private var base: UIImage { arrival.image ?? source }
     private var edited: UIImage { editedCache ?? base }
+    /// Bumped by every recompute, crop and bake, so a filter pass that lands late paints nothing.
+    @State private var editGen = 0
+    /// ⛔ OFF THE MAIN THREAD, AND NEVER ABOVE THE LARGEST SEND (perf audit 2026-11-11 M2). The
+    /// filter and crop ran here on main, on the full camera original, for every filter tap: a
+    /// visible stall and hundreds of MB. Now the work runs in the background on a copy bounded to
+    /// `PhotoQuality.high.maxSide` (nothing sent is bigger), and the screen keeps the last picture
+    /// until the new one is ready.
     private func recomputeEdited() {
-        editedCache = Self.cropped(Self.filtered(base, filterIndex), aspect: Self.aspects[aspectIndex].1)
+        editGen += 1
+        let gen = editGen
+        let src = base, filter = filterIndex, aspect = Self.aspects[aspectIndex].1
+        let genBox = $editGen, cacheBox = $editedCache
+        Task.detached(priority: .userInitiated) {
+            let out = EditorImageOps.cropped(EditorImageOps.filtered(EditorImageOps.bounded(src), filter), aspect: aspect)
+            await MainActor.run {
+                guard genBox.wrappedValue == gen else { return }
+                cacheBox.wrappedValue = out
+            }
+        }
     }
 
     // ⛔ ALWAYS DARK — owner 2026-10-17: the editor sits on black, and in light mode its glass buttons, tool
@@ -324,6 +336,7 @@ struct ChatImageEditor: View {
             // already filtered, so the result is taken as it is rather than filtered a second time.
             ChatCropView(image: edited, inline: true,
                          onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } }) { cropped in
+                editGen += 1   // a filter pass still running must not paint over the crop
                 editedCache = cropped
             }
             .transition(.opacity)
@@ -415,6 +428,7 @@ struct ChatImageEditor: View {
         let r = ImageRenderer(content: composed)
         r.scale = outScale
         if let baked = r.uiImage {
+            editGen += 1   // a filter pass still running must not paint over the drawing
             editedCache = baked
             drawing = PKDrawing()
         }
@@ -672,9 +686,32 @@ struct ChatImageEditor: View {
         let r = ImageRenderer(content: composed); r.scale = UIScreen.main.scale
         return r.uiImage?.jpegData(compressionQuality: quality) ?? (base.jpegData(compressionQuality: quality) ?? Data())
     }
+}
 
-    // MARK: - Image ops
-    private static func filtered(_ image: UIImage, _ idx: Int) -> UIImage {
+/// The editor's picture work, outside the view so it can run off the main thread.
+enum EditorImageOps {
+    static let filters: [(String, String?)] = [
+        ("Original", nil), ("Vivid", "CIPhotoEffectChrome"), ("Mono", "CIPhotoEffectMono"),
+        ("Fade", "CIPhotoEffectFade"), ("Noir", "CIPhotoEffectNoir"),
+    ]
+    private static let ctx = CIContext()
+
+    /// Upright, decoded, and at most the largest send size on its long side.
+    static func bounded(_ image: UIImage) -> UIImage {
+        let maxSide = PhotoQuality.high.maxSide
+        let px = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+        let longest = max(px.width, px.height)
+        guard longest > maxSide else { return image }
+        let f = maxSide / longest
+        let target = CGSize(width: (px.width * f).rounded(), height: (px.height * f).rounded())
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        return UIGraphicsImageRenderer(size: target, format: fmt).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+    }
+
+    static func filtered(_ image: UIImage, _ idx: Int) -> UIImage {
         guard idx != 0, let name = filters[idx].1, let ci = CIImage(image: image),
               let f = CIFilter(name: name) else { return image }
         f.setValue(ci, forKey: kCIInputImageKey)
@@ -682,7 +719,7 @@ struct ChatImageEditor: View {
         return UIImage(cgImage: cg, scale: image.scale, orientation: image.imageOrientation)
     }
 
-    private static func cropped(_ image: UIImage, aspect: CGFloat?) -> UIImage {
+    static func cropped(_ image: UIImage, aspect: CGFloat?) -> UIImage {
         guard let aspect, let cg = image.cgImage else { return image }
         let w = CGFloat(cg.width), h = CGFloat(cg.height)
         var cw = w, ch = h

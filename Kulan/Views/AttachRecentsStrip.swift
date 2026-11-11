@@ -1,6 +1,7 @@
 import SwiftUI
 import Photos
 import AVFoundation
+import ImageIO
 import UIKit
 
 // Process-lifetime cache of the Recents first page + album list, so reopening the attach sheet renders
@@ -971,7 +972,7 @@ struct AttachRecentsStrip: View {
             }
         }
         Task {
-            let ui = await Self.fullImage(a)
+            let ui = await Self.fullImage(a, forEditor: true)
             await MainActor.run {
                 if let ui {
                     OpenTrace.note("\(started ? "full arrived" : "start by=full") img=\(OpenTrace.s(ui.size))")
@@ -1168,15 +1169,39 @@ struct AttachRecentsStrip: View {
 
     // Full-quality photo bytes (may pull from iCloud — network allowed).
     // (The tap no longer waits for this: see `pick`.)
-    private static func fullImage(_ asset: PHAsset) async -> UIImage? {
-        await withCheckedContinuation { cont in
+    //
+    // ⛔ FOR THE EDITOR: A FINISHED BITMAP NO BIGGER THAN THE LARGEST SEND (perf audit 2026-11-11
+    // M2). The editor used to get the camera original as a lazy `UIImage(data:)`: its 12 to 48 MP
+    // decode then ran on the main thread at first draw (50 to 190 MB), and every filter tap ran on
+    // that full size. Nothing sent is ever larger than `PhotoQuality.high.maxSide`, so the editor's
+    // copy is made at that size, decoded here, off the main thread. Multi-select keeps the lazy
+    // image: ten decoded photos waiting to send would hold ten bitmaps.
+    nonisolated private static func fullImage(_ asset: PHAsset, forEditor: Bool = false) async -> UIImage? {
+        let data: Data? = await withCheckedContinuation { cont in
             let o = PHImageRequestOptions()
             o.deliveryMode = .highQualityFormat   // single callback
             o.isNetworkAccessAllowed = true
             PHImageManager.default().requestImageDataAndOrientation(for: asset, options: o) { data, _, _, _ in
-                cont.resume(returning: data.flatMap(UIImage.init(data:)))
+                cont.resume(returning: data)
             }
         }
+        guard let data else { return nil }
+        guard forEditor else { return UIImage(data: data) }
+        return editorImage(data) ?? UIImage(data: data)
+    }
+
+    /// `data` decoded upright, at most the largest send size on its long side. Off main.
+    nonisolated static func editorImage(_ data: Data) -> UIImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
+        else { return nil }
+        let opts = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(PhotoQuality.high.maxSide),
+        ] as CFDictionary
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts) else { return nil }
+        return UIImage(cgImage: cg)
     }
 
     // Copy the picked video to a temp file the transcoder can read after the request ends.
