@@ -339,9 +339,12 @@ actor LinkPreviewService {
 
     /// First https URL in a text, if any — the one the preview is built for. A bare "fariin.com" counts
     /// (owner 2026-11-06, the reference app's way): read as https, like the reference app.
+    /// Built once (perf audit T9): a new detector per call cost the composer two or three builds
+    /// per keystroke once the text held a full stop. A detector is thread-safe to share.
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
     static func firstURL(in text: String) -> URL? {
-        guard mayHoldLink(text),
-              let d = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
+        guard mayHoldLink(text), let d = linkDetector else { return nil }
         let r = NSRange(text.startIndex..., in: text)
         return d.matches(in: text, range: r).compactMap { linkURL($0, in: text) }.first { $0.scheme == "https" }
     }
