@@ -492,12 +492,48 @@ struct ForwardPicker: View {
                         if isShare {
                             try await ChatService.sendText(cid: cid, text: m.text, clientId: clientId,
                                                            preview: sharePreview, forwarded: false)
+                        } else if let clientId {
+                            // ⛔ REGISTERED WITH MediaSend, like a send from the composer (owner
+                            // 2026-11-11: X on a forwarded video still uploading only hid the bubble,
+                            // and the video arrived anyway once the upload finished). This loop called
+                            // forwardMessage bare, so the X had no task to cancel and no send ever
+                            // looked at the cancel mark. Checked and registered in one main-actor hop,
+                            // so an X tapped while an earlier item was still going skips this one.
+                            let task: Task<Void, Error>? = await MainActor.run {
+                                if MediaSend.shared.wasCancelled(clientId) { return nil }
+                                let t = Task.detached(priority: .userInitiated) {
+                                    try await ChatService.forwardMessage(m, from: src, to: cid, clientId: clientId,
+                                                                         source: sources[m.id])
+                                }
+                                MediaSend.shared.register(clientId, t)
+                                return t
+                            }
+                            guard let task else { throw CancellationError() }
+                            try await task.value
+                            await MainActor.run { MediaSend.shared.finish(clientId) }
                         } else {
-                            try await ChatService.forwardMessage(m, from: src, to: cid, clientId: clientId,
+                            try await ChatService.forwardMessage(m, from: src, to: cid, clientId: nil,
                                                                  source: sources[m.id])
                         }
                     }
                     catch {
+                        // The user's X, not a failure: no "failed" bubble, no error toast. If the
+                        // message document was already written, take it down (same as the composer's
+                        // runRegisteredSend), or the receiver keeps a bubble that never loads.
+                        if let clientId {
+                            let cancelled = await MainActor.run { () -> Bool in
+                                let c = MediaSend.shared.wasCancelled(clientId)
+                                if c, let announced = MediaSend.shared.announcedId(clientId) {
+                                    Task { await ChatService.cancelAnnounced(cid: cid, messageId: announced) }
+                                }
+                                MediaSend.shared.finish(clientId)
+                                return c
+                            }
+                            if cancelled {
+                                PendingOutbox.remove(clientId: clientId)
+                                continue
+                            }
+                        }
                         anyFailed = true
                         // Nothing is coming to replace this one. Clear it from BOTH places: the chat
                         // if it is already open, and the outbox if it has never been opened, or the
