@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 
 /// THE CHAT LIST AS A `UITableView`, because a row has to physically travel between sections.
 ///
@@ -422,9 +423,12 @@ struct ChatListTable: UIViewControllerRepresentable {
     /// blur), and ignoring the container safe area ignores the bar's `safeAreaInset` too: the table
     /// was never told the bar exists, so it made no room at all. The two earlier fixes (803's 1s
     /// window, then `efd560c9`'s offset pin) both reacted to an inset change that never arrived.
-    /// Observed here, so a bar coming or going re-renders this and the controller adds exactly the
-    /// bar's slot to its top safe area; the offset pin then keeps a list at its top at its top.
-    @ObservedObject var voiceBar = VoiceNotePlayer.shared
+    /// ⛔ NOT OBSERVED HERE ANY MORE (perf audit 2026-11-11, M3). This used to be an `@ObservedObject`
+    /// of the whole player, only to read `barVisible`; the player publishes `progress` twenty times
+    /// a second, so a playing note ran this table's full update (diff, nav chrome, every visible
+    /// row's content) twenty times a second. The controller now listens to the player itself and
+    /// moves the inset only when `barVisible` actually flips (`watchVoiceBar`); each update below
+    /// re-checks it as well, which covers the bar's other input, the chat on screen.
     func makeUIViewController(context: Context) -> ChatListTableController {
         let vc = ChatListTableController()
         vc.host = context.coordinator
@@ -439,7 +443,7 @@ struct ChatListTable: UIViewControllerRepresentable {
         // invalidated. The editing state settles first, then the diff runs against it.
         vc.setTint(UIColor(Theme.defaultBubble(dark)))
         vc.setLoadingMore(loadingMore)   // 2026-09-24 feature-audit
-        vc.setVoiceBarInset(voiceBar.barVisible ? VoiceNoteBar.slotHeight : 0)
+        vc.syncVoiceBarInset()   // M3: read, not observed; see the note on the removed `voiceBar`
         vc.setSelecting(selecting)
         // The search bar's cancel button is re-checked on every render as well as every layout
         // pass: SwiftUI re-installs its search controller freely (cancelling a search is enough),
@@ -496,14 +500,27 @@ struct ChatListTable: UIViewControllerRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator {
-        var parent: ChatListTable
+        /// Replaced on every SwiftUI pass; the id lookup below is rebuilt from it on first use.
+        var parent: ChatListTable { didSet { byId = nil } }
         init(_ parent: ChatListTable) { self.parent = parent }
+
+        /// S9 (perf audit 2026-11-11): rows by id, built once per `parent`. `conversation(_:)` used
+        /// to scan pinned then unpinned for every dequeued cell and every visible row on every
+        /// update, so a cell deep in a long list cost a walk of the whole list.
+        private var byId: [String: Conversation]?
+        func rowsById() -> [String: Conversation] {
+            if let m = byId { return m }
+            var m = [String: Conversation](minimumCapacity: parent.pinned.count + parent.unpinned.count)
+            // Pinned wins a duplicate, the order the old scan gave.
+            for conv in parent.pinned where m[conv.id] == nil { m[conv.id] = conv }
+            for conv in parent.unpinned where m[conv.id] == nil { m[conv.id] = conv }
+            byId = m
+            return m
+        }
 
         /// Rows by id, so the data source can hand a cell its conversation without searching two
         /// arrays for every visible row on every pass.
-        func conversation(_ id: String) -> Conversation? {
-            parent.pinned.first { $0.id == id } ?? parent.unpinned.first { $0.id == id }
-        }
+        func conversation(_ id: String) -> Conversation? { rowsById()[id] }
 
         func person(_ id: String) -> UserProfile? {
             parent.people.first { $0.id == id }
@@ -784,11 +801,28 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     private var searchReleaseWork: DispatchWorkItem?
 
     /// The playing-note bar's slot, on top of whatever the bars already give (see
-    /// `ChatListTable.voiceBar`). `additionalSafeAreaInsets` reaches the table's automatic
+    /// `syncVoiceBarInset`). `additionalSafeAreaInsets` reaches the table's automatic
     /// `adjustedContentInset`, so the first row sits under the bar, not beneath it.
     func setVoiceBarInset(_ h: CGFloat) {
         guard abs(additionalSafeAreaInsets.top - h) > 0.5 else { return }
         additionalSafeAreaInsets.top = h
+    }
+
+    /// M3: the bar's slot from the player's current answer. Cheap (a few comparisons), and a no-op
+    /// unless the answer changed, so it is fine to run on every player tick.
+    func syncVoiceBarInset() {
+        setVoiceBarInset(VoiceNotePlayer.shared.barVisible ? VoiceNoteBar.slotHeight : 0)
+    }
+
+    /// M3: the player's own change signal, heard by this controller and not by SwiftUI. It fires
+    /// BEFORE the value moves (`objectWillChange`), so the read waits one main-queue turn. The main
+    /// QUEUE, not the run loop: a run-loop hop waits for a scroll to end, and the bar would then
+    /// arrive late over the first row.
+    private var voiceBarWatch: AnyCancellable?
+    private func watchVoiceBar() {
+        voiceBarWatch = VoiceNotePlayer.shared.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.syncVoiceBarInset() }
     }
 
     func setSearching(_ on: Bool) {
@@ -887,6 +921,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        watchVoiceBar()   // M3
         view.addSubview(tableView)
         tableView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -1526,9 +1561,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // loop called it once per id on every incoming message, squaring the cost of a big account
         // on the main thread. Built once here instead, same priority (pinned wins) as
         // `conversation(_:)` gives a duplicate.
-        var byId: [String: Conversation] = [:]
-        for conv in host.parent.pinned where byId[conv.id] == nil { byId[conv.id] = conv }
-        for conv in host.parent.unpinned where byId[conv.id] == nil { byId[conv.id] = conv }
+        // S9: now the coordinator's own lookup, shared with the data source.
+        let byId = host.rowsById()
         // A theme flip is not part of `ChatRowContent` (see `refreshVisibleContent`), so a row whose
         // content is otherwise unchanged needs its own check here or it keeps the old colours until
         // the transaction's completion block runs the theme check on its own.
