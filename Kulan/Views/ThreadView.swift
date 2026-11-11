@@ -444,7 +444,14 @@ struct ThreadView: View {
     /// the results list all read this one value.
     @State private var searchTerm = ""
     /// Which search run is current; an older one's answer is dropped (the matcher runs off main).
-    private final class SearchRun { var seq = 0 }
+    /// `pendingNavigate`: a run in flight was asked to move the list (a typed term). A newer run that
+    /// supersedes it, such as the silent refresh on `itemsVersion`, takes that over, so the newest
+    /// answer still navigates (2026-11-11: a message landing mid-search lost the jump).
+    private final class SearchRun {
+        var seq = 0
+        var pendingNavigate = false
+        func cancel() { seq &+= 1; pendingNavigate = false }
+    }
     @State private var searchRun = SearchRun()
     @State private var searchCorpus: [InChatMessage] = []
     @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
@@ -6667,7 +6674,7 @@ struct ThreadView: View {
         searchFocused = false
         setUIMode(.normal)
         searchTerm = ""; searchMatches = []; highlightId = nil; lastSearchText = nil; searchAsList = false
-        searchRun.seq &+= 1   // a run still matching drops its answer
+        searchRun.cancel()   // a run still matching drops its answer
         // Leave the conversation where the last result was — no scroll restore on close.
     }
 
@@ -6699,14 +6706,14 @@ struct ThreadView: View {
     private func updateSearchMatches(force: Bool = false, navigate: Bool = true) {
         let q = searchTerm
         guard q.count >= 2 else {
-            searchRun.seq &+= 1   // a run still matching an older term drops its answer
+            searchRun.cancel()   // a run still matching an older term drops its answer
             searchMatches = []; lastSearchText = nil
             return
         }
         if !force, q == lastSearchText { return }   // identical query → no re-run (dedup)
         lastSearchText = q
         let terms = ChatSearch.queryTerms(q)
-        guard !terms.isEmpty else { searchRun.seq &+= 1; searchMatches = []; return }
+        guard !terms.isEmpty else { searchRun.cancel(); searchMatches = []; return }
 
         // How far from the NEWEST match the user currently is (preserved across refinement).
         let distanceFromNewest = searchMatches.isEmpty ? 0 : max(0, (searchMatches.count - 1) - searchIndex)
@@ -6718,12 +6725,16 @@ struct ThreadView: View {
         searchRun.seq &+= 1
         let seq = searchRun.seq
         let run = searchRun
+        // A superseded run that wanted to navigate hands that on to this one.
+        let navigate = navigate || run.pendingNavigate
+        run.pendingNavigate = navigate
         let corpus = searchCorpus
         let live = repo.items
         Task.detached(priority: .userInitiated) {
             let found = Self.searchMatching(corpus: corpus, live: live, terms: terms)
             await MainActor.run {
                 guard seq == run.seq, searchActive, searchTerm == q else { return }
+                run.pendingNavigate = false
                 applySearchMatches(found, distanceFromNewest: distanceFromNewest, focusedId: focusedId,
                                    navigate: navigate)
             }
