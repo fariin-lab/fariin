@@ -173,12 +173,36 @@ struct ChatImageEditor: View {
         let gen = editGen
         let src = base, filter = filterIndex, aspect = Self.aspects[aspectIndex].1
         let genBox = $editGen, cacheBox = $editedCache
-        Task.detached(priority: .userInitiated) {
-            let out = EditorImageOps.cropped(EditorImageOps.filtered(EditorImageOps.bounded(src), filter), aspect: aspect)
-            await MainActor.run {
-                guard genBox.wrappedValue == gen else { return }
-                cacheBox.wrappedValue = out
-            }
+        let work = Task.detached(priority: .userInitiated) {
+            EditorImageOps.cropped(EditorImageOps.filtered(EditorImageOps.bounded(src), filter), aspect: aspect)
+        }
+        pendingEdit = PendingEdit(gen: gen, task: work)
+        Task { @MainActor in
+            let out = await work.value
+            guard genBox.wrappedValue == gen else { return }
+            cacheBox.wrappedValue = out
+        }
+    }
+
+    /// The newest filter pass still running, so Send, crop and the pen's bake can wait for it.
+    struct PendingEdit { let gen: Int; let task: Task<UIImage, Never> }
+    @State private var pendingEdit: PendingEdit?
+    /// True while Send (or Done) waits for that pass; the send button shows a spinner.
+    @State private var settling = false
+
+    /// ⛔ THE LATEST FILTER, ALWAYS (2026-11-11). A filter tap runs in the background, and Send,
+    /// crop and the pen's bake read `edited` at once: a tap just before them sent, cropped or drew on
+    /// the picture WITHOUT that filter, and the bump of `editGen` they make then dropped the filter
+    /// for good. Now they wait for the pass that is still running, land it, then do their work.
+    @MainActor private func whenSettled(_ work: @escaping @MainActor () -> Void) {
+        guard let pending = pendingEdit, pending.gen == editGen else { work(); return }
+        settling = true
+        Task { @MainActor in
+            let out = await pending.task.value
+            if editGen == pending.gen { editedCache = out }
+            pendingEdit = nil
+            settling = false
+            work()
         }
     }
 
@@ -407,6 +431,7 @@ struct ChatImageEditor: View {
     // editor (or the recipient's viewer) moves them in perfect sync, permanently anchored.
     @MainActor private func bakeDrawing() {
         guard !drawing.bounds.isEmpty else { return }
+        guard pendingEdit?.gen != editGen else { whenSettled { bakeDrawing() }; return }
         let canvas = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
         let img = edited.size
         guard img.width > 0, img.height > 0, canvas.width > 0, canvas.height > 0 else { return }
@@ -556,7 +581,7 @@ struct ChatImageEditor: View {
             // in edit-only mode, so it's dropped there.
             if !captionFocused {
                 HStack(spacing: 10) {
-                    tool("crop", active: false) { withAnimation(.easeInOut(duration: 0.28)) { showCrop = true } }
+                    tool("crop", active: false) { whenSettled { withAnimation(.easeInOut(duration: 0.28)) { showCrop = true } } }
                     tool("scribble", active: isDrawing) { if isDrawing { bakeDrawing() }; isDrawing.toggle() }
                     if !editOnly {
                         tool("", active: hd, label: "HD") { hd.toggle() }
@@ -619,9 +644,15 @@ struct ChatImageEditor: View {
                 .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
                 .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minY }) { captionTopY = $0 }
                 Button { send() } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 40, height: 40)   // 40px send button (user spec)
-                        .background(Color(hex: 0x3DA1FD), in: Circle())
+                    Group {
+                        if settling {
+                            ProgressView().tint(.white)   // the last filter is still being applied
+                        } else {
+                            Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                        }
+                    }
+                    .frame(width: 40, height: 40)   // 40px send button (user spec)
+                    .background(Color(hex: 0x3DA1FD), in: Circle())
                 }
                 .buttonStyle(StoryPressStyle())
             }
@@ -655,15 +686,20 @@ struct ChatImageEditor: View {
         // button while the screen was closing. One send per editor.
         guard !sent else { return }
         sent = true
-        let data = flatten()
-        onSend(data, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd, viewOnce)
-        if selfDismissOnSend { dismiss() }
+        whenSettled {
+            let data = flatten()
+            onSend(data, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd, viewOnce)
+            if selfDismissOnSend { dismiss() }
+        }
     }
 
     // Edit-only: hand the flattened (cropped + drawn) image back to the multi-image screen.
     @MainActor private func returnEdited() {
-        onReturn?(UIImage(data: flatten()) ?? edited)
-        close()   // inline overlay → onClose; presented cover → dismiss
+        guard !settling else { return }
+        whenSettled {
+            onReturn?(UIImage(data: flatten()) ?? edited)
+            close()   // inline overlay → onClose; presented cover → dismiss
+        }
     }
 
     @MainActor private func flatten() -> Data {
