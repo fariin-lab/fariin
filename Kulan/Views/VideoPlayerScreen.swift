@@ -62,7 +62,22 @@ struct VideoPlayerScreen: View {
     @State private var lifetime = Lifetime()
     /// Whether this viewer has closed. A reference, so the audio setup that finishes off the main
     /// thread can still ask after the view's own storage is gone.
-    private final class Lifetime { var closed = false }
+    private final class Lifetime {
+        var closed = false
+        /// When the viewer was built, which is the tap (for the VSTREAM# tap-to-first-frame line).
+        let openedAt = Date()
+        var firstFrameLogged = false
+        /// How this clip is being played, for that line: local, stream, full or fallback.
+        var mode = "local"
+        /// The streaming asset (`ChatVideoStream`), released on close or on fallback.
+        var stream: AVURLAsset?
+        var streamHeld: Int64 = 0
+        /// The stream failed or stalled: this viewer downloads the whole clip instead.
+        var noStream = false
+        var itemStatus: NSKeyValueObservation?
+    }
+    /// A plain clip is playing through `ChatVideoStream` and has not drawn its first frame yet.
+    @State private var streaming = false
     @State private var dismissing = false          // dismiss in flight → live content hidden ONCE
     @State private var closeToken = 0              // bump → the button close flies home like the drag
     // Pinch-zoom + pan (video hosted in the same zoomable view as photos).
@@ -311,7 +326,7 @@ struct VideoPlayerScreen: View {
                 .allowsHitTesting(false)
         }
         if let player {
-            PlayerLayerView(player: player, onFirstFrame: { firstFrameShown = true })
+            PlayerLayerView(player: player, onFirstFrame: { firstFrameShown = true; noteFirstFrame() })
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: shownPan.width, y: shownPan.height)
                 .ignoresSafeArea()
@@ -332,6 +347,15 @@ struct VideoPlayerScreen: View {
             // play button is the control. The big one covers the state with no chrome to press.
             if !isPlaying && !showChrome && !zoomed {
                 centerPlayButton.transition(.opacity)
+            }
+            // A streaming clip waits on its first bytes over the poster: say so.
+            if streaming && !firstFrameShown {
+                ZStack {
+                    Circle().fill(.black.opacity(0.5))
+                    ProgressView().tint(.white)
+                }
+                .frame(width: 50, height: 50)
+                .allowsHitTesting(false)
             }
         } else if unavailable {
             VStack(spacing: 10) {
@@ -660,6 +684,17 @@ struct VideoPlayerScreen: View {
         guard let s = message.videoUrl, !s.isEmpty, message.enc != nil else {
             await MainActor.run { unavailable = true }; return
         }
+        // ⛔ A PLAIN CLIP PLAYS WHILE IT ARRIVES (owner approved 2026-11-11). Channels and groups
+        // created since 2026-10-19 store the mp4 itself, so the player reads it through
+        // `ChatVideoStream` (range fetches into one partial file) instead of waiting for the whole
+        // download. Sealed clips (1:1, old encrypted groups) never stream: one seal covers the whole
+        // file. A stream that fails or shows no frame in 8 s falls back to the full download below.
+        let streamed: Bool = await MainActor.run {
+            guard !lifetime.noStream, ChatVideoStream.canStream(enc: message.enc, cid: cid, url: s) else { return false }
+            return startStream(s)
+        }
+        if streamed { return }
+        await MainActor.run { lifetime.mode = lifetime.noStream ? "fallback" : "full" }
         // ⛔ THE SHARED JOB, NOT A SECOND DOWNLOAD — 2026-09-26 media pass. This screen used to fetch
         // the whole clip itself, beside whatever the bubble or the chat-open sweep was already
         // fetching, and lost everything it had when it was closed. It joins that one job now: the
@@ -689,7 +724,74 @@ struct VideoPlayerScreen: View {
         await MainActor.run { if permanent { unavailable = true } else { loadFailed = true } }
     }
 
+    /// Start the clip through `ChatVideoStream`. False: download it whole instead.
+    @MainActor private func startStream(_ s: String) -> Bool {
+        let state = MediaDownloads.shared.state(for: s)
+        // A full download well on its way ends sooner than a fresh stream would start.
+        if let f = state.fraction, f >= 0.6 { return false }
+        guard let made = ChatVideoStream.asset(itemId: message.id, url: s) else { return false }
+        // One transfer for these bytes: the stream takes over from a full download still early on.
+        if state.isActive { MediaDownloads.shared.cancel(s) }
+        let asset = made.asset
+        let life = lifetime
+        life.stream = asset
+        life.streamHeld = made.held
+        life.mode = "stream"
+        streaming = true
+        ChatVideoStream.diag("open id=\(message.id) held=\(made.held)")
+        let item = AVPlayerItem(asset: asset)
+        life.itemStatus = item.observe(\.status, options: [.new]) { item, _ in
+            guard item.status == .failed else { return }
+            Task { @MainActor in streamFallback("item failed") }
+        }
+        startPlayer(item: item)
+        // The watchdog: a stream that shows nothing in 8 s is not going to beat a plain download.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !life.closed, !life.firstFrameLogged, life.stream === asset else { return }
+            streamFallback("no first frame in 8s")
+        }
+        return true
+    }
+
+    /// Give up on the stream and load again as a full download. What arrived stays in the partial.
+    @MainActor private func streamFallback(_ why: String) {
+        let life = lifetime
+        guard !life.closed, let asset = life.stream else { return }
+        let ms = Int(Date().timeIntervalSince(life.openedAt) * 1000)
+        ChatVideoStream.diag("fallback id=\(message.id) why=\(why) ms=\(ms)")
+        life.itemStatus = nil
+        life.stream = nil
+        life.noStream = true
+        life.firstFrameLogged = false
+        life.mode = "fallback"
+        streaming = false
+        if let o = timeObserver { player?.removeTimeObserver(o) }
+        if let e = endObserver { NotificationCenter.default.removeObserver(e) }
+        if let i = interruptObserver { NotificationCenter.default.removeObserver(i) }
+        timeObserver = nil; endObserver = nil; interruptObserver = nil
+        player?.pause()
+        player = nil
+        firstFrameShown = false
+        ChatVideoStream.release(asset)
+        loadAttempt += 1   // `load` runs again, and this time downloads the whole clip
+    }
+
+    /// The first picture is on screen: one VSTREAM# line with the time since the tap.
+    private func noteFirstFrame() {
+        let life = lifetime
+        guard !life.firstFrameLogged else { return }
+        life.firstFrameLogged = true
+        streaming = false
+        let ms = Int(Date().timeIntervalSince(life.openedAt) * 1000)
+        ChatVideoStream.diag("firstframe id=\(message.id) mode=\(life.mode) ms=\(ms) preloaded=\(life.streamHeld)")
+    }
+
     @MainActor private func startPlayer(_ url: URL) {
+        startPlayer(item: AVPlayerItem(url: url))
+    }
+
+    @MainActor private func startPlayer(item: AVPlayerItem) {
         // ⛔ ONE THING PLAYS AT A TIME. This screen sets the category and activates the session
         // directly, with no call check and no handover — and only ONE place in the whole app ever
         // pauses the voice player, which is not this one. So a note playing on the floating bar kept
@@ -705,7 +807,7 @@ struct VideoPlayerScreen: View {
         // be drawn meanwhile, which is the spinner he photographed. The player is built and on
         // screen at once now, so its first frame decodes while the session comes up, and `play()`
         // waits for the session exactly as the voice player's does.
-        let p = AVPlayer(url: url)
+        let p = AVPlayer(playerItem: item)
         player = p
         let life = lifetime
         Task.detached(priority: .userInitiated) {
@@ -746,6 +848,15 @@ struct VideoPlayerScreen: View {
 
     private func cleanup() {
         lifetime.closed = true
+        lifetime.itemStatus = nil
+        if let a = lifetime.stream {
+            if !lifetime.firstFrameLogged {
+                let ms = Int(Date().timeIntervalSince(lifetime.openedAt) * 1000)
+                ChatVideoStream.diag("closed before first frame id=\(message.id) ms=\(ms)")
+            }
+            lifetime.stream = nil
+            ChatVideoStream.release(a)
+        }
         if let o = timeObserver { player?.removeTimeObserver(o) }
         if let e = endObserver { NotificationCenter.default.removeObserver(e) }
         if let i = interruptObserver { NotificationCenter.default.removeObserver(i) }

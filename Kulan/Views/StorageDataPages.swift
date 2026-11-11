@@ -298,6 +298,7 @@ struct ManageStoragePage: View {
                 Task {
                     await Task.detached(priority: .userInitiated) {
                         VideoCache.removeAll()
+                        ChatVideoStream.removeAll()
                         AudioCache.removeAll()
                     }.value
                     refresh()

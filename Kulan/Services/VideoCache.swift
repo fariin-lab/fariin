@@ -49,6 +49,23 @@ enum VideoCache {
         return url(for: messageId) != nil
     }
 
+    /// Take over a finished plain clip that was streamed into a partial file (`ChatVideoStream`), by
+    /// moving it in. Both folders are in the app's container, so this is a rename: a reader that
+    /// still has the file open keeps reading the same bytes. Returns where it now lives.
+    @discardableResult
+    static func adopt(_ file: URL, for messageId: String) -> URL? {
+        let fm = FileManager.default
+        if let have = url(for: messageId) {
+            try? fm.removeItem(at: file)
+            return have
+        }
+        let dest = fileURL(messageId)
+        do { try fm.moveItem(at: file, to: dest) } catch { return nil }
+        try? fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                              ofItemAtPath: dest.path)
+        return dest
+    }
+
     /// Thrown by a send whose own copy could not be kept on this phone.
     struct NoRoomError: LocalizedError {
         var errorDescription: String? {
