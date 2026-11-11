@@ -250,6 +250,9 @@ final class MediaBubbleView: UIView {
             playBadge.isHidden = false
             playBadge.frame = badge
             playBadge.image = MediaPlayGlyph.image(side: badge.height)
+            // The glyph is a filled circle: its shadow is given that circle, not worked out from
+            // the image's alpha offscreen on every scroll frame (perf audit 2026-11-11 L9).
+            playBadge.layer.shadowPath = UIBezierPath(ovalIn: playBadge.bounds.insetBy(dx: badge.width * 0.04, dy: badge.height * 0.04)).cgPath
         } else {
             playBadge.isHidden = true
         }

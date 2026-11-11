@@ -266,6 +266,9 @@ final class RowImageView: UIImageView {
             return v
         }()
         v.isHidden = false
+        // A round shadow under the round spinner, given as a path: one with no path is worked out
+        // from the spokes in an offscreen pass every frame it spins (perf audit 2026-11-11 L9).
+        v.layer.shadowPath = UIBezierPath(ovalIn: v.bounds.insetBy(dx: 3, dy: 3)).cgPath
         v.startAnimating()
         bringSubviewToFront(v)
         setNeedsLayout()
