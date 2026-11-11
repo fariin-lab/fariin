@@ -2268,7 +2268,7 @@ struct ThreadView: View {
                     }
                 })
         }
-        .alert("Delete \(liveSelection.count) message\(liveSelection.count == 1 ? "" : "s")?",
+        .alert("Delete \(liveSelection.count) \(conversation?.isChannel == true ? "post" : "message")\(liveSelection.count == 1 ? "" : "s")?",
                isPresented: $showBulkDeleteConfirm) {
             // Same options as the single-message delete (user report: bulk delete offered only one
             // option). "Delete for Everyone" shows when the selection contains any of my own messages
@@ -2508,7 +2508,7 @@ struct ThreadView: View {
         }
         .navigationDestination(item: $memberProfile) { m in
             ContactInfoView(cid: ChatService.convId(me, m.id), name: m.name,
-                            photoUrl: conversation?.photos[m.id], source: .calls)
+                            photoUrl: conversation?.photos[m.id], source: .member)
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
         .task(id: groupCallActive && !notAMember && !preview) { await followGroupCallPeople() }
@@ -6059,7 +6059,9 @@ struct ThreadView: View {
     /// system line). Anything else keeps the alert: a 1:1, my own messages only, a mixed selection
     /// with something I may only remove from my side.
     private func adminDeleteRequestFor(_ ms: [Message]) -> AdminDeleteRequest? {
-        guard let c = conversation, c.isGroup, c.adminCan(me, .deleteMessages), !ms.isEmpty,
+        // Never in a channel (owner 2026-11-11: "this sheet is groups sheet not channel"): its
+        // admins delete the channel's own posts, so there is no sender to report or sweep.
+        guard let c = conversation, c.isGroup, !c.isChannel, c.adminCan(me, .deleteMessages), !ms.isEmpty,
               ms.allSatisfy({ canDeleteForEveryone($0) }),
               ms.contains(where: { $0.authorId != me && !$0.isSystem }) else { return nil }
         return AdminDeleteRequest(messages: ms)
@@ -10040,7 +10042,17 @@ struct ThreadView: View {
                          showsDelete: selectionShowsDelete,
                          // owner 2026-10-18: other members' messages, as a group admin → the sheet.
                          onDelete: {
-                             if let r = adminDeleteRequestFor(liveSelection) { adminDeleteRequest = r }
+                             let picked = liveSelection
+                             if conversation?.isChannel == true, !picked.isEmpty,
+                                picked.allSatisfy({ canDeleteForEveryone($0) }) {
+                                 // owner 2026-11-11: a channel's posts get the centred glass confirm.
+                                 let n = picked.count
+                                 GlassConfirmDoor.show(
+                                     title: n == 1 ? "Delete this post?" : "Delete \(n) posts?",
+                                     message: n == 1 ? "It will be removed for all followers."
+                                                     : "They will be removed for all followers.",
+                                     confirm: "Delete") { bulkDelete(everyone: true) }
+                             } else if let r = adminDeleteRequestFor(picked) { adminDeleteRequest = r }
                              else { showBulkDeleteConfirm = true }
                          },
                          onForward: { bulkForwardStart() })
@@ -14321,12 +14333,43 @@ private struct MessageActionDialogs: ViewModifier {
     var onAdminProceed: (AdminDeleteOutcome) -> Void = { _ in }
     @State private var deleteFailed = false
 
+    /// A channel post I may delete for everyone: the glass confirm, not the alert below.
+    private func channelConfirm(_ m: Message) -> Bool {
+        conversation?.isChannel == true && canDeleteForEveryone(m)
+    }
+
+    private func deleteForEveryone(_ m: Message) {
+        // The bubble becomes a tombstone NOW, and the server work runs behind it.
+        // deleteMessage reads the doc before writing (it needs the Storage urls),
+        // so waiting for it meant a whole network round trip with nothing moving
+        // on screen — the owner read that as the delete not working at all.
+        let undoable = onMarkDeleted(m)
+        Task {
+            // Say so when the server refuses, and put the message back. An
+            // optimistic tombstone left standing over a message that still exists
+            // for the other person is a worse lie than the old dead button.
+            if await !ChatService.deleteMessage(cid: cid, messageId: m.id) {
+                if undoable { onRestoreDeleted(m) }
+                deleteFailed = true
+            }
+        }
+    }
+
     func body(content: Content) -> some View {
         content
             // owner 2026-10-18: the long-press Delete on another member's message, as a group admin.
             // The alert's binding below never goes up for these, so it cannot flash first.
             .onChange(of: pendingDelete?.id) { _, id in
-                guard id != nil, let m = pendingDelete, let r = adminRequestFor([m]) else { return }
+                guard id != nil, let m = pendingDelete else { return }
+                // owner 2026-11-11: a channel post I may delete gets the centred glass confirm.
+                if channelConfirm(m) {
+                    pendingDelete = nil
+                    GlassConfirmDoor.show(title: "Delete this post?",
+                                          message: "It will be removed for all followers.",
+                                          confirm: "Delete") { deleteForEveryone(m) }
+                    return
+                }
+                guard let r = adminRequestFor([m]) else { return }
                 pendingDelete = nil
                 adminDeleteRequest = r
             }
@@ -14345,8 +14388,8 @@ private struct MessageActionDialogs: ViewModifier {
             // Native alert (the confirmationDialog rendered as an anchored popover on iOS 26). My own
             // message → "Delete for Everyone" (removes the doc) + "Delete for Me" (local hide);
             // someone else's → "Delete for Me" only.
-            .alert("Delete this message?",
-                   isPresented: Binding(get: { pendingDelete.map { adminRequestFor([$0]) == nil } ?? false },
+            .alert(conversation?.isChannel == true ? "Delete this post?" : "Delete this message?",
+                   isPresented: Binding(get: { pendingDelete.map { adminRequestFor([$0]) == nil && !channelConfirm($0) } ?? false },
                                         set: { if !$0 { pendingDelete = nil } })) {
                 if let m = pendingDelete {
                     // NOT for an unsent message (audit): its id is a local clientId, so the server
@@ -14366,20 +14409,7 @@ private struct MessageActionDialogs: ViewModifier {
                     let inGroup = conversation?.isGroup ?? !cid.contains("_")
                     if canDeleteForEveryone(m) {
                         Button("Delete for Everyone", role: .destructive) {
-                            // The bubble becomes a tombstone NOW, and the server work runs behind it.
-                            // deleteMessage reads the doc before writing (it needs the Storage urls),
-                            // so waiting for it meant a whole network round trip with nothing moving
-                            // on screen — the owner read that as the delete not working at all.
-                            let undoable = onMarkDeleted(m)
-                            Task {
-                                // Say so when the server refuses, and put the message back. An
-                                // optimistic tombstone left standing over a message that still exists
-                                // for the other person is a worse lie than the old dead button.
-                                if await !ChatService.deleteMessage(cid: cid, messageId: m.id) {
-                                    if undoable { onRestoreDeleted(m) }
-                                    deleteFailed = true
-                                }
-                            }
+                            deleteForEveryone(m)
                             pendingDelete = nil
                         }
                     }

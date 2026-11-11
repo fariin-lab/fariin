@@ -148,3 +148,97 @@ struct LeaveGroupAlert: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { onClose() }
     }
 }
+
+// ⛔ A PLAIN CONFIRM IN THE SAME CARD (owner 2026-11-11: deleting channel posts showed the group
+// admin sheet). Title, one short line, a red action pill and Cancel, stacked: the Leave/Delete
+// Group card above without the photo. Its own window, so it sits over the selection bar too.
+@MainActor enum GlassConfirmDoor {
+    private static var window: UIWindow?
+
+    static func show(title: String, message: String, confirm: String,
+                     onConfirm: @escaping @MainActor () -> Void) {
+        guard window == nil, let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) else { return }
+        let w = UIWindow(windowScene: scene)
+        w.windowLevel = .alert
+        w.backgroundColor = .clear
+        let host = UIHostingController(rootView: GlassConfirmAlert(title: title, message: message,
+                                                                   confirm: confirm, onConfirm: onConfirm,
+                                                                   onClose: { close() }))
+        host.view.backgroundColor = .clear
+        w.rootViewController = host
+        w.isHidden = false
+        window = w
+    }
+
+    private static func close() {
+        window?.isHidden = true
+        window = nil
+    }
+}
+
+struct GlassConfirmAlert: View {
+    let title: String
+    let message: String
+    let confirm: String
+    let onConfirm: @MainActor () -> Void
+    let onClose: () -> Void
+
+    @State private var shown = false
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(shown ? 0.35 : 0)
+                .ignoresSafeArea()
+                .onTapGesture { close() }
+            if shown {
+                card
+                    .transition(.scale(scale: 1.08).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.9), value: shown)
+        .onAppear { shown = true }
+    }
+
+    private var card: some View {
+        VStack(spacing: 0) {
+            Text(title)
+                .font(.system(size: 17, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .padding(.top, 22).padding(.horizontal, 20)
+            Text(message)
+                .font(.system(size: 14))
+                .multilineTextAlignment(.center)
+                .padding(.top, 6).padding(.horizontal, 20)
+            VStack(spacing: 8) {
+                button(confirm, color: .red, weight: .semibold) {
+                    onConfirm()
+                    close()
+                }
+                button("Cancel", color: .primary, weight: .regular) { close() }
+            }
+            .padding(.horizontal, 14).padding(.top, 18).padding(.bottom, 14)
+        }
+        .frame(width: 290)
+        .liquidGlass(RoundedRectangle(cornerRadius: 30, style: .continuous))
+    }
+
+    private func button(_ title: String, color: Color, weight: Font.Weight,
+                        _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 17, weight: weight))
+                .foregroundStyle(color)
+                .frame(maxWidth: .infinity).frame(height: 48)
+                .background(Capsule().fill(Color.primary.opacity(0.08)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func close() {
+        shown = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { onClose() }
+    }
+}
