@@ -129,10 +129,14 @@ final class MessageRowCell: UICollectionViewCell {
 
     /// The group sender's photo follows the whole run of their messages; the list places it
     /// (`MessageListController.pinRunAvatars`). Called after a configure put it back at its plan.
+    /// Only marks it (audit L10): the list places every run photo once, at the end of its layout.
     func pinAvatar() {
         guard let cv = superview as? UICollectionView else { return }
-        (cv.delegate as? MessageListController)?.pinRunAvatars(extra: self)
+        (cv.delegate as? MessageListController)?.requestRunAvatarPin(from: self)
     }
+
+    /// This row is part of a group sender's run (it can carry the run's photo).
+    var hasRunSlot: Bool { rowView.runSlot != nil }
 
     /// This row's run span in `cv`'s coordinates (see `MessageRowView.runSlot`).
     func runSlot(in cv: UIView) -> (uid: String, first: Bool, last: Bool, top: CGFloat, bottom: CGFloat)? {
