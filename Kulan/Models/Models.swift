@@ -536,8 +536,8 @@ struct Message: Identifiable, Equatable, Codable {
     var bubbleStyle: String? = nil
     /// The sender chose the style's decorations too (`bsd`, owner 2026-11-06, `BubbleDecorSets`).
     var bubbleDecor: Bool = false
-    /// Bold spans in the text, [location, length] in UTF-16 units (`fmt`, channel posts, owner
-    /// 2026-11-07). Nil = plain.
+    /// Bold spans in the text, [location, length] in UTF-16 units (`fmt`, channel posts owner
+    /// 2026-11-07, every chat 2026-11-11). Nil = plain.
     var boldSpans: [[Int]]? = nil
     var boldRanges: [NSRange] { TextFormat.ranges(boldSpans) }
     var pollClosed: Bool = false            // 2026-10-19: the poll's creator tapped Stop Poll
@@ -1030,7 +1030,9 @@ struct Message: Identifiable, Equatable, Codable {
         if let bs = data["bs"] as? String, !bs.isEmpty, bs.count <= 32 { self.bubbleStyle = bs }
         self.bubbleDecor = data["bsd"] as? Bool ?? false
         // Bold spans, opened like the text when sealed; checked against the text's length.
-        if !cid.contains("_"), let raw = data["fmt"] as? String, !raw.isEmpty {
+        // In a 1:1 only a sealed one over sealed text (owner 2026-11-11, the hardening above).
+        if let raw = data["fmt"] as? String, !raw.isEmpty,
+           !cid.contains("_") || (raw.hasPrefix("enc1:") && rawText.hasPrefix("enc1:")) {
             let clear = crypto.decrypt(raw, cid: cid, authorId: data["authorId"] as? String ?? "")
             self.boldSpans = TextFormat.spans(TextFormat.parse(clear, length: (decrypted as NSString).length))
         }
@@ -2667,7 +2669,7 @@ struct ReactionThumb: Hashable {
     let enc: EncMeta?
 }
 
-/// Bold text in channel posts (owner 2026-11-07). On the message, `fmt` is a JSON string
+/// Bold text (channel posts owner 2026-11-07, groups and 1:1 chats 2026-11-11). On the message, `fmt` is a JSON string
 /// `[[location, length, "b"], ...]` in UTF-16 units of the sent text, sealed like `text` when the
 /// chat seals. A string because Firestore cannot store a list inside a list.
 enum TextFormat {
@@ -2713,5 +2715,50 @@ enum TextFormat {
 
     static func ranges(_ spans: [[Int]]?) -> [NSRange] {
         (spans ?? []).compactMap { $0.count == 2 ? NSRange(location: $0[0], length: $0[1]) : nil }
+    }
+
+    // MARK: Copy and paste keep bold (owner 2026-11-11)
+
+    /// Copy: the plain words, plus rich text with the bold when there is some, so a paste here or
+    /// in another app keeps it.
+    static func copy(_ text: String, bold: [NSRange]) {
+        let rs = normalized(bold, length: (text as NSString).length)
+        let rtf: Data? = rs.isEmpty ? nil : {
+            let a = NSMutableAttributedString(string: text, attributes: [.font: UIFont.systemFont(ofSize: 17)])
+            for r in rs { a.addAttribute(.font, value: UIFont.boldSystemFont(ofSize: 17), range: r) }
+            return try? a.data(from: NSRange(location: 0, length: a.length),
+                               documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
+        }()
+        guard let rtf else { UIPasteboard.general.string = text; return }
+        UIPasteboard.general.items = [["public.utf8-plain-text": text, "public.rtf": rtf]]
+    }
+
+    /// The rich text on the pasteboard, if any of it is bold: its plain words and bold spans.
+    /// Nil sends the paste down the ordinary plain-text way.
+    static func pastedBold() -> (text: String, bold: [NSRange])? {
+        let pb = UIPasteboard.general
+        let kinds: [(String, NSAttributedString.DocumentType)] = [
+            ("com.apple.flat-rtfd", .rtfd), ("public.rtf", .rtf), ("public.html", .html)]
+        for (uti, type) in kinds {
+            guard let d = pb.data(forPasteboardType: uti), d.count <= 2_000_000,
+                  let a = try? NSAttributedString(data: d, options: [.documentType: type],
+                                                  documentAttributes: nil) else { continue }
+            // Pictures or other attachments: not a text paste.
+            if a.string.contains("\u{FFFC}") { return nil }
+            var rs: [NSRange] = []
+            a.enumerateAttribute(.font, in: NSRange(location: 0, length: a.length)) { v, r, _ in
+                guard let f = v as? UIFont else { return }
+                let w = (f.fontDescriptor.object(forKey: .traits) as? [UIFontDescriptor.TraitKey: Any])?[.weight] as? CGFloat ?? 0
+                if f.fontDescriptor.symbolicTraits.contains(.traitBold) || w >= UIFont.Weight.semibold.rawValue - 0.01 {
+                    rs.append(r)
+                }
+            }
+            // HTML ends with a line break of its own; the bold must not reach past the words.
+            var text = a.string
+            while text.hasSuffix("\n") { text.removeLast() }
+            let out = normalized(rs, length: (text as NSString).length)
+            return out.isEmpty ? nil : (text, out)
+        }
+        return nil
     }
 }

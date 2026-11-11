@@ -47,7 +47,7 @@ struct ChatComposerState: Equatable {
     var channelSilent: Bool? = nil
     /// A channel admin may hold Post to schedule the text for later (2026-10-28).
     var canSchedule = false
-    /// A channel I post in: the selection menu offers Format > Bold (owner 2026-11-07).
+    /// The selection menu offers Format > Bold (channels 2026-11-07, every chat 2026-11-11).
     var canFormat = false
     /// Reply / edit / link cards stacked above the field, in this order. Empty while recording.
     var banners: [ChatComposerBanner] = []
