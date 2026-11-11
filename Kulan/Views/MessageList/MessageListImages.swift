@@ -1,5 +1,6 @@
 import SwiftUI   // AvatarPalette hands back SwiftUI Colors
 import UIKit
+import ImageIO
 
 // ===== The UIKit half of the app's existing image pipeline =====
 //
@@ -58,7 +59,7 @@ final class RowImageView: UIImageView {
                    cornerRadius: CGFloat = 0, placeholder: UIImage? = nil) {
         layer.cornerRadius = cornerRadius
         layer.cornerCurve = .continuous
-        localMemo = nil   // a url row: the last optimistic copy is not needed any more (see `showLocalBytes`)
+        localKey = nil   // a url row: the last optimistic copy is not shown any more (see `showLocalBytes`)
         // No url: forget the last one entirely (2026-10-04 audit). Leaving `loadedUrl` / `inFlight`
         // set meant a later configure with that same url returned early on the placeholder for good.
         guard let url, !url.isEmpty else {
@@ -176,33 +177,68 @@ final class RowImageView: UIImageView {
         watching = nil
     }
 
-    /// The last optimistic local copy, decoded. See `showLocalBytes`.
-    private var localMemo: (bytes: Data, image: UIImage)?
+    /// The optimistic local copy on show, by its bytes. See `showLocalBytes`.
+    private var localKey: NSData?
+
+    /// Just-sent photos, decoded at bubble size, shared by every row view (a recycled or second
+    /// cell for the same message finds it here). Keyed by the bytes themselves: NSData compares
+    /// them for equality, so two photos can never share an entry.
+    private static let localImages: NSCache<NSData, UIImage> = {
+        let c = NSCache<NSData, UIImage>()
+        c.countLimit = 40
+        c.totalCostLimit = 40 * 1024 * 1024
+        return c
+    }()
+    /// Big enough for any bubble on any iPhone (about 300pt at 3x), far below a send-size photo.
+    private static let localMaxPixel = 1024
 
     /// Shows a just-sent photo's own bytes, before the upload lands. Returns false when the bytes
     /// are not an image, so the caller falls back to the url, as it did with `UIImage(data:)`.
     ///
-    /// ⚠️ DECODED ONCE, NOT ON EVERY CONFIGURE - owner audit 2026-10-06 chat #82. The callers built a
-    /// fresh `UIImage(data:)` on each pass, and this row reconfigures on every tick, progress step
-    /// and reaction while the upload runs, so the full bitmap was decoded on main again each time
-    /// (the same 8ms-per-row cost `InlineThumbCache` notes). The same bytes now reuse one decoded image.
+    /// ⚠️ DECODED ONCE, NOT ON EVERY CONFIGURE - owner audit 2026-10-06 chat #82.
+    ///
+    /// ⛔ AND NOT ON THE MAIN THREAD (perf audit 2026-11-11 L6). The send-size JPEG was decoded
+    /// full size, on main, in the configure that runs during the send flight, once per view. Now
+    /// the header is checked here (cheap), and the picture is made at bubble size in the background
+    /// into a cache every row shares. The flight copy covers the bubble while that runs.
     @discardableResult
     func showLocalBytes(_ data: Data) -> Bool {
-        let ui: UIImage
-        if let memo = localMemo, memo.bytes == data {
-            ui = memo.image
-        } else {
-            guard let fresh = UIImage(data: data) else { return false }
-            ui = fresh.preparingForDisplay() ?? fresh
-            localMemo = (data, ui)
+        let key = data as NSData
+        if let localKey, localKey == key, image != nil { return true }
+        if let hit = Self.localImages.object(forKey: key) {
+            reset()
+            localKey = key
+            image = hit
+            return true
         }
+        guard let src = CGImageSourceCreateWithData(key as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              CGImageSourceGetType(src) != nil, CGImageSourceGetCount(src) > 0 else { return false }
         reset()
-        image = ui
+        localKey = key
+        let mine = token
+        let cache = Self.localImages, maxPixel = Self.localMaxPixel
+        Self.decodeQueue.async { [weak self] in
+            let opts = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            ] as CFDictionary
+            let img = CGImageSourceCreateThumbnailAtIndex(src, 0, opts).map { UIImage(cgImage: $0) }
+            if let img, let cg = img.cgImage {
+                cache.setObject(img, forKey: key, cost: cg.bytesPerRow * cg.height)
+            }
+            DispatchQueue.main.async {
+                guard let self, self.token == mine, self.localKey == key else { return }
+                self.image = img
+            }
+        }
         return true
     }
 
     func reset() {
         token += 1
+        localKey = nil
         unwatch()
         currentUrl = nil
         loadedUrl = nil

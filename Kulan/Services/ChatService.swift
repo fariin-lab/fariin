@@ -2111,7 +2111,12 @@ enum ChatService {
         if let clientId { await MediaSend.shared.markItemDone(clientId) }
         // Seed the cache with the plaintext image under its URL so when the optimistic bubble
         // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
-        if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
+        // Perf audit 2026-11-11 M10: the SENT bytes go to disk as they are (no decode + re-encode,
+        // no second compression of this phone's copy), and the memory copy is decoded here, off
+        // the main thread, so the bubble that picks it up draws without decoding on main.
+        if let ui = UIImage(data: data) {
+            DiskImageCache.shared.store(ui.preparingForDisplay() ?? ui, data: data, for: url, owned: true)
+        }
 
         // The LAST moment Cancel can win: after this the message is committed whole.
         try Task.checkCancellation()
