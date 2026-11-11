@@ -749,7 +749,10 @@ struct ReceivedBubbleSurface: View {
         case .slice(let s): WallpaperBlurSlice(state: s)
         // The fallback, and it keeps the preview pair's two weights rather than the single one —
         // this is a SwiftUI surface and it has `dark` in hand, so it can. See `receivedStyle`.
-        case .material: Rectangle().fill(dark ? Material.ultraThin : Material.thin)
+        case .material:
+            // The light-mode wash the UIKit bubbles wear too (`receivedMaterialWash`).
+            Rectangle().fill(dark ? Material.ultraThin : Material.thin)
+                .overlay(Color(uiColor: Theme.receivedMaterialWash))
         }
     }
 }
