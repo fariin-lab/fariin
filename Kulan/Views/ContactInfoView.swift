@@ -10,7 +10,10 @@ import FirebaseFirestore
 // Where this profile was opened from — the action row + a call-log card adapt to it.
 // From a chat: you're already chatting, so offer Search (not Message). From the Calls
 // tab: offer Message (jump into the chat) + show the recent call with this person.
-enum ProfileSource { case chat, calls, story }   // story: no chat underneath → no Search, no Wallpaper
+// story: no chat underneath → no Search, no Wallpaper.
+// member (owner 2026-11-11): a person opened from a group/channel (members, followers, comments).
+// Everything as .calls except the last-call card, which only a call row opens, as in the reference app.
+enum ProfileSource { case chat, calls, story, member }
 
 /// Carries the header's scroll position out to the nav bar. A preference rather than a shared
 /// observable: it is per-screen state that must die with the screen, and two profiles pushed on top

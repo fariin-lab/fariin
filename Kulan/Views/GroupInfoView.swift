@@ -279,7 +279,7 @@ struct GroupInfoView: View {
             }
             .navigationDestination(item: $profileOf) { m in
                 ContactInfoView(cid: ChatService.convId(me, m.id), name: m.name,
-                                photoUrl: conv?.photos[m.id], source: .calls)
+                                photoUrl: conv?.photos[m.id], source: .member)
             }
             .sheet(isPresented: $showAllMembers) { GroupMembersSheet(cid: cid) }
             .sheet(isPresented: $showEncryption) { ChatEncryptionSheet() }
@@ -2739,7 +2739,7 @@ struct GroupMemberSheet: View {
             .sheet(isPresented: $showProfileHere) {
                 NavigationStack {
                     ContactInfoView(cid: ChatService.convId(me, member.id), name: member.name,
-                                    photoUrl: gatedMemberPhoto, source: .calls)
+                                    photoUrl: gatedMemberPhoto, source: .member)
                 }
                 .presentationDetents([.large])
             }

@@ -652,7 +652,7 @@ struct ChannelFollowersView: View {
         // The same profile page a group member's row opens (GroupInfoView `profileOf`).
         .navigationDestination(item: $profileOf) { f in
             ContactInfoView(cid: ChatService.convId(AuthService.shared.uid ?? "", f.uid), name: f.name,
-                            photoUrl: f.photoUrl, source: .calls)
+                            photoUrl: f.photoUrl, source: .member)
         }
         .refreshable { rows = []; more = true; await load() }
         .task { if rows.isEmpty { await load() } }

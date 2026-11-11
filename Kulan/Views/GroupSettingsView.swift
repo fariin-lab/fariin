@@ -848,7 +848,7 @@ struct GroupAdminsView: View {
         }
         .navigationDestination(item: $profileUid) { uid in
             ContactInfoView(cid: ChatService.convId(me, uid), name: conv?.names[uid] ?? "User",
-                            photoUrl: conv?.photos[uid], source: .calls)
+                            photoUrl: conv?.photos[uid], source: .member)
         }
         .sheet(isPresented: $showInvite) {
             // A channel: one of its followers (owner 2026-10-31), the groups' Choose Member look.
@@ -1365,7 +1365,7 @@ struct GroupMembersListView: View {
         }
         .navigationDestination(item: $profileUid) { uid in
             ContactInfoView(cid: ChatService.convId(me, uid), name: conv?.names[uid] ?? "User",
-                            photoUrl: conv?.photos[uid], source: .calls)
+                            photoUrl: conv?.photos[uid], source: .member)
         }
         .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
     }
