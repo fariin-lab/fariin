@@ -127,6 +127,8 @@ enum SessionWipe {
         // The previous account's imported wallpaper photos, per-chat wallpapers and custom colours
         // showed in the next account's pickers (2026-09-24 audit).
         WallpaperStore.shared.reset()
+        // And the blurred / header copies made from them, in memory and in Caches (2026-11-11).
+        WallpaperBlur.wipe()
         ChatColorStore.shared.reset()
         BubbleStyles.removeChatOverrides()   // each chat's own bubble style (2026-11-07)
         BubbleStyles.removeAccountKeys()     // the all-chats style, decorations, team flag

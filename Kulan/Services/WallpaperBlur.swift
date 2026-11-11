@@ -95,6 +95,21 @@ import UIKit
         }
     }
 
+    /// SIGN-OUT (2026-11-11): the last account's wallpaper pictures, in memory and on disk. Called
+    /// from `SessionWipe` next to `WallpaperStore.reset()`. Jobs still running see the new
+    /// `WallpaperPictureWork.generation` and drop their result.
+    static func wipe() {
+        WallpaperPictureWork.wipeDisk()
+        states = [:]
+        blurImages = WallpaperImageLRU(byteLimit: blurImages.byteLimit)
+        headerImages = WallpaperImageLRU(byteLimit: headerImages.byteLimit)
+        headerDarkTop = [:]
+        inFlight = []
+        backdropCache = [:]
+        UserDefaults.standard.removeObject(forKey: backdropDefaultsKey)
+        ready.tick &+= 1
+    }
+
     fileprivate static func insertPreloaded(_ image: UIImage, key: String) {
         if key.hasPrefix("b|") {
             if blurImages.get(key) == nil { blurImages.put(image, for: key) }
@@ -251,10 +266,37 @@ enum WallpaperPictureWork {
         return img.preparingForDisplay() ?? img
     }
 
-    static func save(_ image: UIImage, key: String) {
+    /// Bumped by `wipeDisk()` on sign-out. A picture started before the wipe carries the old number
+    /// and is never written or shown: it was made from the last account's wallpaper.
+    private static let wipeLock = NSLock()
+    nonisolated(unsafe) private static var wipeCount = 0   // guarded by `wipeLock`
+
+    static var generation: Int {
+        wipeLock.lock(); defer { wipeLock.unlock() }
+        return wipeCount
+    }
+
+    /// `generation` is the number read when the job started. Checked and written under the lock, so
+    /// a render finishing during a sign-out cannot land a file in the folder the wipe just emptied.
+    static func save(_ image: UIImage, key: String, generation gen: Int) {
         guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+        wipeLock.lock(); defer { wipeLock.unlock() }
+        guard gen == wipeCount else { return }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? data.write(to: url(for: key), options: .atomic)
+    }
+
+    /// SIGN-OUT (2026-11-11): every build's picture folder goes, and every job already running is
+    /// stopped from writing. These files are the last account's wallpapers, blurred and cropped.
+    static func wipeDisk() {
+        wipeLock.lock(); defer { wipeLock.unlock() }
+        wipeCount &+= 1
+        let fm = FileManager.default
+        let parent = folder.deletingLastPathComponent()
+        guard let names = try? fm.contentsOfDirectory(atPath: parent.path) else { return }
+        for name in names where name.hasPrefix("wallpaper-pictures-") {
+            try? fm.removeItem(at: parent.appendingPathComponent(name))
+        }
     }
 
     /// Mean relative luminance of `rect` in `image`, 0 (black) to 1 (white). The band is drawn down
@@ -505,7 +547,9 @@ struct WallpaperImageLRU {
         inFlight.insert(key)
         let src = source(for: wallpaper)
         let band = min(size.height, headerBand)
+        let gen = WallpaperPictureWork.generation
         let finish: @MainActor (UIImage?, Bool) -> Void = { image, darkTop in
+            guard gen == WallpaperPictureWork.generation else { return }   // signed out meanwhile
             inFlight.remove(key)
             guard let image else { return }
             headerImages.put(image, for: key)
@@ -527,7 +571,7 @@ struct WallpaperImageLRU {
                     guard let image else { finish(nil, false); return }
                     WallpaperBlurRender.run {
                         let darkTop = WallpaperPictureWork.topIsDark(image, topHeight: darkTopHeight, threshold: darkLuminance)
-                        WallpaperPictureWork.save(image, key: key)
+                        WallpaperPictureWork.save(image, key: key, generation: gen)
                         Task { @MainActor in finish(image, darkTop) }
                     }
                 }
@@ -538,7 +582,7 @@ struct WallpaperImageLRU {
             var darkTop = false
             if let image {
                 darkTop = WallpaperPictureWork.topIsDark(image, topHeight: darkTopHeight, threshold: darkLuminance)
-                WallpaperPictureWork.save(image, key: key)
+                WallpaperPictureWork.save(image, key: key, generation: gen)
             }
             Task { @MainActor in finish(image, darkTop) }
         }
@@ -566,7 +610,9 @@ struct WallpaperImageLRU {
         guard !inFlight.contains(key) else { return }
         inFlight.insert(key)
         let src = source(for: wallpaper)
+        let gen = WallpaperPictureWork.generation
         let finish: @MainActor (UIImage?) -> Void = { image in
+            guard gen == WallpaperPictureWork.generation else { return }   // signed out meanwhile
             inFlight.remove(key)
             guard let image else { return }
             blurImages.put(image, for: key)
@@ -583,7 +629,7 @@ struct WallpaperImageLRU {
                     guard let picture = renderWallpaper(cid: cid, dark: dark, size: size) else { finish(nil); return }
                     WallpaperBlurRender.run {
                         let out = WallpaperPictureWork.blurred(picture, dark: dark)
-                        if let out { WallpaperPictureWork.save(out, key: key) }
+                        if let out { WallpaperPictureWork.save(out, key: key, generation: gen) }
                         Task { @MainActor in finish(out) }
                     }
                 }
@@ -592,7 +638,7 @@ struct WallpaperImageLRU {
             let picture = WallpaperPictureWork.draw(src, size: size, band: size.height, scale: 1,
                                                     darkScrim: false, dim: 0)
             let out = picture.flatMap { WallpaperPictureWork.blurred($0, dark: dark) }
-            if let out { WallpaperPictureWork.save(out, key: key) }
+            if let out { WallpaperPictureWork.save(out, key: key, generation: gen) }
             Task { @MainActor in finish(out) }
         }
     }
@@ -951,6 +997,7 @@ enum WallpaperBlurWarmup {
     }
 
     private static func preload() {
+        let gen = WallpaperPictureWork.generation
         let fm = FileManager.default
         let folder = WallpaperPictureWork.folder
         let parent = folder.deletingLastPathComponent()
@@ -971,7 +1018,10 @@ enum WallpaperBlurWarmup {
             guard (isBlur && blurs < 4) || (isHeader && headers < 2) else { continue }
             guard let image = WallpaperPictureWork.load(key) else { continue }
             if isBlur { blurs += 1 } else { headers += 1 }
-            Task { @MainActor in WallpaperBlur.insertPreloaded(image, key: key) }
+            Task { @MainActor in
+                guard gen == WallpaperPictureWork.generation else { return }   // signed out meanwhile
+                WallpaperBlur.insertPreloaded(image, key: key)
+            }
             if blurs >= 4, headers >= 2 { break }
         }
     }
