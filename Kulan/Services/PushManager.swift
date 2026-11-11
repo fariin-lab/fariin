@@ -357,7 +357,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // a follow-up). "None" → silent banner.
         let sound = SoundStore.sound(cid, .message)
         guard wantSound, sound.id != "none" else { return [.badge] }
-        await MainActor.run { SoundPlayer.shared.play(sound) }
+        SoundPlayer.shared.playAlert(sound)
         return [.badge]
     }
 
