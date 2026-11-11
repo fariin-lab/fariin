@@ -108,6 +108,18 @@ final class AudioRecorder {
     /// It exists for the permission round trip, which is the one place where the answer can arrive
     /// long after the question stopped being relevant.
     private var wantsRecording = false
+    /// A hold has asked for a recording and the session is still coming up off the main thread
+    /// (perf audit T7). Anything that would cancel a running take must cancel this one too, or the
+    /// take starts after the screen that asked for it has gone.
+    var isStarting: Bool { wantsRecording && !isRecording }
+    /// ⛔ THE SESSION IS SWITCHED ON AND OFF HERE, NEVER ON MAIN (perf audit T7). `setActive`
+    /// negotiates with the audio hardware and blocks its caller for 100-300 ms; on main that was the
+    /// late red bar and haptic at every hold, and a hitch after every note. Apple allows it on any
+    /// thread. ONE serial queue, so a give-back queued by the last note's `reset` can never land after
+    /// the next hold's switch-on.
+    static let sessionQueue = DispatchQueue(label: "fariin.voice.session", qos: .userInteractive)
+    /// Which hold a session switch-on belongs to; a later hold or a cancel makes an older one stale.
+    @ObservationIgnored private var startSeq = 0
 
     /// Called on the main thread when the first-ever permission prompt is answered "Don't Allow",
     /// so the chat can show the same "Microphone access is off" alert a later hold gets.
@@ -217,20 +229,36 @@ final class AudioRecorder {
         // below for what a grant arriving without it used to do.
         wantsRecording = true
         if let r = recorder {
-            let s = AVAudioSession.sharedInstance()
-            // ONLY reconfigure if the session isn't already recording-ready (e.g. voice playback left
-            // it in .playback). `setActive(true)` synchronously negotiates with the audio hardware and
-            // blocks the UI ~100–300ms — that was the hold-to-record lag. When the session is already
-            // .playAndRecord (pre-warmed in prepare(), kept warm across records), skip it and record()
-            // instantly. (First record right after playing a voice note still reconfigures.)
-            if s.category != .playAndRecord {
-                try? s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
+            startSeq &+= 1
+            let seq = startSeq
+            // The session comes up on its own queue (perf audit T7), and the take starts back on
+            // main once it is up, only if the same hold still wants it and the same recorder stands.
+            Self.sessionQueue.async {
+                let s = AVAudioSession.sharedInstance()
+                // ONLY reconfigure if the session isn't already recording-ready (e.g. voice playback
+                // left it in .playback). (First record right after playing a voice note reconfigures.)
+                if s.category != .playAndRecord {
+                    try? s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
+                }
+                // Active for the recording only; `reset` gives it back after (audit 06 F5).
+                try? s.setActive(true)
+                // OUTSIDE the guard on purpose: the warm path skips the configuration above, and a
+                // session configured on some other path does not carry this flag for this one.
+                Self.allowHapticsWhileRecording(s)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.wantsRecording, !self.isRecording, seq == self.startSeq,
+                          self.recorder === r else { return }
+                    self.startWarm(r)
+                }
             }
-            // Active for the recording only; `reset` gives it back after (audit 06 F5).
-            try? s.setActive(true)
-            // OUTSIDE the guard on purpose: the warm path skips the configuration above, and a
-            // session configured on some other path does not carry this flag for this one.
-            Self.allowHapticsWhileRecording(s)
+            return
+        }
+        startCold()
+    }
+
+    /// The warm path's second half, on main with the session already up.
+    private func startWarm(_ r: AVAudioRecorder) {
+        do {
             // ⛔ A RECORDER BUILT BEFORE THE SESSION COULD RECORD MAY REFUSE (owner 2026-10-27: after
             // the app is opened fresh the first note stays at 0:00, the second works). `prepare()` builds
             // it on chat open with the session untouched (audit 06 F5), so on a cold launch it was
@@ -249,8 +277,10 @@ final class AudioRecorder {
             if fresh.record() { beginMetering() } else {
                 DiagLog.add("VOICEREC# fresh recorder refused too")
             }
-            return
         }
+    }
+
+    private func startCold() {
         // Not warmed yet (permission just granted / first launch): set up then start.
         //
         // ⛔ THE FINGER HAS TO STILL BE DOWN WHEN THE ANSWER COMES BACK. On the first-ever hold iOS
@@ -761,9 +791,13 @@ final class AudioRecorder {
         // The recording is over: give the session back so other apps' music comes up again (audit
         // 06 F5), unless a voice note is playing on it. prepare() no longer re-activates it, so this
         // is no deactivate/reactivate churn; the next hold activates it once, on touch-down.
+        // On the session queue (perf audit T7), behind any switch-on already queued; a hold that
+        // has begun since (`wantsRecording`) keeps the session.
         Task { @MainActor in
-            guard !VoiceNotePlayer.shared.playing, !self.isRecording else { return }
-            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+            guard !VoiceNotePlayer.shared.playing, !self.isRecording, !self.wantsRecording else { return }
+            Self.sessionQueue.async {
+                try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+            }
         }
         prepare()   // re-build the recorder so the NEXT hold-to-record is quick too
     }

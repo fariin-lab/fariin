@@ -90,7 +90,21 @@ struct ThreadView: View {
     var guest: PublicGroupGuest?
 
     @State private var repo: ThreadRepository
-    @State private var input = ""
+    /// This chat's own row in the chat list, with its live title and photo (perf audit T5).
+    @HeapState private var listHead = ListedConversation(nil)
+    /// ⛔ THE TYPED TEXT IS NOT THIS VIEW'S STATE (perf audit T1, the reference app's way: its input
+    /// panel holds its own text). Every key wrote `@State` here and re-ran this whole screen, the list
+    /// diff included, two or three times per key. The text, the caret and the idle timer live in
+    /// `chrome.composer`; the bar draws what is typed by itself. Only a change made HERE (a draft
+    /// restored, a send clearing the field, a mention inserted, the first-message cap) bumps
+    /// `inputRevision`, the one value the body reads to hand the bar new text.
+    private var input: String {
+        get { chrome.composer.text }
+        nonmutating set { setComposerText(newValue, fromBar: false) }
+    }
+    @State private var inputRevision = 0
+    /// The "@token" at the caret (groups), the only fact about the text the body draws from.
+    @State private var mentionToken: String?
     /// Hold Post > Schedule Post in a channel (2026-10-28).
     @State private var showSchedulePost = false
     // Inserted "@name" -> the uids picked under it, in pick order (groups). A list: two members
@@ -100,7 +114,10 @@ struct ThreadView: View {
     // 2026-09-24 decision D-composer-5: the composer's caret (UTF-16 offset), so the @mention popup
     // and insertion follow the cursor, not the end of the text; and where to put the caret after an
     // insertion, valid only for the exact text it was computed with (never stale on another text).
-    @State private var composerCaret: Int?
+    private var composerCaret: Int? {
+        get { chrome.composer.caret }
+        nonmutating set { chrome.composer.caret = newValue; refreshMentionToken() }
+    }
     @State private var caretAfterMention: (text: String, at: Int)?
     @State private var showGroupAdd = false
     @State private var showGroupCall = false
@@ -212,7 +229,11 @@ struct ThreadView: View {
     @HeapState private var pendingViewOnceConsume: Message? = nil   // view-once photo open in the viewer → mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
-    @State private var typingIdleStop: DispatchWorkItem?   // 3s idle → auto-stop typing (idle pause timer)
+    // 3s idle → auto-stop typing (idle pause timer). In the composer box, not state (perf audit T1).
+    private var typingIdleStop: DispatchWorkItem? {
+        get { chrome.composer.typingIdleStop }
+        nonmutating set { chrome.composer.typingIdleStop = newValue }
+    }
     @HeapState private var viewerImage: Message? = nil
     @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
     @HeapState private var albumScreen: Message? = nil           // tapped a photo GROUP → the album list screen
@@ -311,7 +332,12 @@ struct ThreadView: View {
     /// The review strip's bars, sampled from the stitched file the way the reference app samples a
     /// note (see `SampledWaveform`). Filled by the `.task(id: previewURL)` on the strip.
     @State private var previewDecibels: [Float] = []
-    @State private var previewProgress: Double = 0
+    /// ⛔ NOT STATE (perf audit T6): the review ticker writes it 20 times a second, and as `@State`
+    /// each tick re-ran this whole screen. Written straight onto the bar's waveform instead.
+    private var previewProgress: Double {
+        get { chrome.composer.progress }
+        nonmutating set { chrome.composer.progress = newValue; chrome.composer.bar?.liveProgress(newValue) }
+    }
     @State private var previewTimer: Timer?
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var holdHintDismiss: DispatchWorkItem?   // cancels a superseded flash's own timer (audit)
@@ -322,7 +348,14 @@ struct ThreadView: View {
     @State private var voiceOnceDismiss: DispatchWorkItem?   // cancels a superseded toast's own timer (audit)
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
-    @State private var recordDrag: CGSize = .zero   // live finger translation while holding
+    /// Live finger translation while holding. ⛔ NOT STATE (perf audit T3): every touch sample re-ran
+    /// this whole screen. A move is pushed straight onto the bar (`updateHoldRecording`); a reset to
+    /// zero always comes with a state change (lock, cancel, interruption), whose pass carries it with
+    /// the bar's own clock, as before.
+    private var recordDrag: CGSize {
+        get { chrome.composer.drag }
+        nonmutating set { chrome.composer.drag = newValue }
+    }
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
     /// ⛔ THE HOLD UI WAKES ONLY FOR A REAL HOLD — owner, 2026-08-27: "the hold to record system
@@ -405,7 +438,14 @@ struct ThreadView: View {
     /// The header's "Delete All" — the whole conversation, not the selection. See `navigationBar`.
     @State private var showDeleteAllConfirm = false
     // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
-    @State private var searchQuery = ""
+    /// ⛔ THE SEARCH TERM THE CHAT USES, NOT THE KEYS AS THEY ARE TYPED (perf audit T4). The field
+    /// keeps its own text (`InChatSearchField`) and hands over the trimmed term once typing has
+    /// paused for 250 ms, so a keystroke redraws the field only. The matcher, the row highlights and
+    /// the results list all read this one value.
+    @State private var searchTerm = ""
+    /// Which search run is current; an older one's answer is dropped (the matcher runs off main).
+    private final class SearchRun { var seq = 0 }
+    @State private var searchRun = SearchRun()
     @State private var searchCorpus: [InChatMessage] = []
     @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
     @State private var searchIndex = 0
@@ -423,7 +463,10 @@ struct ThreadView: View {
     /// How far the composer bar stands above the keyboard (or above the safe-area line at rest),
     /// reported by the list's controller, which is what places it. The floating overlays clear the
     /// bar by this. The default is one bar's worth so the first frame is not wrong.
-    @State private var composerLift: CGFloat = 48
+    /// ⛔ NOT THIS VIEW'S STATE (perf audit T2): during a finger-driven keyboard dismiss it changes
+    /// every frame, and as `@State` each frame re-ran this whole screen. It lives in `chrome.lift`,
+    /// which only the few overlays that sit on it observe (`LiftReader`).
+    private var composerLift: ComposerLiftBox { chrome.lift }
     /// This screen counted itself into the shared repository (`repo.open`), so it must count itself
     /// out on leaving. False for a suspended group, which opens nothing (2026-10-27).
     @State private var repoOpened = false
@@ -634,7 +677,9 @@ struct ThreadView: View {
         // as my own message, for the whole push). Rows are built in the first body and `onAppear`
         // comes after it, so cached rows drew as a 1:1 until then. `onAppear` still does the full
         // lookup with its stand-ins.
-        _cachedConv = HeapState(wrappedValue: ConversationsRepository.shared.conversations.first { $0.id == cid })
+        let listed = ConversationsRepository.shared.conversations.first { $0.id == cid }
+        _cachedConv = HeapState(wrappedValue: listed)
+        _listHead = HeapState(wrappedValue: ListedConversation(listed))
         // ALWAYS start hidden — even a warm cache hit. Video showed the bug: when revealed started true
         // (cache hit), the chat was visible DURING the push transition at a not-yet-bottom position, then
         // jumped to the bottom. Starting hidden + settling under the veil (revealAtOpenAnchor, run from
@@ -845,31 +890,38 @@ struct ThreadView: View {
             // scrolled (the reported bug). As an overlay it respects the bottom safe area (floats just above
             // the composer, rides the keyboard) and is fully tappable (padding, not offset).
             .overlay(alignment: .bottomTrailing) {
-                VStack(spacing: 10) {
-                    if searchActive {
-                        searchArrows   // the reference shows the search arrows here instead
-                    } else {
-                        reactionJumpButton   // sits ABOVE the arrow, like the reference
-                        jumpToBottomButton
+                LiftReader(box: composerLift) { lift, animated in
+                    VStack(spacing: 10) {
+                        if searchActive {
+                            searchArrows   // the reference shows the search arrows here instead
+                        } else {
+                            reactionJumpButton   // sits ABOVE the arrow, like the reference
+                            jumpToBottomButton
+                        }
                     }
+                    // ⛔ ABOVE THE COMPOSER, MEASURED WHERE THE COMPOSER IS PUT. This was a bare 10,
+                    // which worked only while the bar was SwiftUI's `safeAreaBar` and grew the bottom
+                    // safe area. The bar is UIKit's now, so the padding started at the keyboard and the
+                    // arrow landed on the mic button (his screenshot, 2026-08-26).
+                    .padding(.bottom, lift + 10)
+                    // perf audit T2: on the keyboard's curve for a single move; a stream of moves (a
+                    // finger dragging the keyboard) is followed 1:1 instead of restarting the curve
+                    // every frame, which made the arrow trail and wobble behind the keyboard.
+                    .animation(animated ? keyboard.systemAnimation : nil, value: lift)
                 }
-                // ⛔ ABOVE THE COMPOSER, MEASURED WHERE THE COMPOSER IS PUT. This was a bare 10,
-                // which worked only while the bar was SwiftUI's `safeAreaBar` and grew the bottom
-                // safe area. The bar is UIKit's now, so the padding started at the keyboard and the
-                // arrow landed on the mic button (his screenshot, 2026-08-26).
-                .padding(.bottom, composerLift + 10)
-                .animation(keyboard.systemAnimation, value: composerLift)
             }
             // owner 2026-10-27: no "recording" bubble over the list any more; the header says
             // "recording…" where it says "typing…" (presenceSubtitle).
             // In-chat search as a list ("Show as List"): over the conversation, under the bars.
             .overlay {
                 if searchActive && searchAsList && !searchMatches.isEmpty {
-                    InChatSearchList(rows: searchListRows,
-                                     terms: ChatSearch.queryTerms(searchQuery.trimmingCharacters(in: .whitespaces)),
-                                     bottomInset: composerLift + 8,
-                                     onSelect: openSearchResult)
-                        .transition(.opacity)
+                    LiftReader(box: composerLift) { lift, _ in
+                        InChatSearchList(rows: searchListRows,
+                                         terms: ChatSearch.queryTerms(searchTerm),
+                                         bottomInset: lift + 8,
+                                         onSelect: openSearchResult)
+                    }
+                    .transition(.opacity)
                 }
             }
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
@@ -1156,12 +1208,14 @@ struct ThreadView: View {
                     // The window is the reference frame here, for the same reason the wallpaper
                     // takes it a few lines down: this screen is drawn ignoring the safe area, so the
                     // only place the real inset still exists is the window.
-                    ThreadSkeleton()
-                        .padding(.top, Self.skeletonTopInset)
-                        // 2026-10-27: the skeleton now fills from the bottom, so it stops above the
-                        // composer (the same lift the jump arrow uses) instead of running under it.
-                        .padding(.bottom, composerLift + 10)
-                        .allowsHitTesting(false)
+                    LiftReader(box: composerLift) { lift, _ in
+                        ThreadSkeleton()
+                            .padding(.top, Self.skeletonTopInset)
+                            // 2026-10-27: the skeleton now fills from the bottom, so it stops above the
+                            // composer (the same lift the jump arrow uses) instead of running under it.
+                            .padding(.bottom, lift + 10)
+                    }
+                    .allowsHitTesting(false)
                 }
             }
             // A chat with nothing in it yet says what it is. Every standard messenger does this: two of
@@ -1173,12 +1227,14 @@ struct ThreadView: View {
             // 2026-11-07: "make it bottom, not centre"), the same lift the jump arrow uses.
             .overlay(alignment: .bottom) {
                 if let t = jumpToast {
-                    Text(t).font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(.black.opacity(0.8), in: Capsule())
-                        .padding(.bottom, composerLift + 12)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .allowsHitTesting(false)
+                    LiftReader(box: composerLift) { lift, _ in
+                        Text(t).font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(.black.opacity(0.8), in: Capsule())
+                            .padding(.bottom, lift + 12)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .allowsHitTesting(false)
                 }
             }
     }
@@ -1480,7 +1536,7 @@ struct ThreadView: View {
                     // No composer reports a lift here, so the floating arrow sat where a composer
                     // would be, far above the Join bar (owner 2026-10-23). The bar's own top is it.
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                        if let lift = Self.barLift(top: top) { composerLift = lift }
+                        if let lift = Self.barLift(top: top) { composerLift.set(lift) }
                     }
             } else if selecting {
                 selectionActionBar.transition(.move(edge: .bottom).combined(with: .opacity))
@@ -1493,13 +1549,13 @@ struct ThreadView: View {
                 // so the tap morphs one into the other.
                 ChannelFollowerBar(conv: conv).transition(.opacity)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                        if let lift = Self.barLift(top: top) { composerLift = lift }
+                        if let lift = Self.barLift(top: top) { composerLift.set(lift) }
                     }
             } else if let conv = conversation, conv.isChannel, !conv.users.contains(me), !groupModHidesChat {
                 // Not following: Follow where the composer goes (`ChannelFollowerBar`).
                 ChannelFollowerBar(conv: conv).transition(.opacity)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                        if let lift = Self.barLift(top: top) { composerLift = lift }
+                        if let lift = Self.barLift(top: top) { composerLift.set(lift) }
                     }
             } else if conversation == nil, ChannelFollows.shared.follows(cid) {
                 // A channel I follow whose doc has not loaded yet (owner 2026-10-29: a follower
@@ -2528,7 +2584,14 @@ struct ThreadView: View {
                                        conversation: conversation,
                                        loadedByAuthor: { ms in loadedDeletable(by: ms.map(\.authorId)) },
                                        onAdminProceed: { o in applyAdminDelete(o) }))
-        .onChange(of: ConversationsRepository.shared.conversations) { _, list in conversationsChanged(list) }
+        // ⛔ THIS CHAT'S ROW OF THE LIST, NOT THE WHOLE LIST (perf audit T5). Reading the list here made
+        // every change to ANY chat (someone typing elsewhere, a message in another group) re-run this
+        // whole screen. A small watcher reads the list instead and calls back only when this chat's
+        // own row, its title or its photo changes.
+        .background(OneConversationWatch(cid: cid) { v in
+            if v.conv != listHead.conv { conversationsChanged(v.conv) }
+            if v != listHead { listHead = v }
+        })
         // ⛔ ASK FOR THE KEY THE MOMENT THE REQUEST IS SENT — owner, 2026-09-11 ("Everyone: new
         // user → 1 message → Message Request → ask for Chat Key → correct key → main chat"). Once
         // per chat, remembered on this phone; the awaiting-reply bar keeps the button for after.
@@ -2567,7 +2630,7 @@ struct ThreadView: View {
         // could not be sent here anyway, so it is cancelled and the partial discarded.
         .onChange(of: sendingClosed) { _, closed in
             if closed { Self.dismissKeyboard() }   // the notice replacing the box has no field
-            guard closed, recordLocked || holdStarted || reviewingNote || recorder.isRecording else { return }
+            guard closed, recordLocked || holdStarted || reviewingNote || recorder.isRecording || recorder.isStarting else { return }
             cancelRecording()
         }
         // Both retry triggers, as ONE modifier taking two method references — see `RetrySweep`.
@@ -2724,7 +2787,7 @@ struct ThreadView: View {
             // comment guarded against — and popping back adopts the draft straight away.)
             if recordLocked {
                 parkRecordingDraft()
-            } else if recorder.isRecording {
+            } else if recorder.isRecording || recorder.isStarting {   // a take whose session is still coming up too (perf T7)
                 recorder.cancel()
                 recordDrag = .zero; holdStarted = false
                 recordCancelArmed = false   // audit: a stale armed flag silently discarded the NEXT
@@ -2789,11 +2852,7 @@ struct ThreadView: View {
         .onChange(of: photoItems) { _, items in Task { await sendPickedMulti(items) } }
         // Draft follows every edit (so the chat list is correct the moment you leave), but
         // NOT while inline-editing a sent message — that text is the message, not a draft.
-        .onChange(of: input) { _, v in
-            // owner audit 2026-10-06 chat #44: `set` is cheap now; sealing and the disk write are
-            // coalesced inside Drafts and flushed on pause, on leaving and on backgrounding.
-            if editingMessage == nil { Drafts.shared.set(cid, v) }
-        }
+        // (The draft follows every edit from `inputChanged` now, perf audit T1.)
         // owner audit 2026-10-06 chat #73: midnight (and a carrier time fix or DST), a time zone change
         // and a locale or 12/24-hour change move every day label and time on the page while nothing
         // in the data does. One tick re-keys the grouping, signature and row-model caches.
@@ -2999,8 +3058,7 @@ struct ThreadView: View {
         if ThreadRepository.setCuts(cid: cid, historyStart: start, joinedAt: joined) { repo.reapplyCuts() }
     }
 
-    private func conversationsChanged(_ list: [Conversation]) {
-        let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
+    private func conversationsChanged(_ resolved: Conversation?) {
         // 2026-10-19: a group that leaves the list while I'm in it. Removed from it, or just
         // pushed below the list's window? Ask the server once; removed keeps the group page
         // with me out of `users`, so the "no longer a member" bar shows instead of a 1:1 composer.
@@ -3162,7 +3220,7 @@ struct ThreadView: View {
     /// re-read `repo.items` and re-asked the calendar, called two or three times per row by BOTH the
     /// signature build and the row-model build: in a 500-800 row window that was thousands of
     /// calendar calls on the main thread every time a message or a read tick landed.
-    struct RowGeometry {
+    struct RowGeometry: Equatable {
         var showDate: Bool
         var first: Bool
         var last: Bool
@@ -3836,7 +3894,7 @@ struct ThreadView: View {
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
                 storyQuoteOpens: true,
                 isHighlighted: msg.id == highlightId,
-                searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
+                searchTerm: searchActive ? searchTerm : "",
                 isFirstInCluster: isFirstInCluster(at: index),
                 isLastInCluster: isLastInCluster(at: index),
                 // A message their block held keeps one tick (`Message.held`).
@@ -3988,7 +4046,7 @@ struct ThreadView: View {
         let pins = repo.pinnedMessageIds
         // Audit M3: the active search term must be a signature input — visible rows never repainted
         // their in-text match highlight as the query changed (only the jumped-to row, via highlightId).
-        let term = searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : ""
+        let term = searchActive ? searchTerm : ""
         // Audit M2: viewedOnceTick keys the cache so consuming a view-once photo repaints its bubble.
         // Chat colour: a live colour change flips a row's route (UIKit default-colour cell ⇄
         // colour-capable SwiftUI cell). It changes no message content, so without it in the
@@ -4202,6 +4260,44 @@ struct ThreadView: View {
         // Bumped only when the models are actually rebuilt. The list uses it to skip its direct repaint
         // pass entirely when nothing can have changed — see `uikitModelsVersion` at the call site.
         var version = 0
+        /// The chat-wide half of the key the rows below were built under (perf audit L4/E3).
+        var ctxKey = ""
+        /// Each row's inputs next to the model they produced, for the rows whose model depends on
+        /// nothing else (see `uikitRowProbe`).
+        var rows: [String: UikitRowMemo] = [:]
+    }
+
+    /// ⛔ ONLY THE ROWS WHOSE MESSAGE CHANGED ARE BUILT AGAIN (perf audit L4/E3, the reference app's
+    /// way: its list updates only the items whose entry changed). A new message, a read tick, the
+    /// disappearing-message sweep every 15 s, a search keystroke or a highlight used to rebuild the
+    /// model of every loaded row. Now, while the chat-wide half of the key is unchanged, a row whose
+    /// own inputs (`UikitRowProbe`) are equal to last time keeps its model. Anything chat-wide that
+    /// changes (theme, colour, wallpaper, names, roles, stories, the other caches' ticks, selection
+    /// mode) still rebuilds every row, exactly as before.
+    final class UikitRowProbe: Equatable {
+        let msg: Message
+        let geo: RowGeometry
+        let read: Bool, delivered: Bool, selected: Bool, highlighted: Bool
+        let term: String
+        let orig: Message?
+        let quoteFlags: Int
+        let name: String?, avatar: String?, verified: Bool
+        init(msg: Message, geo: RowGeometry, read: Bool, delivered: Bool, selected: Bool, highlighted: Bool,
+             term: String, orig: Message?, quoteFlags: Int, name: String?, avatar: String?, verified: Bool) {
+            self.msg = msg; self.geo = geo; self.read = read; self.delivered = delivered
+            self.selected = selected; self.highlighted = highlighted; self.term = term; self.orig = orig
+            self.quoteFlags = quoteFlags; self.name = name; self.avatar = avatar; self.verified = verified
+        }
+        static func == (a: UikitRowProbe, b: UikitRowProbe) -> Bool {
+            a.read == b.read && a.delivered == b.delivered && a.selected == b.selected
+                && a.highlighted == b.highlighted && a.quoteFlags == b.quoteFlags && a.verified == b.verified
+                && a.geo == b.geo && a.term == b.term && a.name == b.name && a.avatar == b.avatar
+                && a.msg == b.msg && a.orig == b.orig
+        }
+    }
+    struct UikitRowMemo {
+        var probe: UikitRowProbe
+        var model: MessageRowModel
     }
     @State private var uikitModelCache = UikitModelCache()
 
@@ -4250,14 +4346,20 @@ struct ThreadView: View {
         var k = ""
         k.reserveCapacity(512)
         func add(_ v: String) { k += v; k += "|" }
+        // ⛔ TWO HALVES (perf audit L4/E3). Before the "§": what each row can answer for itself
+        // (`UikitRowProbe`), so a change there rebuilds only the rows it touches. After it: what is
+        // the same for every row, so a change there rebuilds them all. Nothing was taken out.
         add("\(repo.itemsVersion)"); add("\(repo.otherLastReadMillis)"); add("\(repo.otherDeliveredMillis)")
         add(highlightId ?? "-")
+        // Hashed, not joined: Set's hashValue is order-independent and does not allocate.
+        add("\(selectedIds.count):\(selectedIds.hashValue)")
+        add(searchActive ? searchTerm : "")
+        add("\(repo.expiryTick)")
+        k += "§"
         add("\(repo.iBlocked)"); add("\(readReceiptsOn)"); add("\(dark)")
         add("\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)")
-        // Hashed, not joined: Set's hashValue is order-independent and does not allocate.
-        add("\(selecting)"); add("\(wasSelecting)"); add("\(selectedIds.count):\(selectedIds.hashValue)")
+        add("\(selecting)"); add("\(wasSelecting)")
         add(chatColorSpec?.stored ?? "-"); add(firstUnreadId ?? "-")
-        add(searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "")
         add("\(isGroup)"); add("\(groupMembers.count)")
         // storiesVersion / didLoad (a story reply's card), hiddenTick (album tiles hidden for me),
         // viewedOnceTick (the view-once pill), expiryTick (the countdown).
@@ -4266,7 +4368,6 @@ struct ThreadView: View {
         add("\(conversation?.repliesOff == true)|\(conversation?.quotesOff == true)")   // the channel's replies switch moves every post's bar (2026-11-06)
         add("\(conversation?.bubbleStylesOff == true)")   // the group's Bubble styles switch (2026-11-07)
         add("\(groupCardTick)")   // a group invite card's live answer (`LiveGroupCard`)
-        add("\(repo.expiryTick)")
         // An edit waiting for the server draws the sending clock; the chat's timer draws its icon.
         add("\(editPendingIds.count):\(editPendingIds.hashValue)")
         add("\(conversation?.disappearSeconds ?? 0)")
@@ -4320,7 +4421,7 @@ struct ThreadView: View {
             onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
             otherLastReadMillis: repo.otherLastReadMillis,
             otherDeliveredMillis: repo.otherDeliveredMillis, iBlocked: repo.iBlocked,
-            searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
+            searchTerm: searchActive ? searchTerm : "",
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
             roleFor: { isGroup ? conversation?.roles[$0]?.display : nil },   // owner 2026-10-18 Role
@@ -4340,10 +4441,27 @@ struct ThreadView: View {
             otherName: isGroup ? "" : personName(otherUid))
 
         var out: [String: MessageRowModel] = [:]
+        out.reserveCapacity(repo.items.count)
+        // perf audit L4/E3: rows whose own inputs did not move keep their model while the chat-wide
+        // half of the key is the same. The timer's start is chat-wide too (`provisionalExpiry`).
+        let ctxKey = String(key[(key.firstIndex(of: "§") ?? key.startIndex)...])
+            + "|\(timerSince?.timeIntervalSince1970 ?? 0)"
+        let cache = uikitModelCache
+        let reuse = cache.ctxKey == ctxKey
+        var memo: [String: UikitRowMemo] = [:]
+        memo.reserveCapacity(repo.items.count)
+        var changed = !reuse
+        let now = Date()
         // owner audit 2026-10-06 chat #45: one pass for grouping and dates, shared with the signatures.
         let geo = rowGeometry
         for (idx, m) in repo.items.enumerated() {
             let g = idx < geo.count ? geo[idx] : RowGeometry(showDate: true, first: true, last: true, gap: 0, dateLabel: nil)
+            let probe = uikitRowProbe(m, geo: g, ctx: ctx, now: now)
+            if reuse, let probe, let old = cache.rows[m.rowId], old.probe == probe {
+                out[m.rowId] = old.model
+                memo[m.rowId] = old
+                continue
+            }
             guard let model = MessageRowModelBuilder.model(
                 for: m, at: idx, ctx: ctx,
                 isFirstInCluster: g.first,
@@ -4351,11 +4469,58 @@ struct ThreadView: View {
                 dateHeader: g.showDate ? (g.dateLabel ?? dayLabel(m.createdAt)) : nil,
                 topSpacing: g.gap) else { continue }
             out[m.rowId] = model
+            if let probe, Self.uikitMemoable(model) { memo[m.rowId] = UikitRowMemo(probe: probe, model: model) }
+            if !changed, cache.models[m.rowId] != model { changed = true }
         }
-        uikitModelCache.key = key
-        uikitModelCache.models = out
-        uikitModelCache.version &+= 1
+        if out.count != cache.models.count { changed = true }
+        cache.key = key
+        cache.ctxKey = ctxKey
+        cache.rows = memo
+        cache.models = out
+        // Only when a model really differs: the list's repaint pass has nothing to do otherwise.
+        if changed { cache.version &+= 1 }
         return out
+    }
+
+    /// One row's own inputs to its model, or nil when the model also reads something the probe
+    /// cannot see (a call's age, a quoted channel post, a mention's live name, a timer stamp still to
+    /// come from the server, a time in the future), so such a row is built every time, as before.
+    @inline(never) private func uikitRowProbe(_ m: Message, geo g: RowGeometry, ctx: MessageRowContext,
+                                              now: Date) -> UikitRowProbe? {
+        guard !m.isCall, m.quoteId == nil, m.mentions.isEmpty, m.createdAt <= now,
+              !(ctx.timer != nil && m.expiresAt == nil) else { return nil }
+        let sentMs = m.createdAt.timeIntervalSince1970 * 1000
+        let term = ctx.searchTerm.count >= 2
+            ? MessageRowModelBuilder.rowTerm(ctx.searchTerm, in: m.safeText) + "\u{1}"
+                + MessageRowModelBuilder.rowTerm(ctx.searchTerm, in: m.text)
+            : ""
+        var orig: Message?
+        var quoteFlags = 0
+        if let r = m.replyTo, !r.isStatus {
+            orig = loadedMessage(id: r.id)
+            quoteFlags = (repo.quoteOriginalDeleted(r.id) ? 1 : 0) | (repo.isHiddenByBlock(id: r.id) ? 2 : 0)
+                | (repo.isFromBeforeThisDevice(id: r.id) ? 4 : 0)
+        }
+        return UikitRowProbe(
+            msg: m, geo: g,
+            read: !ctx.iBlocked && ctx.otherLastReadMillis >= sentMs,
+            delivered: !ctx.iBlocked && ctx.otherDeliveredMillis >= sentMs,
+            selected: ctx.selectedIds.contains(m.id), highlighted: m.id == ctx.highlightId,
+            term: term, orig: orig, quoteFlags: quoteFlags,
+            name: ctx.isGroup ? personName(m.authorId) : nil,
+            avatar: ctx.isGroup ? conversation?.photos[m.authorId] : nil,
+            verified: ctx.isGroup && VerificationIndex.of(m.authorId)?.showsBadge == true)
+    }
+
+    /// The row kinds whose model reads nothing beyond its probe: a text, an emoji or a single photo,
+    /// video or gif bubble. A voice note (played dot), an album (hidden and cancelled tiles), a poll,
+    /// a file, a pill, a notice or a call is built every time, as before.
+    private static func uikitMemoable(_ model: MessageRowModel) -> Bool {
+        guard case .bubble(let b) = model.content else { return false }
+        switch b.body {
+        case .text, .jumbomoji, .media: return true
+        default: return false
+        }
     }
 
     // Long-press menu for UIKit-routed rows — the SAME native menu (same items, same order, same
@@ -5750,8 +5915,8 @@ struct ThreadView: View {
             // height and overwrote the bar's (`ChannelFollowerBar` reports its top itself), as the
             // guest's Join bar already does.
             onComposerGeometry: { lift, side in
-                if guest == nil && !channelFollowerBarShown { composerLift = lift }
-                composerSide = side
+                if guest == nil && !channelFollowerBarShown { composerLift.set(lift) }
+                if composerSide != side { composerSide = side }
             },
             onJumpButtonVisibility: { showJumpButton = $0 },
             isAtBottom: $isAtBottom,
@@ -6482,7 +6647,7 @@ struct ThreadView: View {
 
     private func activateSearch() {
         setUIMode(.search)
-        searchQuery = ""; searchMatches = []; searchIndex = 0; lastSearchText = nil; searchAsList = false
+        searchTerm = ""; searchMatches = []; searchIndex = 0; lastSearchText = nil; searchAsList = false
         inputFocused = false
         Task {
             let corpus = await MessageSearch.loadChat(cid: cid, isGroup: isGroup, me: me)
@@ -6498,7 +6663,8 @@ struct ThreadView: View {
     private func closeSearch() {
         searchFocused = false
         setUIMode(.normal)
-        searchQuery = ""; searchMatches = []; highlightId = nil; lastSearchText = nil; searchAsList = false
+        searchTerm = ""; searchMatches = []; highlightId = nil; lastSearchText = nil; searchAsList = false
+        searchRun.seq &+= 1   // a run still matching drops its answer
         // Leave the conversation where the last result was — no scroll restore on close.
     }
 
@@ -6506,7 +6672,7 @@ struct ThreadView: View {
     /// characters; below that there are no results because nothing was looked up, which is a
     /// different fact from "looked up and found nothing" and must not be reported as one.
     private var searchTermIsSearchable: Bool {
-        searchQuery.trimmingCharacters(in: .whitespaces).count >= 2
+        searchTerm.count >= 2
     }
 
     // Recompute matches as you type — our search semantics:
@@ -6528,31 +6694,59 @@ struct ThreadView: View {
     /// new message, reaction, tick or page pulled a reader who had scrolled away back to the match
     /// and flashed it again. Silent refreshes keep the focus on the same message where it survives.
     private func updateSearchMatches(force: Bool = false, navigate: Bool = true) {
-        let q = searchQuery.trimmingCharacters(in: .whitespaces)
+        let q = searchTerm
         guard q.count >= 2 else {
+            searchRun.seq &+= 1   // a run still matching an older term drops its answer
             searchMatches = []; lastSearchText = nil
             return
         }
         if !force, q == lastSearchText { return }   // identical query → no re-run (dedup)
         lastSearchText = q
         let terms = ChatSearch.queryTerms(q)
-        guard !terms.isEmpty else { searchMatches = []; return }
+        guard !terms.isEmpty else { searchRun.seq &+= 1; searchMatches = []; return }
 
         // How far from the NEWEST match the user currently is (preserved across refinement).
         let distanceFromNewest = searchMatches.isEmpty ? 0 : max(0, (searchMatches.count - 1) - searchIndex)
         let focusedId = searchMatches.indices.contains(searchIndex) ? searchMatches[searchIndex].id : nil
 
+        // ⛔ MATCHED OFF MAIN (perf audit T4): tokenizing the loaded window and filtering up to a
+        // thousand messages ran on main per keystroke. The corpus and the window are value copies;
+        // only the newest run's answer is taken, and only while the same term is still searched.
+        searchRun.seq &+= 1
+        let seq = searchRun.seq
+        let run = searchRun
+        let corpus = searchCorpus
+        let live = repo.items
+        Task.detached(priority: .userInitiated) {
+            let found = Self.searchMatching(corpus: corpus, live: live, terms: terms)
+            await MainActor.run {
+                guard seq == run.seq, searchActive, searchTerm == q else { return }
+                applySearchMatches(found, distanceFromNewest: distanceFromNewest, focusedId: focusedId,
+                                   navigate: navigate)
+            }
+        }
+    }
+
+    /// The matcher itself, unchanged: the corpus and the live window merged (the window wins
+    /// nothing: the first copy of an id is kept), token-prefix AND match, oldest first, newest 500.
+    nonisolated private static func searchMatching(corpus: [InChatMessage], live: [Message],
+                                                   terms: [String]) -> [InChatMessage] {
         var seen = Set<String>()
         var pool: [InChatMessage] = []
-        for m in searchCorpus where seen.insert(m.id).inserted { pool.append(m) }
-        for m in repo.items where !m.text.isEmpty && !m.viewOnce && seen.insert(m.id).inserted {
+        for m in corpus where seen.insert(m.id).inserted { pool.append(m) }
+        for m in live where !m.text.isEmpty && !m.viewOnce && seen.insert(m.id).inserted {
             pool.append(InChatMessage(id: m.id, text: m.text, authorId: m.authorId,
                                       date: m.createdAt, tokens: ChatSearch.tokens(m.text)))
         }
         let matched = pool
             .filter { ChatSearch.matches(tokens: $0.tokens, terms: terms) }
             .sorted { $0.date < $1.date }
-        searchMatches = Array(matched.suffix(500))   // keep the newest 500 (result cap)
+        return Array(matched.suffix(500))   // keep the newest 500 (result cap)
+    }
+
+    private func applySearchMatches(_ found: [InChatMessage], distanceFromNewest: Int, focusedId: String?,
+                                    navigate: Bool) {
+        searchMatches = found
 
         guard !searchMatches.isEmpty else { return }
         searchIndex = max(0, (searchMatches.count - 1) - min(distanceFromNewest, searchMatches.count - 1))
@@ -7562,8 +7756,7 @@ struct ThreadView: View {
     // a nickname change in the profile updates the header INSTANTLY — the `title` passed at open is a
     // captured snapshot that never refreshed.
     private var liveTitle: String {
-        let me = AuthService.shared.uid ?? ""
-        return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? title
+        listHead.title ?? title   // perf audit T5: read through `OneConversationWatch`
     }
 
     /// ⛔ THE PHOTO IS LIVE TOO — owner, 2026-09-25: "the profile picture sometimes shows, sometimes
@@ -7572,9 +7765,7 @@ struct ThreadView: View {
     /// placeholder for the life of the screen while the live conversation already had the URL. Same
     /// fix `liveTitle` got: read the live record, fall back to the snapshot only when it has nothing.
     private var livePhotoUrl: String? {
-        let me = AuthService.shared.uid ?? ""
-        if let live = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.displayPhoto(me),
-           !live.isEmpty { return live }
+        if let live = listHead.photo, !live.isEmpty { return live }   // perf audit T5
         return photoUrl
     }
 
@@ -7641,9 +7832,47 @@ struct ThreadView: View {
         // here would silently never notify anyone — better to not offer the picker at all than to
         // let it look like it did something.
         guard isGroup, editingMessage == nil else { return nil }
-        let head = mentionSplit.head
-        guard let r = head.range(of: "@[^\\s@]*$", options: .regularExpression) else { return nil }
-        return String(head[r].dropFirst())
+        return mentionToken   // perf audit T1: worked out on a text or caret change, not per render
+    }
+
+    private func refreshMentionToken() {
+        var t: String?
+        if isGroup {
+            let head = mentionSplit.head
+            if let r = head.range(of: "@[^\\s@]*$", options: .regularExpression) { t = String(head[r].dropFirst()) }
+        }
+        if t != mentionToken { mentionToken = t }
+    }
+
+    /// The text changed (typed in the bar, or set here). Recorded at once; what reacts to it runs
+    /// once per change on the next turn, with the text as it was before the first write and as it
+    /// is now: the same once-per-update, old-and-new contract the `.onChange(of: input)` handlers
+    /// had (perf audit T1).
+    private func setComposerText(_ v: String, fromBar: Bool) {
+        let c = chrome.composer
+        guard v != c.text else { return }
+        if c.pendingOld == nil {
+            c.pendingOld = c.text
+            DispatchQueue.main.async { flushComposerText() }
+        }
+        c.text = v
+        if !fromBar { inputRevision &+= 1 }
+    }
+
+    private func flushComposerText() {
+        let c = chrome.composer
+        guard let old = c.pendingOld else { return }
+        c.pendingOld = nil
+        let v = c.text
+        guard old != v else { return }
+        refreshMentionToken()
+        // Draft follows every edit (so the chat list is correct the moment you leave), but
+        // NOT while inline-editing a sent message — that text is the message, not a draft.
+        // owner audit 2026-10-06 chat #44: `set` is cheap now; sealing and the disk write are
+        // coalesced inside Drafts and flushed on pause, on leaving and on backgrounding.
+        if editingMessage == nil { Drafts.shared.set(cid, v) }
+        linkDetectOnInput(old, v)
+        typingOnInput(v)
     }
 
     /// The input cut at the caret (2026-09-24 decision D-composer-5). The caret is reported a turn
@@ -9844,19 +10073,20 @@ struct ThreadView: View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").font(.system(size: 16)).foregroundStyle(.secondary)
-                TextField("Search", text: $searchQuery)
-                    .font(.system(size: 17))   // native search-field text
-                    .focused($searchFocused)
-                    .submitLabel(.search)
-                    // The blue Search key was decorative: the label was set and nothing handled the
-                    // submit, so it neither stepped through results nor dropped the keyboard — which
-                    // is the one gesture that lets you see the conversation behind them.
-                    .onSubmit {
-                        searchFocused = false
-                        if !searchMatches.isEmpty { stepSearch(1) }
-                    }
-                    .autocorrectionDisabled()
-                    .onChange(of: searchQuery) { _, _ in updateSearchMatches() }
+                // perf audit T4: the field owns its text; the chat gets the term after a pause.
+                InChatSearchField(focus: $searchFocused,
+                                  onTerm: { t in
+                                      guard t != searchTerm else { return }
+                                      searchTerm = t
+                                      updateSearchMatches()
+                                  },
+                                  // The blue Search key was decorative: the label was set and nothing handled
+                                  // the submit, so it neither stepped through results nor dropped the keyboard
+                                  // — which is the one gesture that lets you see the conversation behind them.
+                                  onSubmit: {
+                                      searchFocused = false
+                                      if !searchMatches.isEmpty { stepSearch(1) }
+                                  })
         // ⛔ AND WHENEVER THE CONVERSATION ITSELF CHANGES. Matches used to recompute on keystroke and
         // on nothing else, so a message that arrived, was edited, was deleted for everyone or expired
         // while search was open left the results untouched: the pill still said "3 of 7", and
@@ -9866,16 +10096,6 @@ struct ThreadView: View {
             guard searchActive else { return }
             updateSearchMatches(force: true, navigate: false)   // owner audit 2026-10-06 chat #4
         }
-                if !searchQuery.isEmpty {
-                    Button { searchQuery = "" } label: {
-                        Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.secondary)
-                            // 32pt real target + contentShape: the bare 16pt glyph was nearly impossible
-                            // to hit (only opaque pixels hit-test without a contentShape).
-                            .frame(width: 32, height: 32).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear")   // audit: an icon-only button had nothing for VoiceOver
-                }
             }
             .padding(.horizontal, 12).frame(height: 44)   // substantial native search field (matches the X)
             .liquidGlass(Capsule(), interactive: false)
@@ -9930,7 +10150,7 @@ struct ThreadView: View {
         // ⛔ SYSTEM-POSITIONED UI, LIKE THE COMPOSER (owner 2026-11-08: the pills sat on a flat
         // 16/6 and looked off against the screen's rounded corners). The bar stands in the
         // composer's slot, so it takes the composer's device-derived sides and bottom.
-        .systemBarChrome(keyboardUp: keyboard.height > 0)
+        .modifier(KeyboardUpChrome(keyboard: keyboard))   // perf audit T8
     }
 
     /// ⛔ A GROUP'S OR CHANNEL'S PHOTOS SWIPE (owner 2026-11-08: "if user open one photo, swipe
@@ -10578,106 +10798,112 @@ struct ThreadView: View {
 
     // The reply preview nests INSIDE the input pill (see `ChatComposerView` / `ComposerBannerView`).
     private var composerArea: some View {
+        // perf audit T1: the text is not this view's state any more, so the three reactions to
+        // it that hung here as `.onChange(of: input)` run from `flushComposerText` instead, once
+        // per change and in the same order, for typed and programmatic text alike.
         composer
-            // LINK DETECTION while typing (debounced): resolve the first https link into a draft
-            // preview card. Cleared when the text no longer holds a link; the X suppresses one URL.
-            .onChange(of: input) { old, text in
-                linkDetectTask?.cancel()
-                // 2026-09-24 feature-audit: a spinner for a link no longer in the text goes with it.
-                if let l = linkLoadingUrl, l != LinkPreviewService.firstURL(in: text) { linkLoadingUrl = nil }
-                guard let url = LinkPreviewService.firstURL(in: text) else {
-                    if linkDraft != nil { withAnimation(.easeInOut(duration: 0.2)) { linkDraft = nil } }
-                    suppressedLinkUrl = nil
-                    return
-                }
-                // 2026-09-24 feature-audit: no card where the rules refuse one (a knock, or a group
-                // member kept from sending media). The link goes as plain text, as it will be sent.
-                guard linkCardAllowed else {
-                    if linkDraft != nil { linkDraft = nil }
-                    return
-                }
-                if url.absoluteString == suppressedLinkUrl { return }
-                if url == linkDraft?.url { return }
-                // A PASTE arrives whole and complete, so there is nothing to wait for and the debounce
-                // was pure dead time before the card appeared (owner report: "the preview is late").
-                // TYPING still needs it, or every keystroke fires a fetch at a half-written url. The
-                // jump in length is what separates them: a keystroke moves it by one.
-                // ⛔ AND NOTHING IS FETCHED IF THE READER HAS TURNED PREVIEWS OFF. Building a preview
-                // means THIS DEVICE contacting the linked site — with a browser User-Agent — before
-                // anything is sent, so it is a request the person makes whether they meant to or not:
-                // paste a link into the composer to ask somebody about it, delete it unsent, and the
-                // site already has your address and the time. Theirs puts the whole feature behind a
-                // setting and checks it before the fetch, which is the only way to make that
-                // avoidable. Default on, as theirs is.
-                guard UserDefaults.standard.object(forKey: "linkPreviewsEnabled") as? Bool ?? true else { return }
-                let pasted = text.count - old.count > 1
-                linkDetectTask = Task {
-                    if !pasted { try? await Task.sleep(nanoseconds: 400_000_000) }   // let typing settle
-                    guard !Task.isCancelled else { return }
-                    // 2026-09-24 feature-audit: the loading card, once typing has settled (so a
-                    // half-typed address does not flash one per keystroke).
-                    await MainActor.run {
-                        if LinkPreviewService.firstURL(in: input) == url { linkLoadingUrl = url }
-                    }
-                    let d = await LinkPreviewService.shared.draft(for: url)
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run {
-                        if linkLoadingUrl == url { linkLoadingUrl = nil }
-                        guard let d else { return }   // no card for this page: the spinner just goes
-                        // The text may have changed while fetching — only show a still-current link.
-                        guard LinkPreviewService.firstURL(in: input) == url else { return }
-                        withAnimation(.easeInOut(duration: 0.2)) { linkDraft = d }
-                    }
+    }
+
+    // LINK DETECTION while typing (debounced): resolve the first https link into a draft
+    // preview card. Cleared when the text no longer holds a link; the X suppresses one URL.
+    private func linkDetectOnInput(_ old: String, _ text: String) {
+        linkDetectTask?.cancel()
+        // 2026-09-24 feature-audit: a spinner for a link no longer in the text goes with it.
+        if let l = linkLoadingUrl, l != LinkPreviewService.firstURL(in: text) { linkLoadingUrl = nil }
+        guard let url = LinkPreviewService.firstURL(in: text) else {
+            if linkDraft != nil { withAnimation(.easeInOut(duration: 0.2)) { linkDraft = nil } }
+            suppressedLinkUrl = nil
+            return
+        }
+        // 2026-09-24 feature-audit: no card where the rules refuse one (a knock, or a group
+        // member kept from sending media). The link goes as plain text, as it will be sent.
+        guard linkCardAllowed else {
+            if linkDraft != nil { linkDraft = nil }
+            return
+        }
+        if url.absoluteString == suppressedLinkUrl { return }
+        if url == linkDraft?.url { return }
+        // A PASTE arrives whole and complete, so there is nothing to wait for and the debounce
+        // was pure dead time before the card appeared (owner report: "the preview is late").
+        // TYPING still needs it, or every keystroke fires a fetch at a half-written url. The
+        // jump in length is what separates them: a keystroke moves it by one.
+        // ⛔ AND NOTHING IS FETCHED IF THE READER HAS TURNED PREVIEWS OFF. Building a preview
+        // means THIS DEVICE contacting the linked site — with a browser User-Agent — before
+        // anything is sent, so it is a request the person makes whether they meant to or not:
+        // paste a link into the composer to ask somebody about it, delete it unsent, and the
+        // site already has your address and the time. Theirs puts the whole feature behind a
+        // setting and checks it before the fetch, which is the only way to make that
+        // avoidable. Default on, as theirs is.
+        guard UserDefaults.standard.object(forKey: "linkPreviewsEnabled") as? Bool ?? true else { return }
+        let pasted = text.count - old.count > 1
+        linkDetectTask = Task {
+            if !pasted { try? await Task.sleep(nanoseconds: 400_000_000) }   // let typing settle
+            guard !Task.isCancelled else { return }
+            // 2026-09-24 feature-audit: the loading card, once typing has settled (so a
+            // half-typed address does not flash one per keystroke).
+            await MainActor.run {
+                if LinkPreviewService.firstURL(in: input) == url { linkLoadingUrl = url }
+            }
+            let d = await LinkPreviewService.shared.draft(for: url)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if linkLoadingUrl == url { linkLoadingUrl = nil }
+                guard let d else { return }   // no card for this page: the spinner just goes
+                // The text may have changed while fetching — only show a still-current link.
+                guard LinkPreviewService.firstURL(in: input) == url else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { linkDraft = d }
+            }
+        }
+    }
+
+
+    // TYPING BROADCAST + the first-message cap. This sat on the SwiftUI field's own
+    // `.onChange`; the field is UIKit now and reports through `input`, so the composer
+    // slot is the one place that sees every change, typed or programmatic.
+    private func typingOnInput(_ v: String) {
+        // A first message to a stranger is capped. Trimmed as it is typed rather than
+        // refused on send, so you can see the limit instead of losing what you wrote to it.
+        // 2026-09-24 decision D-composer-4: and by bytes too. The rules measure the SEALED
+        // text (880), which 150 of the widest single characters fit, but 150 joined emoji
+        // (a family, a flag with a tag) are several times that and were refused only after
+        // Send. 4 bytes a character is exactly what the rule's 880 was sized for.
+        let byteCap = MessageRequests.firstMessageLimit * 4
+        if requestStance == .firstMessage,
+           v.count > MessageRequests.firstMessageLimit || v.utf8.count > byteCap {
+            var t = String(v.prefix(MessageRequests.firstMessageLimit))
+            while t.utf8.count > byteCap { t.removeLast() }
+            input = t
+            return
+        }
+        // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
+        if typingBox.suppressNext { typingBox.suppressNext = false; return }
+        // Don't broadcast "typing" while we're seeding the field for an inline EDIT.
+        let now = editingMessage == nil && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if now != typingSent {
+            typingSent = now
+            broadcastTyping(now)   // serialized — writes can't land out of order
+            // Receivers self-clear at 15s and composing produces no doc changes — the 10s
+            // refresh (a changing "text-<seconds>" value) keeps a long burst alive (audit).
+            typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
+            if now {
+                typingBox.typingRefresh = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+                    broadcastTyping(true)
                 }
             }
-            // TYPING BROADCAST + the first-message cap. This sat on the SwiftUI field's own
-            // `.onChange`; the field is UIKit now and reports through `input`, so the composer
-            // slot is the one place that sees every change, typed or programmatic.
-            .onChange(of: input) { _, v in
-                // A first message to a stranger is capped. Trimmed as it is typed rather than
-                // refused on send, so you can see the limit instead of losing what you wrote to it.
-                // 2026-09-24 decision D-composer-4: and by bytes too. The rules measure the SEALED
-                // text (880), which 150 of the widest single characters fit, but 150 joined emoji
-                // (a family, a flag with a tag) are several times that and were refused only after
-                // Send. 4 bytes a character is exactly what the rule's 880 was sized for.
-                let byteCap = MessageRequests.firstMessageLimit * 4
-                if requestStance == .firstMessage,
-                   v.count > MessageRequests.firstMessageLimit || v.utf8.count > byteCap {
-                    var t = String(v.prefix(MessageRequests.firstMessageLimit))
-                    while t.utf8.count > byteCap { t.removeLast() }
-                    input = t
-                    return
-                }
-                // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
-                if typingBox.suppressNext { typingBox.suppressNext = false; return }
-                // Don't broadcast "typing" while we're seeding the field for an inline EDIT.
-                let now = editingMessage == nil && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                if now != typingSent {
-                    typingSent = now
-                    broadcastTyping(now)   // serialized — writes can't land out of order
-                    // Receivers self-clear at 15s and composing produces no doc changes — the 10s
-                    // refresh (a changing "text-<seconds>" value) keeps a long burst alive (audit).
-                    typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
-                    if now {
-                        typingBox.typingRefresh = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-                            broadcastTyping(true)
-                        }
-                    }
-                }
-                // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
-                // in the field), so a parked draft doesn't show "typing…" forever on the other side.
-                typingIdleStop?.cancel()
-                if now {
-                    let work = DispatchWorkItem {
-                        guard typingSent else { return }
-                        typingSent = false
-                        broadcastTyping(false)
-                        typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
-                    }
-                    typingIdleStop = work
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
-                }
+        }
+        // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
+        // in the field), so a parked draft doesn't show "typing…" forever on the other side.
+        typingIdleStop?.cancel()
+        if now {
+            let work = DispatchWorkItem {
+                guard typingSent else { return }
+                typingSent = false
+                broadcastTyping(false)
+                typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
             }
+            typingIdleStop = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+        }
     }
 
     private func cancelEdit() {
@@ -10853,7 +11079,13 @@ struct ThreadView: View {
     /// wait for the keys to be GONE, not told to go) and `systemAnimation` (the keys' own duration
     /// and curve, for the floating overlays that follow `composerLift` / `composerSide`). No
     /// geometry is derived from it here any more — that is the list controller's.
-    @StateObject private var keyboard = KeyboardWatcher()
+    /// ⛔ HELD, NOT OBSERVED (perf audit T8). As a `@StateObject` each of its four published values
+    /// re-ran this whole screen at every keyboard show and hide, though the screen reads them only
+    /// in actions and on the overlays' curve. The one place that must follow it live, the search
+    /// bar's `keyboardUp`, observes it itself (`KeyboardUpChrome`).
+    private var keyboard: KeyboardWatcher { chrome.keyboard }
+    /// The keyboard watcher and the composer lift, made once per screen, published by nothing.
+    @StateObject private var chrome = ThreadChrome()
 
     private var composer: some View {
         VStack(spacing: 0) {
@@ -10864,9 +11096,11 @@ struct ThreadView: View {
             // distance from this slot's bottom (the keyboard's top, or the safe-area line) to the
             // bar's top edge, so the picker sits on that edge rather than a guessed distance above.
             if !mentionCandidates.isEmpty {
-                mentionPicker
-                    .padding(.horizontal, composerSide)
-                    .padding(.bottom, max(0, composerLift - 8))
+                LiftReader(box: composerLift) { lift, _ in
+                    mentionPicker
+                        .padding(.horizontal, composerSide)
+                        .padding(.bottom, max(0, lift - 8))
+                }
             }
             // ⛔ THE BAR IS UIKIT — owner, 2026-08-25: "The Composer input text is currently
             // implemented in SwiftUI. Please completely convert it to UIKit." Everything drawn — the
@@ -10904,6 +11138,7 @@ struct ThreadView: View {
     /// Everything the bar draws, from this view's state. Cheap to build; the bar diffs it.
     private var composerState: ChatComposerState {
         var s = ChatComposerState()
+        _ = inputRevision   // perf audit T1: a text set here (not typed) reaches the bar through this pass
         s.text = input
         // 2026-09-24 decision D-composer-5: only for the very text the insertion produced.
         if let m = caretAfterMention, m.text == input { s.caret = m.at }
@@ -10997,7 +11232,8 @@ struct ThreadView: View {
     /// What the bar can ask of the chat. Each one is the exact body the SwiftUI button carried.
     private var composerActions: ChatComposerActions {
         var a = ChatComposerActions()
-        a.textChanged = { if $0 != input { AttachDraftCaption.text = "" }; input = $0 }
+        a.textChanged = { if $0 != input { AttachDraftCaption.text = "" }; setComposerText($0, fromBar: true) }
+        a.live = chrome.composer   // perf audit T1/T3/T6: the bar registers itself for live pushes
         a.caretChanged = { composerCaret = $0 }   // 2026-09-24 decision D-composer-5
         // 2026-09-24 decision D-composer-5: a pasted picture opens the same approval the picker
         // does (one → the photo editor, several → the pager), after the keyboard is down, as "+".
@@ -11303,6 +11539,7 @@ struct ThreadView: View {
         // cancel/lock affordances exist where the drag is going.
         if !holdRevealed, abs(t.width) > 10 || abs(t.height) > 10 { holdRevealed = true }
         recordDrag = t
+        chrome.composer.bar?.liveDrag(t)   // perf audit T3: the bar follows the finger; this view does not redraw
         let armed = clampedDrag.width < -Self.cancelThreshold
         if armed != recordCancelArmed { recordCancelArmed = armed; impact(.soft) }
         if clampedDrag.height < -Self.lockThreshold { lockRecording() }
@@ -14736,6 +14973,120 @@ struct HeapState<Value>: DynamicProperty {
     var projectedValue: Binding<Value> {
         let b = box
         return Binding(get: { b.value }, set: { b.value = $0 })
+    }
+}
+
+/// The in-chat search field with its own text (perf audit T4). Every key used to be a write to the
+/// chat's own state and so a pass over the whole chat screen; now a key redraws this field, and the
+/// chat is told the trimmed term once typing has paused for 250 ms. A term too short to search (and
+/// the empty field after Clear) goes at once, so the results clear without the wait. Submit sends
+/// the term at once too, so the Search key acts on what is in the field.
+struct InChatSearchField: View {
+    var focus: FocusState<Bool>.Binding
+    let onTerm: (String) -> Void
+    let onSubmit: () -> Void
+    @State private var text = ""
+    @State private var pending: Task<Void, Never>?
+
+    var body: some View {
+        TextField("Search", text: $text)
+            .font(.system(size: 17))   // native search-field text
+            .focused(focus)
+            .submitLabel(.search)
+            .onSubmit {
+                pending?.cancel(); pending = nil
+                onTerm(text.trimmingCharacters(in: .whitespaces))
+                onSubmit()
+            }
+            .autocorrectionDisabled()
+            .onChange(of: text) { _, v in
+                pending?.cancel(); pending = nil
+                let t = v.trimmingCharacters(in: .whitespaces)
+                guard t.count >= 2 else { onTerm(t); return }
+                pending = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    guard !Task.isCancelled else { return }
+                    onTerm(t)
+                }
+            }
+            .onDisappear { pending?.cancel(); pending = nil }
+        if !text.isEmpty {
+            Button { text = "" } label: {
+                Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.secondary)
+                    // 32pt real target + contentShape: the bare 16pt glyph was nearly impossible
+                    // to hit (only opaque pixels hit-test without a contentShape).
+                    .frame(width: 32, height: 32).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Clear")   // audit: an icon-only button had nothing for VoiceOver
+        }
+    }
+}
+
+/// What the chat screen keeps for the life of the screen without observing it (perf audit T2/T8).
+/// It publishes nothing itself, so holding it as a `@StateObject` never redraws the screen; the
+/// views that need one of its parts live observe that part.
+final class ThreadChrome: ObservableObject {
+    let keyboard = KeyboardWatcher()
+    let lift = ComposerLiftBox()
+    let composer = ComposerLive()
+}
+
+/// How far the composer stands above the keyboard or the safe-area line, from the list controller
+/// that places it (perf audit T2). Observed only by `LiftReader`s.
+final class ComposerLiftBox: ObservableObject {
+    @Published private(set) var lift: CGFloat = 48
+    /// False while the value arrives as a stream (a finger dragging the keyboard, one report a frame):
+    /// those moves are followed 1:1 instead of each starting the keyboard's curve again.
+    private(set) var animated = true
+    private var lastAt: CFTimeInterval = 0
+    func set(_ v: CGFloat) {
+        guard abs(v - lift) > 0.01 else { return }
+        let now = CACurrentMediaTime()
+        animated = now - lastAt > 0.1
+        lastAt = now
+        lift = v
+    }
+}
+
+/// Reads the composer lift for one overlay, so a lift change redraws that overlay only.
+struct LiftReader<Content: View>: View {
+    @ObservedObject var box: ComposerLiftBox
+    @ViewBuilder let content: (_ lift: CGFloat, _ animated: Bool) -> Content
+    var body: some View { content(box.lift, box.animated) }
+}
+
+/// The search bar's system chrome, following the keyboard live (perf audit T8).
+struct KeyboardUpChrome: ViewModifier {
+    @ObservedObject var keyboard: KeyboardWatcher
+    func body(content: Content) -> some View { content.systemBarChrome(keyboardUp: keyboard.height > 0) }
+}
+
+/// One chat's row of the chat list, as the open chat needs it (perf audit T5).
+struct ListedConversation: Equatable {
+    var conv: Conversation?
+    var title: String?
+    var photo: String?
+    init(_ c: Conversation?) {
+        let me = AuthService.shared.uid ?? ""
+        conv = c
+        title = c?.displayName(me)
+        photo = c?.displayPhoto(me)
+    }
+}
+
+/// Reads the whole chat list so the open chat does not have to (perf audit T5). Its body is the only
+/// thing that re-runs when any chat changes; the chat hears about it only when its own row, title
+/// or photo (names are read live from the contacts here, as the header did) is different.
+struct OneConversationWatch: View {
+    let cid: String
+    let onChange: (ListedConversation) -> Void
+    var body: some View {
+        let v = ListedConversation(ConversationsRepository.shared.conversations.first { $0.id == cid })
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .onChange(of: v, initial: true) { _, nv in onChange(nv) }   // initial: a change between init and appear
     }
 }
 
