@@ -1,4 +1,5 @@
 import UIKit
+import ImageIO
 import CryptoKit
 
 extension UIImage {
@@ -31,6 +32,14 @@ final class DiskImageCache {
     static let shared = DiskImageCache()
 
     private let mem = NSCache<NSString, UIImage>()
+    /// Row pictures decoded at the size they are drawn (`fillImage`), keyed by url + pixel box.
+    /// Separate from `mem` so a scroll through a channel of albums does not push the viewer's
+    /// full-size copies out, and so a tile never holds a 2048 px bitmap to draw 600 px of it.
+    private let fills: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.totalCostLimit = 64 * 1024 * 1024
+        return c
+    }()
     private let dir: URL
     // WRITES + TRIMMING stay SERIAL: two writers and the LRU trim must not interleave.
     private let io = DispatchQueue(label: "DiskImageCache.io", qos: .utility)
@@ -292,6 +301,91 @@ final class DiskImageCache {
         }
     }
 
+    // MARK: - Pictures at the size a row draws them
+
+    /// ⛔ A ROW DRAWS A PHOTO AT ITS OWN SIZE, NOT AT 2048 px (owner 2026-11-11, build 1149: "channel
+    /// scroll up and down is lag"). Album tiles and photo bubbles were handed the viewer's copy, a
+    /// 2048 px bitmap (12 to 16 MB) for a tile of about 600 x 600 px. Two of those per channel post
+    /// filled the 120 MB memory tier in four or five posts, so scrolling back re-read and re-decoded
+    /// every photo and the GPU took a fresh 16 MB texture per tile, and each frame sampled the big
+    /// texture down. The reference app decodes a row's picture once, off the main thread, at the
+    /// size it is shown, and keeps it by url and size. Same here.
+    ///
+    /// The box is rounded UP to 64 px steps so a few points of layout difference share an entry.
+    private static func fillBox(_ px: CGSize) -> (w: Int, h: Int) {
+        func up(_ v: CGFloat) -> Int { max(64, Int((v / 64).rounded(.up)) * 64) }
+        return (up(px.width), up(px.height))
+    }
+    private static func fillKey(_ url: String, _ box: (w: Int, h: Int)) -> NSString {
+        "\(url)#fill\(box.w)x\(box.h)" as NSString
+    }
+
+    /// Memory only, synchronous: the picture for `url` decoded to cover `pixels` (aspect fill).
+    func memoryFillImage(_ url: String, pixels: CGSize) -> UIImage? {
+        guard pixels.width >= 1, pixels.height >= 1 else { return nil }
+        return fills.object(forKey: Self.fillKey(url, Self.fillBox(pixels)))
+    }
+
+    /// The picture for `url`, decoded off the main thread at the smallest size that still covers
+    /// `pixels` when aspect-filled. Made from the full copy when it is in memory (a download that
+    /// just landed: its file may still be on the write queue), else straight from the file with
+    /// ImageIO, which never builds the full bitmap. A picture already smaller than the box comes back
+    /// through `image(for:)` unchanged. Nil when nothing is cached.
+    func fillImage(for url: String, pixels: CGSize) async -> UIImage? {
+        guard pixels.width >= 1, pixels.height >= 1 else { return await image(for: url) }
+        let box = Self.fillBox(pixels)
+        let key = Self.fillKey(url, box)
+        if let hit = fills.object(forKey: key) { touchOnHit(url); return hit }
+        let full = mem.object(forKey: url as NSString)
+        let made: UIImage?? = await withCheckedContinuation { cont in
+            read.async {
+                let target = CGSize(width: box.w, height: box.h)
+                // `.some(nil)`: the picture is not bigger than the box; the caller takes the full path.
+                if let full {
+                    let w = full.size.width * full.scale, h = full.size.height * full.scale
+                    let s = max(target.width / max(w, 1), target.height / max(h, 1))
+                    guard s < 0.9 else { cont.resume(returning: .some(nil)); return }
+                    let size = CGSize(width: (w * s).rounded(.up), height: (h * s).rounded(.up))
+                    cont.resume(returning: .some(full.preparingThumbnail(of: size)))
+                    return
+                }
+                let f = self.existingFileURL(url)
+                guard let src = CGImageSourceCreateWithURL(f as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+                      let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+                      var w = (props[kCGImagePropertyPixelWidth] as? NSNumber).map({ CGFloat($0.doubleValue) }),
+                      var h = (props[kCGImagePropertyPixelHeight] as? NSNumber).map({ CGFloat($0.doubleValue) }),
+                      w > 0, h > 0 else {
+                    cont.resume(returning: nil); return
+                }
+                // EXIF orientations 5 to 8 are quarter turns: the shown width is the stored height.
+                if let o = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue, o >= 5 { swap(&w, &h) }
+                let s = max(target.width / w, target.height / h)
+                guard s < 0.9 else { cont.resume(returning: .some(nil)); return }
+                let maxPixel = (max(w, h) * s).rounded(.up)
+                let opts: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceShouldCacheImmediately: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+                ]
+                guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else {
+                    cont.resume(returning: .some(nil)); return
+                }
+                cont.resume(returning: .some(UIImage(cgImage: cg)))
+            }
+        }
+        switch made {
+        case .none:
+            return nil                          // not cached anywhere
+        case .some(.none):
+            return await image(for: url)        // small already, or ImageIO refused: the full path
+        case .some(.some(let img)):
+            fills.setObject(img, forKey: key, cost: Self.cost(img))
+            touchOnHit(url)
+            return img
+        }
+    }
+
     /// The ORIGINAL bytes exactly as they were stored (see `store`), read off the main thread.
     /// For SHARING and exporting, where `image(for:)` would hand out the display-bounded copy —
     /// a downscaled version of the user's own photo — and where re-downloading the ciphertext to
@@ -389,6 +483,7 @@ final class DiskImageCache {
     /// be handed out for the rest of the session.
     func remove(url: String) {
         mem.removeObject(forKey: url as NSString)
+        fills.removeAllObjects()   // keyed by url + size, so not one key to drop; they rebuild on demand
         io.async { [weak self] in
             guard let self else { return }
             let fm = FileManager.default
@@ -411,6 +506,7 @@ final class DiskImageCache {
     /// can be lost if the app is terminated on the sign-out screen.
     func wipeEverything() {
         mem.removeAllObjects()
+        fills.removeAllObjects()
         let fm = FileManager.default
         if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
             for u in items {
@@ -424,6 +520,7 @@ final class DiskImageCache {
     /// Wipe both tiers (Settings → Clear Cache).
     func clear() {
         mem.removeAllObjects()
+        fills.removeAllObjects()
         io.async { [weak self] in
             guard let self else { return }
             let fm = FileManager.default

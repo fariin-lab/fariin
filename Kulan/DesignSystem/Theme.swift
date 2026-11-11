@@ -115,6 +115,17 @@ enum Theme {
     /// so on a slice bubble this material samples the slice's pixels and lands as a lighter patch
     /// of it, which is exactly the disc he asked for.
     static var receivedBlurStyle: UIBlurEffect.Style { .systemUltraThinMaterial }
+    /// ⛔ THE LIGHT WASH OVER THAT MATERIAL (owner 2026-11-11, build 1149: "when using a live
+    /// animation wallpaper, bubbles become dark when using light mode"). A moving wallpaper has no
+    /// still picture to cut slices from, so its incoming bubbles wear the material, and an ultra-thin
+    /// material over a dark purple theme stays dark purple-grey under the light theme's dark text.
+    /// The slice the still wallpapers use is washed white in light mode (40% white, then 16% white
+    /// lighten, `WallpaperPictureWork.blurred`); this is the same wash on the live blur, about one
+    /// half white. Dark mode adds nothing: the material is already the dark frosted look. A dynamic
+    /// colour, so a light/dark switch re-resolves it on the spot.
+    static let receivedMaterialWash = UIColor { t in
+        t.userInterfaceStyle == .dark ? .clear : UIColor(white: 1, alpha: 0.5)
+    }
     static var receivedMaterial: Material { .ultraThin }
 
     /// THE RIM ON AN INCOMING BUBBLE OVER A WALLPAPER. Incoming only, wallpaper only; outgoing
@@ -738,7 +749,10 @@ struct ReceivedBubbleSurface: View {
         case .slice(let s): WallpaperBlurSlice(state: s)
         // The fallback, and it keeps the preview pair's two weights rather than the single one —
         // this is a SwiftUI surface and it has `dark` in hand, so it can. See `receivedStyle`.
-        case .material: Rectangle().fill(dark ? Material.ultraThin : Material.thin)
+        case .material:
+            // The light-mode wash the UIKit bubbles wear too (`receivedMaterialWash`).
+            Rectangle().fill(dark ? Material.ultraThin : Material.thin)
+                .overlay(Color(uiColor: Theme.receivedMaterialWash))
         }
     }
 }
