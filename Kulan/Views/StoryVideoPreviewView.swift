@@ -209,9 +209,27 @@ final class StoryVideoPreviewView: MTKView {
     private func startLinkIfNeeded() {
         guard link == nil, output != nil, window != nil else { return }
         let l = CADisplayLink(target: LinkProxy(self), selector: #selector(LinkProxy.fire))
-        l.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        l.preferredFrameRateRange = Self.playingRate
         l.add(to: .main, forMode: .common)
         link = l
+        linkSlow = false
+    }
+
+    /// ⛔ PAUSED, THE LINK IDLES, IT DOES NOT STOP (perf audit 2026-11-11 M11). At 60 Hz it kept the
+    /// display at full rate and woke main every frame for a clip nobody was playing. It is not
+    /// stopped either: the output is read on every tick so it never stops vending (see above), and a
+    /// seek while paused delivers its frame through the same read. So, paused, it ticks a few times
+    /// a second; the first tick that sees the player moving puts it back to full rate.
+    private static let playingRate = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+    private static let pausedRate = CAFrameRateRange(minimum: 4, maximum: 8, preferred: 8)
+    private var linkSlow = false
+
+    private func matchLinkToPlayback() {
+        guard let link else { return }
+        let paused = (player?.rate ?? 0) == 0
+        guard paused != linkSlow else { return }
+        linkSlow = paused
+        link.preferredFrameRateRange = paused ? Self.pausedRate : Self.playingRate
     }
 
     private func stopLink() {
@@ -228,6 +246,7 @@ final class StoryVideoPreviewView: MTKView {
     /// Paused, nothing new arrives and nothing is drawn; a seek while paused delivers one and it
     /// lands on screen by itself.
     fileprivate func tick() {
+        matchLinkToPlayback()
         if pullFrame() { setNeedsDisplay() }
     }
 

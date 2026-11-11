@@ -193,15 +193,7 @@ struct ChatWallpaperPage: View {
                     // Your own imported photos come FIRST (user request), newest first.
                     ForEach(store.libraryIds, id: \.self) { pid in
                         presetTile(.photo(pid)) {
-                            Group {
-                                if let img = store.libraryImage(pid) {
-                                    // Color.clear takes the tile frame; the image fills it and
-                                    // is clipped, so any aspect ratio crops uniformly (no bleed).
-                                    Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
-                                } else {
-                                    Color.secondary.opacity(0.15)
-                                }
-                            }
+                            LibraryWallpaperThumb(id: pid)
                         }
                         .contextMenu {
                             Button(role: .destructive) { store.deleteFromLibrary(pid) } label: {
@@ -834,9 +826,7 @@ struct ChatColorPage: View {
                 GradientWallpaperView(g: g, dark: dark)
             } else { Color(.secondarySystemGroupedBackground) }
         case .photo(let id):
-            if let img = WallpaperStore.shared.libraryImage(id) {
-                Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
-            } else { Color(.secondarySystemGroupedBackground) }
+            LibraryWallpaperThumb(id: id, placeholder: Color(.secondarySystemGroupedBackground))
         case .color(let hex):
             Color(hex: hex)
         case .animated(let id):
@@ -1085,5 +1075,29 @@ struct QuickReactionPage: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Quick Reaction")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// A library wallpaper in a small tile: its thumbnail, decoded off the main thread at tile size
+/// (perf audit 2026-11-11 S6), never the full 1600 px picture decoded on main and drawn into a square.
+struct LibraryWallpaperThumb: View {
+    let id: String
+    var placeholder: Color = Color.secondary.opacity(0.15)
+    @State private var img: UIImage?
+
+    var body: some View {
+        Group {
+            if let ui = img ?? WallpaperStore.shared.libraryThumb(id) {
+                // Color.clear takes the tile frame; the image fills it and is clipped, so any
+                // aspect ratio crops uniformly (no bleed).
+                Color.clear.overlay { Image(uiImage: ui).resizable().scaledToFill() }.clipped()
+            } else {
+                placeholder
+            }
+        }
+        .task(id: id) {
+            img = WallpaperStore.shared.libraryThumb(id)
+            if img == nil { img = await WallpaperStore.shared.loadLibraryThumb(id) }
+        }
     }
 }

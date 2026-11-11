@@ -197,7 +197,27 @@ struct StoryDetailView: View {
     @Binding var isPresented: Bool
     
     @State var timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()   // 20fps for a smooth bar
-    @State var timerProgress: CGFloat = 0
+
+    /// ⛔ THE BAR'S CLOCK IS NOT THE PAGE'S STATE (perf audit 2026-11-11 M5). `timerProgress` was a
+    /// `@State` the body read, and the 20 Hz tick wrote it, so this whole page body (media,
+    /// overlays, reply bar, reactions) was rebuilt 20 times a second while a story played. The
+    /// live value now sits in `clock`, a plain object the body does NOT observe; only the small
+    /// `ProgressBarView`s observe it. The page re-renders through `clockVersion`, which every
+    /// ordinary write bumps, and which the tick writes (`advanceClock`) bump only when the item
+    /// (the integer part) changes. Every reader and writer of `timerProgress` is unchanged.
+    @State private var clock = StoryProgressClock(0)
+    @State private var clockVersion = 0
+    var timerProgress: CGFloat {
+        get { _ = clockVersion; return clock.value }
+        nonmutating set { clock.value = newValue; clockVersion &+= 1 }
+    }
+
+    /// The tick's own writes: the bar moves, the page is told only when the item changes.
+    private func advanceClock(to v: CGFloat) {
+        let old = clock.value
+        clock.value = v
+        if !(old.isFinite && v.isFinite && Int(old) == Int(v)) { clockVersion &+= 1 }
+    }
 
     
     let userClosure: UserCompletionHandler?
@@ -381,7 +401,7 @@ struct StoryDetailView: View {
         let firstUnseen = model.stories.firstIndex(where: { !$0.isSeen })
         let fullyRead = viewModel.startIndexForFullyRead(bucketId: model.id, count: count)
         let start = min(max(0, resume ?? firstUnseen ?? fullyRead), max(0, count - 1))
-        _timerProgress = State(initialValue: CGFloat(start))
+        _clock = State(initialValue: StoryProgressClock(CGFloat(start)))
     }
 
     private var messageViewPosition: CGFloat {
@@ -1297,9 +1317,11 @@ private extension StoryDetailView {
         let image = model.user.image
         VStack {
             HStack(spacing: Constant.progressBarSpacing) {
+                // The bars observe the clock themselves; the page depends on `clockVersion` only.
+                let _ = clockVersion
                 ForEach(model.stories.indices, id: \.self) { index in
                     ProgressBarView(
-                        timerProgress: timerProgress,
+                        clock: clock,
                         index: index
                     )
                 }
@@ -2381,7 +2403,7 @@ private extension StoryDetailView {
         // end together even when the host's declared length is a little off.
         let duration = video.duration > 0 ? video.duration : story.duration
         guard duration > 0 else { return }
-        timerProgress = CGFloat(index) + min(0.999, max(0, CGFloat(video.timestamp / duration)))
+        advanceClock(to: CGFloat(index) + min(0.999, max(0, CGFloat(video.timestamp / duration))))
     }
 
     /// The video's own end, arriving as a completed segment: exactly what the tick's integer
@@ -2548,7 +2570,7 @@ private extension StoryDetailView {
     
     func getProgressBarFrame(duration: Double) {
         let calculatedDuration = viewModel.getVideoProgressBarFrame(duration: duration)
-        timerProgress += (0.005 / calculatedDuration)   // halved to match the 0.05s tick (same segment duration)
+        advanceClock(to: timerProgress + (0.005 / calculatedDuration))   // halved to match the 0.05s tick (same segment duration)
     }
     
     func dissmis() {

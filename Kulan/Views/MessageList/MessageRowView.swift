@@ -153,6 +153,8 @@ final class ReactionChipView: UIView {
     private var isFreeform = false
     /// Built only for a pill that holds a custom reaction.
     private var customView: CustomReactionView?
+    /// What the row last said about being on screen, for a custom view made after it said so.
+    var onScreenHint = true { didSet { customView?.onScreen = onScreenHint } }
 
     /// The custom emoji plays through once, the moment my reaction lands on it.
     func playCustomOnce(after delay: CFTimeInterval) {
@@ -198,11 +200,15 @@ final class ReactionChipView: UIView {
         if attr.length > 0, let key = attr.attribute(CustomReaction.attribute, at: 0, effectiveRange: nil) as? String {
             if customView == nil {
                 let v = CustomReactionView()
+                v.onScreen = onScreenHint
                 addSubview(v)
                 customView = v
             }
             customView?.isHidden = false
-            customView?.show(key, motion: .loop(step: 1))
+            // ⛔ A FEW PASSES, THEN A STILL (perf audit 2026-11-11 M6/L7): every pill looped
+            // forever at full rate while its cell was merely in the window. Now it plays three
+            // times each time it comes on screen, as the reference's reaction buttons rest.
+            customView?.show(key, motion: .limited(loops: 3))
         } else if let customView, !customView.isHidden {
             customView.isHidden = true
             customView.clear()
@@ -1246,6 +1252,32 @@ final class MessageRowView: UIView {
         }
     }
 
+    private static let decorShadowCache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 120
+        return c
+    }()
+
+    /// The decoration's art with its soft shadow drawn in, once per glyph, size and colour. The
+    /// margin is the same on every side, so the art stays centred where the old view put it.
+    private static func shadowedDecor(_ d: PlacedDecor) -> UIImage? {
+        let key = "\(d.glyph)|\(Int(d.size))|\(d.color)" as NSString
+        if let hit = decorShadowCache.object(forKey: key) { return hit }
+        guard let art = BubbleDecorArt.image(d.glyph, size: d.size, color: d.color) else { return nil }
+        let pad: CGFloat = 3
+        let fmt = UIGraphicsImageRendererFormat.preferred()
+        fmt.scale = art.scale
+        let out = UIGraphicsImageRenderer(size: CGSize(width: art.size.width + pad * 2, height: art.size.height + pad * 2),
+                                          format: fmt).image { ctx in
+            // What the layer drew: black at 0.18, radius 1.5 (a blur of about twice that), 1pt down.
+            ctx.cgContext.setShadow(offset: CGSize(width: 0, height: 1), blur: 3,
+                                    color: UIColor.black.withAlphaComponent(0.18).cgColor)
+            art.draw(at: CGPoint(x: pad, y: pad))
+        }
+        decorShadowCache.setObject(out, forKey: key)
+        return out
+    }
+
     /// A styled bubble's decorations at its corners, hanging slightly outside (the box does not
     /// clip). Hidden extras are kept for the next row.
     private func applyDecor(_ list: [PlacedDecor], size: CGSize) {
@@ -1253,15 +1285,14 @@ final class MessageRowView: UIView {
             let v = UIImageView()
             v.isUserInteractionEnabled = false
             v.contentMode = .scaleAspectFit
-            v.layer.shadowColor = UIColor.black.cgColor
-            v.layer.shadowOpacity = 0.18
-            v.layer.shadowRadius = 1.5
-            v.layer.shadowOffset = CGSize(width: 0, height: 1)
+            // The soft shadow is in the picture itself (`shadowedDecor`), not a layer shadow: a
+            // layer shadow with no path is worked out from the art's alpha in an offscreen pass
+            // on every frame the row moves (perf audit 2026-11-11 L9).
             bubbleBox.addSubview(v)
             decorViews.append(v)
         }
         for (i, v) in decorViews.enumerated() {
-            guard i < list.count, let img = BubbleDecorArt.image(list[i].glyph, size: list[i].size, color: list[i].color) else {
+            guard i < list.count, let img = Self.shadowedDecor(list[i]) else {
                 v.isHidden = true; v.image = nil; continue
             }
             let d = list[i]
@@ -1956,13 +1987,14 @@ final class MessageRowView: UIView {
             for k in keys {
                 if let v = byKey[k] { ordered.append(v); continue }
                 if let v = spare.popLast() { ordered.append(v); continue }
-                let v = ReactionChipView(); bubbleBox.addSubview(v); ordered.append(v)
+                let v = ReactionChipView(); v.onScreenHint = mediaOnScreen; bubbleBox.addSubview(v); ordered.append(v)
             }
             reactionViews = ordered + spare
             chipKeys = keys + Array(repeating: "", count: spare.count)
         }
         while reactionViews.count < b.reactions.count {
             let v = ReactionChipView()
+            v.onScreenHint = mediaOnScreen
             bubbleBox.addSubview(v)
             reactionViews.append(v)
             chipKeys.append("")
@@ -2536,7 +2568,13 @@ final class MessageRowView: UIView {
     func handleMediaDownloadTap() -> Bool { mediaView?.handleDownloadTap() ?? false }
 
     /// 2026-10-17 chat stickers: see `MessageRowCell.setOnScreen`.
-    func setMediaOnScreen(_ on: Bool) { mediaView?.setOnScreen(on) }
+    func setMediaOnScreen(_ on: Bool) {
+        mediaOnScreen = on
+        mediaView?.setOnScreen(on)
+        for v in reactionViews { v.onScreenHint = on }
+    }
+    /// The last on-screen word from the cell, handed to reaction pills made after it.
+    private var mediaOnScreen = true
     var stickerBytes: Data? { mediaView?.isHidden == false ? mediaView?.stickerBytes : nil }
     /// The same for one album tile.
     func handleAlbumDownloadTap(tile i: Int) -> Bool { albumView?.handleDownloadTap(tile: i) ?? false }

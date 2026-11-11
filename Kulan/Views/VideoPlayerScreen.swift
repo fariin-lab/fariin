@@ -826,6 +826,11 @@ struct VideoPlayerScreen: View {
         timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { time in
             if duration <= 0, let d = p.currentItem?.duration.seconds, d.isFinite { duration = d }
             guard !scrubbing else { return }
+            // Perf audit 2026-11-11 M9: with the controls hidden nothing shows the time, and each
+            // write re-ran this whole screen's body 20 times a second. Hidden, it keeps within a
+            // second (so the bar is right the moment the controls come back, and the next tick
+            // makes it exact); shown, every tick as before.
+            guard showChrome || abs(time.seconds - current) >= 1 else { return }
             current = time.seconds
             progress = duration > 0 ? min(1, current / duration) : 0
         }
@@ -833,6 +838,9 @@ struct VideoPlayerScreen: View {
                                                              object: p.currentItem, queue: .main) { _ in
             // Theirs: the clip stops at its end, on its last frame; nothing loops.
             isPlaying = false
+            // The hidden-controls ticks may be up to a second behind: the end is the end, so the
+            // play button's replay-from-start check sees it.
+            if duration > 0 { current = duration; progress = 1 }
         }
         // A call or another app's audio pauses AVPlayer by itself, but the screen kept showing it as
         // playing with the chrome hidden and no play button (2026-09-24 audit). Show it paused.

@@ -7,15 +7,22 @@
 
 import SwiftUI
 
+/// The story bar's live position, apart from the page: the bars observe it, the page body does not
+/// (see `StoryDetailView.clock`), so the 20 Hz tick redraws a few capsules, not the whole page.
+final class StoryProgressClock: ObservableObject {
+    @Published var value: CGFloat
+    init(_ value: CGFloat) { self.value = value }
+}
+
 struct ProgressBarView: View {
-    var timerProgress: CGFloat
+    @ObservedObject var clock: StoryProgressClock
     var index: Int
     
     var body: some View {
         GeometryReader { proxy in
             
             let width = proxy.size.width
-            let progress = timerProgress - CGFloat(index)
+            let progress = clock.value - CGFloat(index)
             let perfectProgress = min(max(progress, 0), 1)
             
             Capsule()
