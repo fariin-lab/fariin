@@ -432,7 +432,10 @@ struct ThreadView: View {
     /// How far the composer bar stands above the keyboard (or above the safe-area line at rest),
     /// reported by the list's controller, which is what places it. The floating overlays clear the
     /// bar by this. The default is one bar's worth so the first frame is not wrong.
-    @State private var composerLift: CGFloat = 48
+    /// ⛔ NOT THIS VIEW'S STATE (perf audit T2): during a finger-driven keyboard dismiss it changes
+    /// every frame, and as `@State` each frame re-ran this whole screen. It lives in `chrome.lift`,
+    /// which only the few overlays that sit on it observe (`LiftReader`).
+    private var composerLift: ComposerLiftBox { chrome.lift }
     /// This screen counted itself into the shared repository (`repo.open`), so it must count itself
     /// out on leaving. False for a suspended group, which opens nothing (2026-10-27).
     @State private var repoOpened = false
@@ -856,31 +859,38 @@ struct ThreadView: View {
             // scrolled (the reported bug). As an overlay it respects the bottom safe area (floats just above
             // the composer, rides the keyboard) and is fully tappable (padding, not offset).
             .overlay(alignment: .bottomTrailing) {
-                VStack(spacing: 10) {
-                    if searchActive {
-                        searchArrows   // the reference shows the search arrows here instead
-                    } else {
-                        reactionJumpButton   // sits ABOVE the arrow, like the reference
-                        jumpToBottomButton
+                LiftReader(box: composerLift) { lift, animated in
+                    VStack(spacing: 10) {
+                        if searchActive {
+                            searchArrows   // the reference shows the search arrows here instead
+                        } else {
+                            reactionJumpButton   // sits ABOVE the arrow, like the reference
+                            jumpToBottomButton
+                        }
                     }
+                    // ⛔ ABOVE THE COMPOSER, MEASURED WHERE THE COMPOSER IS PUT. This was a bare 10,
+                    // which worked only while the bar was SwiftUI's `safeAreaBar` and grew the bottom
+                    // safe area. The bar is UIKit's now, so the padding started at the keyboard and the
+                    // arrow landed on the mic button (his screenshot, 2026-08-26).
+                    .padding(.bottom, lift + 10)
+                    // perf audit T2: on the keyboard's curve for a single move; a stream of moves (a
+                    // finger dragging the keyboard) is followed 1:1 instead of restarting the curve
+                    // every frame, which made the arrow trail and wobble behind the keyboard.
+                    .animation(animated ? keyboard.systemAnimation : nil, value: lift)
                 }
-                // ⛔ ABOVE THE COMPOSER, MEASURED WHERE THE COMPOSER IS PUT. This was a bare 10,
-                // which worked only while the bar was SwiftUI's `safeAreaBar` and grew the bottom
-                // safe area. The bar is UIKit's now, so the padding started at the keyboard and the
-                // arrow landed on the mic button (his screenshot, 2026-08-26).
-                .padding(.bottom, composerLift + 10)
-                .animation(keyboard.systemAnimation, value: composerLift)
             }
             // owner 2026-10-27: no "recording" bubble over the list any more; the header says
             // "recording…" where it says "typing…" (presenceSubtitle).
             // In-chat search as a list ("Show as List"): over the conversation, under the bars.
             .overlay {
                 if searchActive && searchAsList && !searchMatches.isEmpty {
-                    InChatSearchList(rows: searchListRows,
-                                     terms: ChatSearch.queryTerms(searchTerm),
-                                     bottomInset: composerLift + 8,
-                                     onSelect: openSearchResult)
-                        .transition(.opacity)
+                    LiftReader(box: composerLift) { lift, _ in
+                        InChatSearchList(rows: searchListRows,
+                                         terms: ChatSearch.queryTerms(searchTerm),
+                                         bottomInset: lift + 8,
+                                         onSelect: openSearchResult)
+                    }
+                    .transition(.opacity)
                 }
             }
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
@@ -1167,12 +1177,14 @@ struct ThreadView: View {
                     // The window is the reference frame here, for the same reason the wallpaper
                     // takes it a few lines down: this screen is drawn ignoring the safe area, so the
                     // only place the real inset still exists is the window.
-                    ThreadSkeleton()
-                        .padding(.top, Self.skeletonTopInset)
-                        // 2026-10-27: the skeleton now fills from the bottom, so it stops above the
-                        // composer (the same lift the jump arrow uses) instead of running under it.
-                        .padding(.bottom, composerLift + 10)
-                        .allowsHitTesting(false)
+                    LiftReader(box: composerLift) { lift, _ in
+                        ThreadSkeleton()
+                            .padding(.top, Self.skeletonTopInset)
+                            // 2026-10-27: the skeleton now fills from the bottom, so it stops above the
+                            // composer (the same lift the jump arrow uses) instead of running under it.
+                            .padding(.bottom, lift + 10)
+                    }
+                    .allowsHitTesting(false)
                 }
             }
             // A chat with nothing in it yet says what it is. Every standard messenger does this: two of
@@ -1184,12 +1196,14 @@ struct ThreadView: View {
             // 2026-11-07: "make it bottom, not centre"), the same lift the jump arrow uses.
             .overlay(alignment: .bottom) {
                 if let t = jumpToast {
-                    Text(t).font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(.black.opacity(0.8), in: Capsule())
-                        .padding(.bottom, composerLift + 12)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .allowsHitTesting(false)
+                    LiftReader(box: composerLift) { lift, _ in
+                        Text(t).font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(.black.opacity(0.8), in: Capsule())
+                            .padding(.bottom, lift + 12)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .allowsHitTesting(false)
                 }
             }
     }
@@ -1491,7 +1505,7 @@ struct ThreadView: View {
                     // No composer reports a lift here, so the floating arrow sat where a composer
                     // would be, far above the Join bar (owner 2026-10-23). The bar's own top is it.
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                        if let lift = Self.barLift(top: top) { composerLift = lift }
+                        if let lift = Self.barLift(top: top) { composerLift.set(lift) }
                     }
             } else if selecting {
                 selectionActionBar.transition(.move(edge: .bottom).combined(with: .opacity))
@@ -1504,13 +1518,13 @@ struct ThreadView: View {
                 // so the tap morphs one into the other.
                 ChannelFollowerBar(conv: conv).transition(.opacity)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                        if let lift = Self.barLift(top: top) { composerLift = lift }
+                        if let lift = Self.barLift(top: top) { composerLift.set(lift) }
                     }
             } else if let conv = conversation, conv.isChannel, !conv.users.contains(me), !groupModHidesChat {
                 // Not following: Follow where the composer goes (`ChannelFollowerBar`).
                 ChannelFollowerBar(conv: conv).transition(.opacity)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                        if let lift = Self.barLift(top: top) { composerLift = lift }
+                        if let lift = Self.barLift(top: top) { composerLift.set(lift) }
                     }
             } else if conversation == nil, ChannelFollows.shared.follows(cid) {
                 // A channel I follow whose doc has not loaded yet (owner 2026-10-29: a follower
@@ -5874,8 +5888,8 @@ struct ThreadView: View {
             // height and overwrote the bar's (`ChannelFollowerBar` reports its top itself), as the
             // guest's Join bar already does.
             onComposerGeometry: { lift, side in
-                if guest == nil && !channelFollowerBarShown { composerLift = lift }
-                composerSide = side
+                if guest == nil && !channelFollowerBarShown { composerLift.set(lift) }
+                if composerSide != side { composerSide = side }
             },
             onJumpButtonVisibility: { showJumpButton = $0 },
             isAtBottom: $isAtBottom,
@@ -10055,7 +10069,7 @@ struct ThreadView: View {
         // ⛔ SYSTEM-POSITIONED UI, LIKE THE COMPOSER (owner 2026-11-08: the pills sat on a flat
         // 16/6 and looked off against the screen's rounded corners). The bar stands in the
         // composer's slot, so it takes the composer's device-derived sides and bottom.
-        .systemBarChrome(keyboardUp: keyboard.height > 0)
+        .modifier(KeyboardUpChrome(keyboard: keyboard))   // perf audit T8
     }
 
     /// ⛔ A GROUP'S OR CHANNEL'S PHOTOS SWIPE (owner 2026-11-08: "if user open one photo, swipe
@@ -10968,7 +10982,13 @@ struct ThreadView: View {
     /// wait for the keys to be GONE, not told to go) and `systemAnimation` (the keys' own duration
     /// and curve, for the floating overlays that follow `composerLift` / `composerSide`). No
     /// geometry is derived from it here any more — that is the list controller's.
-    @StateObject private var keyboard = KeyboardWatcher()
+    /// ⛔ HELD, NOT OBSERVED (perf audit T8). As a `@StateObject` each of its four published values
+    /// re-ran this whole screen at every keyboard show and hide, though the screen reads them only
+    /// in actions and on the overlays' curve. The one place that must follow it live, the search
+    /// bar's `keyboardUp`, observes it itself (`KeyboardUpChrome`).
+    private var keyboard: KeyboardWatcher { chrome.keyboard }
+    /// The keyboard watcher and the composer lift, made once per screen, published by nothing.
+    @StateObject private var chrome = ThreadChrome()
 
     private var composer: some View {
         VStack(spacing: 0) {
@@ -10979,9 +10999,11 @@ struct ThreadView: View {
             // distance from this slot's bottom (the keyboard's top, or the safe-area line) to the
             // bar's top edge, so the picker sits on that edge rather than a guessed distance above.
             if !mentionCandidates.isEmpty {
-                mentionPicker
-                    .padding(.horizontal, composerSide)
-                    .padding(.bottom, max(0, composerLift - 8))
+                LiftReader(box: composerLift) { lift, _ in
+                    mentionPicker
+                        .padding(.horizontal, composerSide)
+                        .padding(.bottom, max(0, lift - 8))
+                }
             }
             // ⛔ THE BAR IS UIKIT — owner, 2026-08-25: "The Composer input text is currently
             // implemented in SwiftUI. Please completely convert it to UIKit." Everything drawn — the
@@ -14880,6 +14902,44 @@ struct InChatSearchField: View {
             .accessibilityLabel("Clear")   // audit: an icon-only button had nothing for VoiceOver
         }
     }
+}
+
+/// What the chat screen keeps for the life of the screen without observing it (perf audit T2/T8).
+/// It publishes nothing itself, so holding it as a `@StateObject` never redraws the screen; the
+/// views that need one of its parts live observe that part.
+final class ThreadChrome: ObservableObject {
+    let keyboard = KeyboardWatcher()
+    let lift = ComposerLiftBox()
+}
+
+/// How far the composer stands above the keyboard or the safe-area line, from the list controller
+/// that places it (perf audit T2). Observed only by `LiftReader`s.
+final class ComposerLiftBox: ObservableObject {
+    @Published private(set) var lift: CGFloat = 48
+    /// False while the value arrives as a stream (a finger dragging the keyboard, one report a frame):
+    /// those moves are followed 1:1 instead of each starting the keyboard's curve again.
+    private(set) var animated = true
+    private var lastAt: CFTimeInterval = 0
+    func set(_ v: CGFloat) {
+        guard abs(v - lift) > 0.01 else { return }
+        let now = CACurrentMediaTime()
+        animated = now - lastAt > 0.1
+        lastAt = now
+        lift = v
+    }
+}
+
+/// Reads the composer lift for one overlay, so a lift change redraws that overlay only.
+struct LiftReader<Content: View>: View {
+    @ObservedObject var box: ComposerLiftBox
+    @ViewBuilder let content: (_ lift: CGFloat, _ animated: Bool) -> Content
+    var body: some View { content(box.lift, box.animated) }
+}
+
+/// The search bar's system chrome, following the keyboard live (perf audit T8).
+struct KeyboardUpChrome: ViewModifier {
+    @ObservedObject var keyboard: KeyboardWatcher
+    func body(content: Content) -> some View { content.systemBarChrome(keyboardUp: keyboard.height > 0) }
 }
 
 /// One chat's row of the chat list, as the open chat needs it (perf audit T5).
