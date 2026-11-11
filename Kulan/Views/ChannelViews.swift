@@ -185,7 +185,6 @@ struct DiscoverChannelsView: View {
     @State private var openedAt = Date()
     @State private var loggedTabs: Set<String> = []
     @State private var failed = false
-    @State private var busy: Set<String> = []
     /// Followed from this list, before the follow list says so; each id goes once the listener has it.
     @State private var justFollowed: Set<String> = []
     /// ⛔ THE CHANNEL OPENS IN HERE (owner 2026-10-31: "open a channel from Find Channels, leave it,
@@ -309,6 +308,20 @@ struct DiscoverChannelsView: View {
             .navigationDestination(item: $openVisitor) { t in
                 PublicGroupSheet(target: t, pushed: true)
             }
+            // ⛔ LEAVE FROM A CHAT OPENED HERE COMES BACK HERE (owner 2026-11-11), same scroll, in one
+            // move: this page closes the chat (and its info page above it), and MainShell, told by
+            // `ExploreStack.openCid`, leaves its stack alone instead of emptying it to the chat list.
+            .onChange(of: openFollowed?.id ?? openVisitor?.cid) { _, cid in
+                if opensInPlace { ExploreStack.openCid = cid }
+            }
+            .onChange(of: LeaveGroupUndo.shared.hiddenIds) { old, new in
+                let gone = new.subtracting(old)
+                justJoined.subtract(gone)
+                justFollowed.subtract(gone)
+                guard let open = openFollowed?.id ?? openVisitor?.cid, gone.contains(open) else { return }
+                openFollowed = nil
+                openVisitor = nil
+            }
     }
 
     /// The Groups tab: public groups, round photos (groups are round, channels squircle), "N members",
@@ -332,8 +345,10 @@ struct DiscoverChannelsView: View {
         }
     }
 
+    /// A group being left (its 5 s Undo still running) already reads as not mine: its pill says Join.
     private func inGroup(_ cid: String) -> Bool {
-        justJoined.contains(cid)
+        guard !LeaveGroupUndo.shared.hiddenIds.contains(cid) else { return false }
+        return justJoined.contains(cid)
             || ConversationsRepository.shared.conversations.contains { $0.id == cid && $0.users.contains(AuthService.shared.uid ?? "") }
     }
 
@@ -372,37 +387,15 @@ struct DiscoverChannelsView: View {
         .listRowSeparator(.hidden)
     }
 
-    /// Join at the tap, like Follow: "Joined" at once, a request or a refusal takes it back.
-    @ViewBuilder private func joinButton(_ g: GroupDirectory.Discovered) -> some View {
-        let mine = inGroup(g.cid)
-        Button {
-            guard !mine, !busy.contains(g.cid) else { return }
-            busy.insert(g.cid)
+    /// Join with motion (owner 2026-11-11, `ExploreJoinPill`): spinner while the server works, then
+    /// "Joined" with a drawn check, "Requested" for a request-to-join group, or a shake on refusal.
+    private func joinButton(_ g: GroupDirectory.Discovered) -> some View {
+        ExploreJoinPill(idleTitle: "Join", doneTitle: "Joined", isDone: inGroup(g.cid)) {
+            if try await GroupDirectory.join(cid: g.cid) == .requested { return .requested }
             justJoined.insert(g.cid)
-            Haptics.notify(.success)
-            Task {
-                do {
-                    if try await GroupDirectory.join(cid: g.cid) == .requested {
-                        justJoined.remove(g.cid)
-                        ToastNotice.show("Request sent. An admin will let you in.")
-                    }
-                } catch {
-                    justJoined.remove(g.cid)
-                    ToastNotice.show(error.localizedDescription)
-                }
-                busy.remove(g.cid)
-            }
-        } label: {
-            Text(mine ? "Joined" : "Join")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(mine ? Color.secondary : Color.onFariinAction)
-                .padding(.horizontal, 16).frame(height: 34)
-                .background(Capsule().fill(mine ? Color(.secondarySystemFill) : Color.fariinAction))
-                .contentShape(Capsule())
-                .animation(.easeOut(duration: 0.15), value: mine)
+            return .done
         }
-        .buttonStyle(.plain)
-        .disabled(mine)
+        .id(g.cid)
     }
 
     /// The kept groups stay on screen while the server answers; a fresh-enough answer is not asked again.
@@ -488,48 +481,22 @@ struct DiscoverChannelsView: View {
     /// visitor page, which handed off to the chat and closed everything onto the chat list). An admin
     /// is a member, not a follower, so "follows" alone was false for the people who run the channel.
     private func isMine(_ cid: String) -> Bool {
-        follows.follows(cid)
+        guard !LeaveGroupUndo.shared.hiddenIds.contains(cid) else { return false }   // being left
+        return follows.follows(cid)
             || ConversationsRepository.shared.conversations.contains { $0.id == cid && $0.users.contains(AuthService.shared.uid ?? "") }
     }
 
-    @ViewBuilder private func followButton(_ c: ChannelService.Discovered) -> some View {
-        let mine = isMine(c.cid) || justFollowed.contains(c.cid)
-        Button {
-            guard !mine, !busy.contains(c.cid) else { return }
-            busy.insert(c.cid)
-            // ⛔ FOLLOWING AT THE TAP (owner 2026-10-31: the button shrank to "…" and said nothing).
-            // As the in-chat Follow bar does: the answer comes behind, and only a request or a
-            // refusal takes it back. Held until the follow list catches up (owner 2026-10-30: it
-            // flickered back to Follow between the answer and the listener).
+    /// Follow with the same motion as Join (owner 2026-11-11, `ExploreJoinPill`). The 2026-10-31
+    /// "Following at the tap" gave way to it: the owner felt nothing happened. `justFollowed` still
+    /// holds "Following" until the follow list catches up (owner 2026-10-30: it flickered back).
+    private func followButton(_ c: ChannelService.Discovered) -> some View {
+        ExploreJoinPill(idleTitle: "Follow", doneTitle: "Following",
+                        isDone: isMine(c.cid) || justFollowed.contains(c.cid)) {
+            if try await ChannelService.follow(cid: c.cid) == "requested" { return .requested }
             justFollowed.insert(c.cid)
-            Haptics.notify(.success)
-            Task {
-                do {
-                    let status = try await ChannelService.follow(cid: c.cid)
-                    if status == "requested" {
-                        // Only a request (owner 2026-10-30): said, and the button goes back to Follow.
-                        justFollowed.remove(c.cid)
-                        ToastNotice.show(ChannelFollowerBar.requestSent)
-                    }
-                }
-                catch {
-                    justFollowed.remove(c.cid)
-                    ToastNotice.show(error.localizedDescription)
-                }
-                busy.remove(c.cid)
-            }
-        } label: {
-            Text(mine ? "Following" : "Follow")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(mine ? Color.secondary : Color.onFariinAction)
-                .padding(.horizontal, 16).frame(height: 34)
-                // Design A: solid action colour to follow, plain grey once following.
-                .background(Capsule().fill(mine ? Color(.secondarySystemFill) : Color.fariinAction))
-                .contentShape(Capsule())
-                .animation(.easeOut(duration: 0.15), value: mine)
+            return .done
         }
-        .buttonStyle(.plain)
-        .disabled(mine)
+        .id(c.cid)
     }
 
     /// The kept channels stay on screen while the server answers; a fresh-enough answer is not asked
@@ -551,6 +518,147 @@ struct DiscoverChannelsView: View {
         }
         catch { failed = true }
         loading = false
+    }
+}
+
+/// The group or channel Explore (pushed in the chat list's stack) has open right now, so a Leave from
+/// it returns to Explore, not the chat list (owner 2026-11-11). Set by DiscoverChannelsView, read by
+/// MainShell's leave handler.
+@MainActor enum ExploreStack {
+    static var openCid: String?
+}
+
+/// ⛔ THE EXPLORE JOIN / FOLLOW PILL HAS MOTION (owner 2026-11-11: a tap flipped "Join" to "Joined"
+/// with nothing moving, it felt like nothing happened). Same rule on Android.
+/// - press: 0.94 under the finger, soft haptic;
+/// - server working: the word fades, a small spinner in the word's colour, width kept;
+/// - success: black fill to the grey "Joined" fill, a check draws in (0.25 s), one 1.06 bounce,
+///   success haptic; a request-to-join ends on grey "Requested" with no check;
+/// - refusal: three 6 pt swings, back to black, the server's words or "No connection. Try again."
+/// Nothing waits on a fixed delay: the result shows the moment the server answers.
+struct ExploreJoinPill: View {
+    enum Outcome { case done, requested }
+    let idleTitle: String
+    let doneTitle: String
+    /// Already in / following, from the live lists (or the caller's stand-in after `act`).
+    let isDone: Bool
+    /// Joins or follows. Throws on refusal. The caller marks itself "done" before returning `.done`.
+    let act: () async throws -> Outcome
+
+    @State private var working = false
+    @State private var requested = false
+    /// Joined from this pill just now: the check is drawn (an old membership shows no check).
+    @State private var landed = false
+    @State private var checkTrim: CGFloat = 0
+    @State private var bounces = 0
+    @State private var shakes = 0
+
+    private var grey: Bool { isDone || requested }
+
+    var body: some View {
+        Button { tap() } label: {
+            ZStack {
+                Group {
+                    if requested {
+                        Text("Requested")
+                    } else if isDone {
+                        HStack(spacing: 4) {
+                            if landed {
+                                PillCheck().trim(from: 0, to: checkTrim)
+                                    .stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                                    .frame(width: 11, height: 9)
+                            }
+                            Text(doneTitle)
+                        }
+                    } else {
+                        Text(idleTitle)
+                    }
+                }
+                .opacity(working ? 0 : 1)
+                if working {
+                    ProgressView().controlSize(.small).tint(Color.onFariinAction).transition(.opacity)
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(grey ? Color.secondary : Color.onFariinAction)
+            .padding(.horizontal, 16).frame(height: 34)
+            .background(Capsule().fill(grey ? Color(.secondarySystemFill) : Color.fariinAction))
+            .contentShape(Capsule())
+            .animation(.easeOut(duration: 0.25), value: grey)
+            .animation(.easeOut(duration: 0.15), value: working)
+        }
+        .buttonStyle(PillPressStyle())
+        .phaseAnimator([1.0, 1.06, 1.0], trigger: bounces) { v, s in v.scaleEffect(s) } animation: { _ in
+            .spring(duration: 0.16, bounce: 0.3)
+        }
+        .modifier(PillShake(travel: CGFloat(shakes)))
+        .animation(.linear(duration: 0.36), value: shakes)
+        .disabled(grey || working)
+    }
+
+    private func tap() {
+        guard !grey, !working else { return }
+        working = true
+        Task {
+            do {
+                let outcome = try await act()
+                working = false
+                switch outcome {
+                case .done:
+                    landed = true
+                    checkTrim = 0
+                    withAnimation(.easeOut(duration: 0.25)) { checkTrim = 1 }
+                    bounces += 1
+                case .requested:
+                    requested = true
+                }
+                Haptics.notify(.success)
+            } catch {
+                working = false
+                shakes += 1
+                Haptics.notify(.error)
+                ToastNotice.show(Self.words(for: error))
+            }
+        }
+    }
+
+    /// The server's own words, or the connection line when there are none worth showing.
+    static func words(for error: Error) -> String {
+        let ns = error as NSError
+        let offline = ns.domain == NSURLErrorDomain
+            || (ns.domain == "com.firebase.functions" && (ns.code == 14 || ns.code == 4))   // unavailable / deadline
+        let text = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return offline || text.isEmpty ? "No connection. Try again." : text
+    }
+}
+
+/// 0.94 under the finger with a soft tap, back on release.
+private struct PillPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .animation(.spring(duration: 0.2, bounce: 0.3), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, down in if down { Haptics.impact(.soft) } }
+    }
+}
+
+/// Three horizontal swings of 6 pt per whole step of `travel` (at rest on whole numbers).
+private struct PillShake: GeometryEffect {
+    var travel: CGFloat
+    var animatableData: CGFloat { get { travel } set { travel = newValue } }
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        ProjectionTransform(CGAffineTransform(translationX: 6 * sin(travel * .pi * 2 * 3), y: 0))
+    }
+}
+
+/// The check drawn before "Joined", in an 11 x 9 box.
+private struct PillCheck: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.midY))
+        p.addLine(to: CGPoint(x: r.minX + r.width * 0.36, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        return p
     }
 }
 

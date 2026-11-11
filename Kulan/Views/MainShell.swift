@@ -1583,6 +1583,9 @@ struct ChatsView: View {
     /// Answers per query for this session, so retyping or deleting back to a query is instant.
     @State private var peopleCache: [String: [UserProfile]] = [:]
     @State private var path = NavigationPath()
+    /// Where Explore sits in `path` (the count before it was pushed), nil when it is not on the stack.
+    /// A Leave from a chat Explore opened returns to Explore (owner 2026-11-11, `ExploreStack`).
+    @State private var exploreAt: Int?
     // NO "CURRENTLY OPEN CHAT" HIGHLIGHT. There was one here, and it is gone on the owner's word
     // (2026-08-03): "highlight only while the user's finger is touching it… never during the back
     // swipe". The whole highlight is Apple's pressed state now and nothing of ours — see the note at
@@ -3407,8 +3410,18 @@ struct ChatsView: View {
             // Leave on a channel's page he stayed on that page). The chat's own dismiss is ignored by
             // SwiftUI while its info page is pushed on top of it, so the stack is emptied here instead:
             // one pop, chat and info page together. Only a NEW hidden id counts (a reopen removes one).
+            // Except a chat opened from Explore (owner 2026-11-11): Explore closes it itself and stays,
+            // so the stack is left as it is (Explore on top). Opened anywhere else: the chat list.
             .onChange(of: LeaveGroupUndo.shared.hiddenIds) { old, new in
-                if !new.subtracting(old).isEmpty, !path.isEmpty { path = NavigationPath() }
+                let gone = new.subtracting(old)
+                guard !gone.isEmpty, !path.isEmpty else { return }
+                if let at = exploreAt, path.count == at + 1,
+                   let open = ExploreStack.openCid, gone.contains(open) { return }
+                path = NavigationPath()
+            }
+            // Explore popped (Back, tab reselect, a leave elsewhere): forget it.
+            .onChange(of: path.count) { _, n in
+                if let at = exploreAt, n <= at { exploreAt = nil; ExploreStack.openCid = nil }
             }
             // Add Story opens the CAMERA, full screen (owner 2026-08-03). It was a bottom sheet
             // holding a picker; a camera in a card with the chat list showing behind it is not a
@@ -3530,6 +3543,7 @@ struct ChatsView: View {
             .onChange(of: showFindChannelsFromEmpty) { _, on in
                 guard on else { return }
                 showFindChannelsFromEmpty = false
+                exploreAt = path.count
                 path.append(DiscoverChannelsView.Route())
             }
             .navigationDestination(for: DiscoverChannelsView.Route.self) { _ in
