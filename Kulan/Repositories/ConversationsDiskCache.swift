@@ -120,12 +120,35 @@ final class ConversationsDiskCache {
         // would show chats the user has just cleared, for a frame, on every launch afterwards.
         // 2026-10-21 (owner: "No chats yet" came late): it is written as an empty list, not a
         // removed file, so the next launch knows the answer at once (`savedEmpty`).
+        // ⛔ OFF THE MAIN THREAD AND ONE WRITE PER BURST (perf audit 2026-11-11, S1/E2). The sort and
+        // the recursive sanitize of up to 200 documents used to run on the caller (the snapshot
+        // handler, on main) for every typing flag, before the hop. All of it now happens on `io`,
+        // and a burst of snapshots inside `writeDelay` collapses into one write of the newest list.
+        io.async {
+            self.pending = (docs, url)
+            guard !self.flushScheduled else { return }
+            self.flushScheduled = true
+            self.io.asyncAfter(deadline: .now() + self.writeDelay) { self.flush() }
+        }
+    }
+
+    /// The newest list `store` was handed and not yet written. Read and written only on `io`.
+    private var pending: (docs: [(id: String, data: [String: Any])], url: URL)?
+    private var flushScheduled = false
+    private let writeDelay: TimeInterval = 0.5
+
+    /// On `io` only.
+    private func flush() {
+        flushScheduled = false
+        guard let next = pending else { return }
+        pending = nil
+        let docs = next.docs, url = next.url
         // Newest first, then capped: if we can only keep some, keep the ones a first frame shows.
         let trimmed = docs
             .sorted { millis($0.data) > millis($1.data) }
             .prefix(cap)
             .map { ["__id": $0.id, "__doc": sanitize($0.data)] as [String: Any] }
-        io.async {
+        do {
             guard let blob = try? PropertyListSerialization.data(fromPropertyList: trimmed,
                                                                  format: .binary, options: 0)
             else { return }
@@ -152,7 +175,8 @@ final class ConversationsDiskCache {
     /// a stranger's chat list on their first frame. Called from SessionWipe.
     func wipe(uid: String) {
         guard let url = fileURL(uid: uid) else { return }
-        io.async { try? FileManager.default.removeItem(at: url) }
+        // A write still waiting must not bring the file back after the wipe.
+        io.async { self.pending = nil; try? FileManager.default.removeItem(at: url) }
     }
 
     /// Every file this class has ever written — except, when `keeping` names an account, that
@@ -161,6 +185,7 @@ final class ConversationsDiskCache {
     func wipeAll(keeping uid: String? = nil) {
         let keep = uid.flatMap { fileURL(uid: $0) }?.lastPathComponent
         io.async {
+            self.pending = nil   // see `wipe`
             guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory,
                                                          in: .userDomainMask,
                                                          appropriateFor: nil, create: false),
