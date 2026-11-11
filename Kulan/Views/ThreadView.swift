@@ -90,6 +90,8 @@ struct ThreadView: View {
     var guest: PublicGroupGuest?
 
     @State private var repo: ThreadRepository
+    /// This chat's own row in the chat list, with its live title and photo (perf audit T5).
+    @HeapState private var listHead = ListedConversation(nil)
     @State private var input = ""
     /// Hold Post > Schedule Post in a channel (2026-10-28).
     @State private var showSchedulePost = false
@@ -641,7 +643,9 @@ struct ThreadView: View {
         // as my own message, for the whole push). Rows are built in the first body and `onAppear`
         // comes after it, so cached rows drew as a 1:1 until then. `onAppear` still does the full
         // lookup with its stand-ins.
-        _cachedConv = HeapState(wrappedValue: ConversationsRepository.shared.conversations.first { $0.id == cid })
+        let listed = ConversationsRepository.shared.conversations.first { $0.id == cid }
+        _cachedConv = HeapState(wrappedValue: listed)
+        _listHead = HeapState(wrappedValue: ListedConversation(listed))
         // ALWAYS start hidden — even a warm cache hit. Video showed the bug: when revealed started true
         // (cache hit), the chat was visible DURING the push transition at a not-yet-bottom position, then
         // jumped to the bottom. Starting hidden + settling under the veil (revealAtOpenAnchor, run from
@@ -2535,7 +2539,14 @@ struct ThreadView: View {
                                        conversation: conversation,
                                        loadedByAuthor: { ms in loadedDeletable(by: ms.map(\.authorId)) },
                                        onAdminProceed: { o in applyAdminDelete(o) }))
-        .onChange(of: ConversationsRepository.shared.conversations) { _, list in conversationsChanged(list) }
+        // ⛔ THIS CHAT'S ROW OF THE LIST, NOT THE WHOLE LIST (perf audit T5). Reading the list here made
+        // every change to ANY chat (someone typing elsewhere, a message in another group) re-run this
+        // whole screen. A small watcher reads the list instead and calls back only when this chat's
+        // own row, its title or its photo changes.
+        .background(OneConversationWatch(cid: cid) { v in
+            if v.conv != listHead.conv { conversationsChanged(v.conv) }
+            if v != listHead { listHead = v }
+        })
         // ⛔ ASK FOR THE KEY THE MOMENT THE REQUEST IS SENT — owner, 2026-09-11 ("Everyone: new
         // user → 1 message → Message Request → ask for Chat Key → correct key → main chat"). Once
         // per chat, remembered on this phone; the awaiting-reply bar keeps the button for after.
@@ -3006,8 +3017,7 @@ struct ThreadView: View {
         if ThreadRepository.setCuts(cid: cid, historyStart: start, joinedAt: joined) { repo.reapplyCuts() }
     }
 
-    private func conversationsChanged(_ list: [Conversation]) {
-        let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
+    private func conversationsChanged(_ resolved: Conversation?) {
         // 2026-10-19: a group that leaves the list while I'm in it. Removed from it, or just
         // pushed below the list's window? Ask the server once; removed keeps the group page
         // with me out of `users`, so the "no longer a member" bar shows instead of a 1:1 composer.
@@ -7703,8 +7713,7 @@ struct ThreadView: View {
     // a nickname change in the profile updates the header INSTANTLY — the `title` passed at open is a
     // captured snapshot that never refreshed.
     private var liveTitle: String {
-        let me = AuthService.shared.uid ?? ""
-        return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? title
+        listHead.title ?? title   // perf audit T5: read through `OneConversationWatch`
     }
 
     /// ⛔ THE PHOTO IS LIVE TOO — owner, 2026-09-25: "the profile picture sometimes shows, sometimes
@@ -7713,9 +7722,7 @@ struct ThreadView: View {
     /// placeholder for the life of the screen while the live conversation already had the URL. Same
     /// fix `liveTitle` got: read the live record, fall back to the snapshot only when it has nothing.
     private var livePhotoUrl: String? {
-        let me = AuthService.shared.uid ?? ""
-        if let live = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.displayPhoto(me),
-           !live.isEmpty { return live }
+        if let live = listHead.photo, !live.isEmpty { return live }   // perf audit T5
         return photoUrl
     }
 
@@ -14872,6 +14879,34 @@ struct InChatSearchField: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Clear")   // audit: an icon-only button had nothing for VoiceOver
         }
+    }
+}
+
+/// One chat's row of the chat list, as the open chat needs it (perf audit T5).
+struct ListedConversation: Equatable {
+    var conv: Conversation?
+    var title: String?
+    var photo: String?
+    init(_ c: Conversation?) {
+        let me = AuthService.shared.uid ?? ""
+        conv = c
+        title = c?.displayName(me)
+        photo = c?.displayPhoto(me)
+    }
+}
+
+/// Reads the whole chat list so the open chat does not have to (perf audit T5). Its body is the only
+/// thing that re-runs when any chat changes; the chat hears about it only when its own row, title
+/// or photo (names are read live from the contacts here, as the header did) is different.
+struct OneConversationWatch: View {
+    let cid: String
+    let onChange: (ListedConversation) -> Void
+    var body: some View {
+        let v = ListedConversation(ConversationsRepository.shared.conversations.first { $0.id == cid })
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .onChange(of: v, initial: true) { _, nv in onChange(nv) }   // initial: a change between init and appear
     }
 }
 
