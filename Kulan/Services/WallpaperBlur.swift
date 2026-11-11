@@ -33,13 +33,17 @@ import UIKit
     /// state outlives any one visit to the chat (it is cached) and a view reference must not.
     let cid: String
     let id: UInt
+    /// The picture this state shows (wallpaper, theme, size): the per-chat state is reused while
+    /// this still matches, so the identity the rows key on only moves when the picture does.
+    let key: String
 
     private static var counter: UInt = 0
 
-    fileprivate init(image: UIImage, frame: CGRect, cid: String) {
+    fileprivate init(image: UIImage, frame: CGRect, cid: String, key: String) {
         self.image = image
         self.frame = frame
         self.cid = cid
+        self.key = key
         Self.counter &+= 1
         self.id = Self.counter
     }
@@ -48,12 +52,56 @@ import UIKit
 }
 
 @MainActor enum WallpaperBlur {
-    /// Their blur radius. Twenty at 1× — the image is rendered in points, not pixels, exactly as
-    /// theirs is (`renderAsImage(opaque: true, scale: 1)`), so this number means the same thing.
-    private static let radius: CGFloat = 20
+    // ⛔ NOTHING HERE RENDERS OR WAITS ON THE MAIN THREAD DURING A CHAT OPEN (perf audit 2026-11-11,
+    // L2/E8). Before, the first open of a wallpaper chat drew the wallpaper with `ImageRenderer`,
+    // then sat on a semaphore while Core Image blurred it, inside ThreadView's body, during the
+    // push; the header made a second full-screen render at screen scale in `viewDidLayoutSubviews`.
+    // Both caches were emptied wholesale at four entries, so a theme flip brought it all back.
+    //
+    // Now, the way the reference app prepares its wallpaper: the picture is made on a worker thread
+    // and handed to the screen when ready; until then the bubbles wear the material fallback and
+    // the header shows the live wallpaper through. Pictures are keyed by WALLPAPER (not chat), theme
+    // and size, so every chat on the same wallpaper shares one; kept in memory under a byte budget
+    // (least recently used goes first) and on disk, so after the first time a wallpaper is seen it
+    // is a file read on a worker thread, preloaded at launch for the most recent few.
 
-    private static var cache: [String: WallpaperBlurState] = [:]
+    /// Per chat: the state it was last handed (reused while its key still matches).
+    private static var states: [String: WallpaperBlurState] = [:]
+    private static var blurImages = WallpaperImageLRU(byteLimit: 16 << 20)
+    private static var headerImages = WallpaperImageLRU(byteLimit: 20 << 20)
+    private static var headerDarkTop: [String: Bool] = [:]
+    private static var inFlight = Set<String>()
+    /// Read by `state(for:)` so a SwiftUI body that got nil re-evaluates when the picture lands.
+    private static let ready = WallpaperPictureReady()
     private static var backdropCache: [String: UIUserInterfaceStyle] = [:]
+    private static let backdropDefaultsKey = "wallpaperBlur.backdrop.v1"
+
+    /// One picture's identity: kind ("b" blur, "h" header, "hd" header text), the wallpaper's own
+    /// stored id, the theme and the size. The chat is NOT in it: two chats on one wallpaper share.
+    fileprivate static func pictureKey(_ kind: String, _ w: ChatWallpaper, dark: Bool, size: CGSize,
+                                       extra: String = "") -> String {
+        "\(kind)|\(w.stored)|\(dark ? 1 : 0)|\(Int(size.width))x\(Int(size.height))\(extra)"
+    }
+
+    /// What can be drawn without SwiftUI (photo, plain colour) is drawn on a worker thread; the
+    /// themes are SwiftUI views and are rendered on the main thread, after the push.
+    private static func source(for w: ChatWallpaper) -> WallpaperSource {
+        switch w {
+        case .photo(let id):
+            if let img = WallpaperStore.shared.libraryImage(id) { return .photo(img) }
+            return .rendered
+        case .color(let hex): return .color(hex)
+        default: return .rendered
+        }
+    }
+
+    fileprivate static func insertPreloaded(_ image: UIImage, key: String) {
+        if key.hasPrefix("b|") {
+            if blurImages.get(key) == nil { blurImages.put(image, for: key) }
+        } else if key.hasPrefix("h|") {
+            if headerImages.get(key) == nil { headerImages.put(image, for: key) }
+        }
+    }
 
     /// THE INTERFACE STYLE THE HEADER'S TEXT NEEDS over this chat's wallpaper: `.dark` (light text)
     /// when the band under the navigation bar is dark, `.light` when it is bright, `.unspecified`
@@ -80,24 +128,139 @@ import UIKit
         }
         let frame = windowFrame
         guard frame.width > 1, frame.height > 1 else { return .unspecified }
-        let key = "hdr|\(cid)|\(dark)|\(store.version)"
+        let w = store.wallpaper(for: cid)
+        let key = pictureKey("hd", w, dark: dark, size: frame.size)
         if let hit = backdropCache[key] { return hit }
-        guard let picture = renderWallpaper(cid: cid, dark: dark, size: frame.size) else { return .unspecified }
+        // Saved across launches (perf audit 2026-11-11, L2): the answer for a wallpaper never
+        // changes, so only the first time a wallpaper is ever seen pays the measure below.
+        var saved = UserDefaults.standard.dictionary(forKey: backdropDefaultsKey) as? [String: Int] ?? [:]
+        if let raw = saved[key], let style = UIUserInterfaceStyle(rawValue: raw) {
+            backdropCache[key] = style
+            return style
+        }
+        // The first time: measured now, because the header's text must be right on its first frame.
+        let picture: UIImage?
+        switch source(for: w) {
+        case .rendered: picture = renderWallpaper(cid: cid, dark: dark, size: frame.size)
+        case let s: picture = WallpaperPictureWork.draw(s, size: frame.size, band: min(150, frame.height),
+                                                        scale: 1, darkScrim: false, dim: 0)
+        }
+        guard let picture else { return .unspecified }
         let band = CGRect(x: 0, y: 0, width: picture.size.width, height: min(150, picture.size.height))
         // Owner, 2026-10-10: "light wallpaper -> dark text, dark wallpaper -> white text". The switch
         // was at 0.4, so medium-light wallpapers kept white text that barely read. Now whichever text
         // has the HIGHER contrast wins: white's ratio is 1.05/(L+0.05), black's (L+0.05)/0.05, and they
         // are equal at L ~ 0.179.
-        let style: UIUserInterfaceStyle = averageLuminance(of: picture, in: band) < 0.179 ? .dark : .light
-        if backdropCache.count >= 8 { backdropCache.removeAll() }
+        let style: UIUserInterfaceStyle = WallpaperPictureWork.averageLuminance(of: picture, in: band) < 0.179 ? .dark : .light
+        if backdropCache.count >= 32 { backdropCache.removeAll() }
         backdropCache[key] = style
+        if saved.count >= 64 { saved.removeAll() }
+        saved[key] = style.rawValue
+        UserDefaults.standard.set(saved, forKey: backdropDefaultsKey)
         return style
+    }
+}
+
+/// The work that runs off the main thread: drawing a photo or colour wallpaper, the blur, the
+/// measures, and the disk cache. Nothing in here touches UIKit views or the stores.
+enum WallpaperPictureWork {
+    /// Their blur radius. Twenty at 1× — the image is rendered in points, not pixels, exactly as
+    /// theirs is (`renderAsImage(opaque: true, scale: 1)`), so this number means the same thing.
+    static let radius: CGFloat = 20
+
+    /// A photo or plain-colour wallpaper drawn the way `ChatWallpaperBackground` draws it: the photo
+    /// fills the `size` box centred (`scaledToFill` in a frame of that size), then the dark-mode
+    /// scrim and the owner's dimness when asked. Only the top `band` points are kept. Thread-safe
+    /// (`UIGraphicsImageRenderer` and `UIImage.draw` may run on any thread).
+    static func draw(_ source: WallpaperSource, size: CGSize, band: CGFloat, scale: CGFloat,
+                     darkScrim: Bool, dim: Double) -> UIImage? {
+        guard size.width > 1, size.height > 1 else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = true
+        let canvas = CGSize(width: size.width, height: min(size.height, max(1, band)))
+        let full = CGRect(origin: .zero, size: size)
+        return UIGraphicsImageRenderer(size: canvas, format: format).image { ctx in
+            switch source {
+            case .photo(let img):
+                guard img.size.width > 0, img.size.height > 0 else { return }
+                let s = max(size.width / img.size.width, size.height / img.size.height)
+                let w = img.size.width * s, h = img.size.height * s
+                img.draw(in: CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h))
+                if darkScrim {
+                    UIColor(white: 0, alpha: 0.20).setFill()
+                    ctx.fill(full)
+                }
+            case .color(let hex):
+                UIColor(red: CGFloat((hex >> 16) & 0xff) / 255, green: CGFloat((hex >> 8) & 0xff) / 255,
+                        blue: CGFloat(hex & 0xff) / 255, alpha: 1).setFill()
+                ctx.fill(full)
+            case .rendered:
+                return
+            }
+            if dim > 0 {
+                UIColor(white: 0, alpha: CGFloat(min(WallpaperDim.max, dim))).setFill()
+                ctx.fill(full, blendMode: .normal)
+            }
+        }
+    }
+
+    /// The header copy's "is its top dark" (`ChatHeaderBlurView`): the top strip's average colour.
+    static func topIsDark(_ image: UIImage, topHeight: CGFloat, threshold: CGFloat) -> Bool {
+        guard let cg = image.cgImage else { return false }
+        let strip = CGRect(x: 0, y: 0, width: cg.width,
+                           height: min(cg.height, Int(topHeight * image.scale)))
+        guard let top = cg.cropping(to: strip) else { return false }
+        var px = [UInt8](repeating: 0, count: 4)
+        guard let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
+        ctx.interpolationQuality = .medium
+        ctx.draw(top, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        let lum = (0.2126 * CGFloat(px[0]) + 0.7152 * CGFloat(px[1]) + 0.0722 * CGFloat(px[2])) / 255
+        return lum < threshold
+    }
+
+    // MARK: Disk
+
+    /// One folder per app build, so a theme redrawn in an update is never served from an old file.
+    static let folder: URL = {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return base.appendingPathComponent("wallpaper-pictures-\(build)", isDirectory: true)
+    }()
+
+    static func url(for key: String) -> URL {
+        let name = key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? String(key.hashValue)
+        return folder.appendingPathComponent(name + ".jpg")
+    }
+
+    /// The scale a header picture was drawn at, from its key's "|sN" tail; 1 for everything else.
+    static func scale(ofKey key: String) -> CGFloat {
+        guard key.hasPrefix("h|"), let r = key.range(of: "|s", options: .backwards),
+              let n = Double(key[r.upperBound...]) else { return 1 }
+        return CGFloat(n)
+    }
+
+    /// Read and DECODED here, so the main thread only ever gets a ready bitmap.
+    static func load(_ key: String) -> UIImage? {
+        let u = url(for: key)
+        guard let data = try? Data(contentsOf: u),
+              let img = UIImage(data: data, scale: scale(ofKey: key)) else { return nil }
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: u.path)
+        return img.preparingForDisplay() ?? img
+    }
+
+    static func save(_ image: UIImage, key: String) {
+        guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? data.write(to: url(for: key), options: .atomic)
     }
 
     /// Mean relative luminance of `rect` in `image`, 0 (black) to 1 (white). The band is drawn down
     /// into a 4×4 bitmap with high-quality interpolation, which is a box average of the pixels, then
     /// the sixteen samples are linearised and averaged. Cheap enough to run once per wallpaper.
-    private static func averageLuminance(of image: UIImage, in rect: CGRect) -> CGFloat {
+    static func averageLuminance(of image: UIImage, in rect: CGRect) -> CGFloat {
         guard let cg = image.cgImage else { return 0.5 }
         let scale = CGFloat(cg.width) / max(1, image.size.width)
         let pixelRect = CGRect(x: rect.minX * scale, y: rect.minY * scale,
@@ -121,7 +284,58 @@ import UIKit
         }
         return total / CGFloat(n * n)
     }
+}
 
+/// What a wallpaper is drawn from: a photo or a colour (drawn off the main thread), or a SwiftUI
+/// theme view (`ImageRenderer`, main thread only).
+enum WallpaperSource {
+    case photo(UIImage)
+    case color(UInt)
+    case rendered
+}
+
+/// Bumped when a picture lands; see `WallpaperBlur.ready`.
+@Observable final class WallpaperPictureReady {
+    var tick = 0
+}
+
+/// Pictures in memory under a byte budget; the least recently used goes first. Main thread only.
+struct WallpaperImageLRU {
+    let byteLimit: Int
+    private var items: [String: UIImage] = [:]
+    private var order: [String] = []
+    private var bytes = 0
+
+    init(byteLimit: Int) { self.byteLimit = byteLimit }
+
+    private static func cost(_ i: UIImage) -> Int {
+        guard let cg = i.cgImage else { return Int(i.size.width * i.size.height * i.scale * i.scale * 4) }
+        return cg.bytesPerRow * cg.height
+    }
+
+    mutating func get(_ key: String) -> UIImage? {
+        guard let hit = items[key] else { return nil }
+        if order.last != key, let i = order.firstIndex(of: key) { order.remove(at: i); order.append(key) }
+        return hit
+    }
+
+    mutating func put(_ image: UIImage, for key: String) {
+        if let old = items[key] {
+            bytes -= Self.cost(old)
+            order.removeAll { $0 == key }
+        }
+        items[key] = image
+        order.append(key)
+        bytes += Self.cost(image)
+        // The newest always stays, even alone over budget: it is the one on screen.
+        while bytes > byteLimit, order.count > 1 {
+            let gone = order.removeFirst()
+            if let g = items.removeValue(forKey: gone) { bytes -= Self.cost(g) }
+        }
+    }
+}
+
+@MainActor extension WallpaperBlur {
     /// ⛔ **BACK ON — OWNER, 2026-09-02, SAME DAY IT WAS SWITCHED OFF: "Plz restore my custom blur i
     /// dont like it apple type".**
     ///
@@ -143,9 +357,10 @@ import UIKit
 
     /// The state for this chat, or nil when no picture is wanted: no wallpaper, or Reduce
     /// Transparency on (theirs shows the plain theme background then, and so do we — see
-    /// `Theme.receivedSurface`). Cached per chat, theme, size and wallpaper version; the first ask
-    /// after any of those changes pays for one render and one blur, on the main thread, exactly as
-    /// theirs does. A 390×844 image at radius 20 is a few tens of milliseconds once per chat open.
+    /// `Theme.receivedSurface`). The picture is keyed by wallpaper, theme and size and shared by
+    /// every chat on that wallpaper. A miss returns nil (the bubbles wear the material fallback for
+    /// those frames) and starts the picture off the main thread; when it lands, `ready` moves and
+    /// the body that asked runs again and gets it. Never a render or a wait on the main thread here.
     static func state(for cid: String, dark: Bool, frame: CGRect) -> WallpaperBlurState? {
         guard enabled else { return nil }
         let store = WallpaperStore.shared
@@ -161,8 +376,10 @@ import UIKit
             WallpaperBlurSliceView.clear(cid)
             return nil
         }
-        let key = "\(cid)|\(dark)|\(Int(frame.width))x\(Int(frame.height))|\(store.version)"
-        if let hit = cache[key] {
+        _ = ready.tick   // observed: a body that got nil here re-runs when the picture lands
+        let wallpaper = store.wallpaper(for: cid)
+        let key = pictureKey("b", wallpaper, dark: dark, size: frame.size)
+        if let hit = states[cid], hit.key == key, hit.frame == frame {
             // ⛔ A CACHE HIT MUST BROADCAST TOO, AND NOT DOING SO IS THE LIGHT/DARK BUG — owner,
             // 2026-08-24: "I change light mode to dark, the bubbles and the pin, time and
             // disappearing badges don't understand which mode I picked until I leave the page and
@@ -182,13 +399,14 @@ import UIKit
             WallpaperBlurSliceView.adopt(hit)
             return hit
         }
-        guard let source = renderWallpaper(cid: cid, dark: dark, size: frame.size),
-              let blurred = Self.blurred(source, dark: dark) else { return nil }
-        let state = WallpaperBlurState(image: blurred, frame: frame, cid: cid)
-        // One chat is open at a time and the official channel is the other; anything past a
-        // handful is a theme flip or a rotation that will not come back soon.
-        if cache.count >= 4 { cache.removeAll() }
-        cache[key] = state
+        guard let image = blurImages.get(key) else {
+            prepareBlur(cid: cid, wallpaper: wallpaper, dark: dark, size: frame.size, key: key)
+            return nil
+        }
+        let state = WallpaperBlurState(image: image, frame: frame, cid: cid, key: key)
+        // States are light (the image is shared through `blurImages`); a handful of chats.
+        if states.count >= 16 { states.removeAll() }
+        states[cid] = state
         // ⛔ EVERY LIVE SLICE OF THIS CHAT TAKES THE NEW PICTURE AT ONCE — his 2026-08-23 "I change
         // the wallpaper and some bubbles still have the old one", with two teal bubbles left over
         // from the previous wallpaper among a screenful of correct ones.
@@ -247,34 +465,141 @@ import UIKit
 
     // MARK: - Rendering
 
-    /// The wallpaper as the chat draws it, at 1×, WITHOUT the photo scrim. Theirs blurs the
-    /// undimmed content view and does the darkening in the wash below; blurring a scrim in first
-    /// would darken twice.
+    /// How much of the wallpaper's top the header copy holds. The header view is
+    /// `max(minHeight 100, safe top + 34)` tall, so 240pt covers every phone with room to spare;
+    /// the old full-screen copy at screen scale was about 12 MB for the 150pt that ever showed.
+    static let headerBand: CGFloat = 240
+
+    /// What the header asks for: no copy wanted, one on its way, or the copy and whether its top is
+    /// dark (`ChatHeaderBlurView` lowers its alpha over a dark top).
+    enum HeaderPicture {
+        case none
+        case pending
+        case ready(UIImage, darkTop: Bool)
+    }
+
     /// The chat's wallpaper as it stands on screen, UNBLURRED and at screen scale, for the chat
     /// header (`ChatHeaderBlurView`): the reference app's header over a wallpaper is a copy of the
     /// wallpaper itself, lined up with it and faded out, so messages dissolve into the picture.
-    /// Nil when the chat has no picture. Cached per chat, mode, size and wallpaper version.
-    private static var headerCache: [String: UIImage] = [:]
-
-    static func headerPicture(for cid: String, dark: Bool, size: CGSize) -> UIImage? {
+    /// `.none` when the chat has no picture. Made once per wallpaper, theme, size and dimness, off
+    /// the main thread (a theme view renders on the main thread after the push); `.pending` until
+    /// then, and `.headerPictureReady` is posted when it lands.
+    static func headerPicture(for cid: String, dark: Bool, size: CGSize,
+                              darkTopHeight: CGFloat, darkLuminance: CGFloat) -> HeaderPicture {
         let store = WallpaperStore.shared
         // A moving wallpaper: no still copy behind the header (it would freeze over the motion).
         guard store.hasWallpaper(for: cid), !store.wallpaper(for: cid).isAnimated,
-              size.width > 1, size.height > 1 else { return nil }
-        let key = "\(cid)|\(dark)|\(Int(size.width))x\(Int(size.height))|\(store.version)"
-        if let hit = headerCache[key] { return hit }
-        let view = ChatWallpaperBackground(cid: cid, pictureSize: size)
-            .frame(width: size.width, height: size.height)
-            .environment(\.colorScheme, dark ? .dark : .light)
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = UIScreen.main.scale
-        renderer.isOpaque = true
-        guard let image = renderer.uiImage else { return nil }
-        if headerCache.count >= 4 { headerCache.removeAll() }
-        headerCache[key] = image
-        return image
+              size.width > 1, size.height > 1 else { return .none }
+        let wallpaper = store.wallpaper(for: cid)
+        let dim = UserDefaults.standard.double(forKey: WallpaperDim.key)
+        let scale = UIScreen.main.scale
+        let key = pictureKey("h", wallpaper, dark: dark, size: size,
+                             extra: "|d\(Int((dim * 100).rounded()))|s\(Int(scale))")
+        if let hit = headerImages.get(key) {
+            let darkTop = headerDarkTop[key]
+                ?? WallpaperPictureWork.topIsDark(hit, topHeight: darkTopHeight, threshold: darkLuminance)
+            headerDarkTop[key] = darkTop
+            return .ready(hit, darkTop: darkTop)
+        }
+        guard !inFlight.contains(key) else { return .pending }
+        inFlight.insert(key)
+        let src = source(for: wallpaper)
+        let band = min(size.height, headerBand)
+        let finish: @MainActor (UIImage?, Bool) -> Void = { image, darkTop in
+            inFlight.remove(key)
+            guard let image else { return }
+            headerImages.put(image, for: key)
+            if headerDarkTop.count >= 32 { headerDarkTop.removeAll() }
+            headerDarkTop[key] = darkTop
+            NotificationCenter.default.post(name: .headerPictureReady, object: nil)
+        }
+        WallpaperBlurRender.run {
+            if let disk = WallpaperPictureWork.load(key) {
+                let darkTop = WallpaperPictureWork.topIsDark(disk, topHeight: darkTopHeight, threshold: darkLuminance)
+                Task { @MainActor in finish(disk, darkTop) }
+                return
+            }
+            if case .rendered = src {
+                Task { @MainActor in
+                    // A SwiftUI theme can only be rendered here; after the push, not inside it.
+                    try? await Task.sleep(for: .milliseconds(400))
+                    let image = renderHeader(cid: cid, dark: dark, size: size, band: band, scale: scale)
+                    guard let image else { finish(nil, false); return }
+                    WallpaperBlurRender.run {
+                        let darkTop = WallpaperPictureWork.topIsDark(image, topHeight: darkTopHeight, threshold: darkLuminance)
+                        WallpaperPictureWork.save(image, key: key)
+                        Task { @MainActor in finish(image, darkTop) }
+                    }
+                }
+                return
+            }
+            let image = WallpaperPictureWork.draw(src, size: size, band: band, scale: scale,
+                                                  darkScrim: dark, dim: dim)
+            var darkTop = false
+            if let image {
+                darkTop = WallpaperPictureWork.topIsDark(image, topHeight: darkTopHeight, threshold: darkLuminance)
+                WallpaperPictureWork.save(image, key: key)
+            }
+            Task { @MainActor in finish(image, darkTop) }
+        }
+        return .pending
     }
 
+    /// The header copy of a SwiftUI theme: the full-screen wallpaper, top `band` points kept.
+    private static func renderHeader(cid: String, dark: Bool, size: CGSize, band: CGFloat,
+                                     scale: CGFloat) -> UIImage? {
+        let view = ChatWallpaperBackground(cid: cid, pictureSize: size)
+            .frame(width: size.width, height: size.height)
+            .frame(width: size.width, height: band, alignment: .top)
+            .clipped()
+            .environment(\.colorScheme, dark ? .dark : .light)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = scale
+        renderer.isOpaque = true
+        return renderer.uiImage
+    }
+
+    /// The blurred picture for `key`, made off the main thread: from disk when this wallpaper was
+    /// seen before; else drawn (photo, colour) or rendered on the main thread after the push (a
+    /// theme), then blurred on the worker. Lands in `blurImages` and moves `ready`.
+    private static func prepareBlur(cid: String, wallpaper: ChatWallpaper, dark: Bool, size: CGSize, key: String) {
+        guard !inFlight.contains(key) else { return }
+        inFlight.insert(key)
+        let src = source(for: wallpaper)
+        let finish: @MainActor (UIImage?) -> Void = { image in
+            inFlight.remove(key)
+            guard let image else { return }
+            blurImages.put(image, for: key)
+            ready.tick &+= 1
+        }
+        WallpaperBlurRender.run {
+            if let disk = WallpaperPictureWork.load(key) {
+                Task { @MainActor in finish(disk) }
+                return
+            }
+            if case .rendered = src {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    guard let picture = renderWallpaper(cid: cid, dark: dark, size: size) else { finish(nil); return }
+                    WallpaperBlurRender.run {
+                        let out = WallpaperPictureWork.blurred(picture, dark: dark)
+                        if let out { WallpaperPictureWork.save(out, key: key) }
+                        Task { @MainActor in finish(out) }
+                    }
+                }
+                return
+            }
+            let picture = WallpaperPictureWork.draw(src, size: size, band: size.height, scale: 1,
+                                                    darkScrim: false, dim: 0)
+            let out = picture.flatMap { WallpaperPictureWork.blurred($0, dark: dark) }
+            if let out { WallpaperPictureWork.save(out, key: key) }
+            Task { @MainActor in finish(out) }
+        }
+    }
+
+    /// The wallpaper as the chat draws it, at 1×, WITHOUT the photo scrim. Theirs blurs the
+    /// undimmed content view and does the darkening in the wash below; blurring a scrim in first
+    /// would darken twice.
     private static func renderWallpaper(cid: String, dark: Bool, size: CGSize) -> UIImage? {
         // `pictureSize` is the size being rendered at, so this picture is cropped exactly the way
         // the chat's own wallpaper is — the slices the bubbles show are cut from the picture that
@@ -288,10 +613,18 @@ import UIKit
         renderer.isOpaque = true
         return renderer.uiImage
     }
+}
 
+extension Notification.Name {
+    /// A chat header's wallpaper copy finished (`WallpaperBlur.headerPicture`).
+    static let headerPictureReady = Notification.Name("WallpaperBlur.headerPictureReady")
+}
+
+extension WallpaperPictureWork {
     /// Their `withGaussianBlur(radius:colorOverlays:vibrancy:exposureAdjustment:)`, filter for
     /// filter, in the order they run it: clamp → blur → each wash → vibrance → exposure.
-    private static func blurred(_ source: UIImage, dark: Bool) -> UIImage? {
+    /// Runs on the render thread (`WallpaperBlurRender.run`), never the main thread.
+    static func blurred(_ source: UIImage, dark: Bool) -> UIImage? {
         guard let cg = source.cgImage else { return nil }
         let input = CIImage(cgImage: cg)
 
@@ -338,7 +671,7 @@ import UIKit
         // Cropped back to the source's extent: the clamp made it infinite.
         // ONE context for the app (2026-09-27, the first chat open after launch): a `CIContext` is
         // expensive to build and this made a fresh one on every chat open, on the main thread.
-        guard let result = WallpaperBlurRender.cgImage(out, from: input.extent) else { return nil }
+        guard let result = wallpaperBlurContext.createCGImage(out, from: input.extent) else { return nil }
         return UIImage(cgImage: result, scale: 1, orientation: .up)
     }
 }
@@ -585,27 +918,16 @@ private let wallpaperBlurContext = CIContext(options: nil)
 /// over. Only chats WITH a wallpaper reach this, and every open after a relaunch is a cache miss, so
 /// that chat crashed every time.
 ///
-/// Same work, same timing (the caller still waits the few tens of milliseconds it always did), but
-/// on a thread whose stack is ours to size. Core Image contexts are thread-safe.
+/// ⚠️ STILL ITS OWN 8 MB THREAD, AND NOBODY WAITS FOR IT ANY MORE (perf audit 2026-11-11, E8). The
+/// caller used to block on a semaphore for the whole render, inside the push. Now the work is
+/// handed over and the result comes back to the main thread by itself (`WallpaperBlur.prepareBlur`).
+/// Not a GCD queue: their worker threads have a 512 KB stack, the very thing the crash above was.
 enum WallpaperBlurRender {
-    private final class Box: @unchecked Sendable {
-        var image: CIImage?
-        var result: CGImage?
-    }
-
-    nonisolated static func cgImage(_ image: CIImage, from rect: CGRect) -> CGImage? {
-        let box = Box()
-        box.image = image
-        let done = DispatchSemaphore(value: 0)
-        let worker = Thread {
-            if let img = box.image { box.result = wallpaperBlurContext.createCGImage(img, from: rect) }
-            done.signal()
-        }
+    static func run(_ work: @escaping @Sendable () -> Void) {
+        let worker = Thread { work() }
         worker.stackSize = 8 << 20
-        worker.qualityOfService = .userInteractive
+        worker.qualityOfService = .userInitiated
         worker.start()
-        done.wait()
-        return box.result
     }
 }
 
@@ -613,13 +935,44 @@ enum WallpaperBlurRender {
 /// still late. A global is created on first use, so the context above, its Metal setup and the
 /// compiled blur kernels were all paid on the main thread inside the first chat's push. One tiny blur
 /// here pays them in the background while the chat list is on screen.
+///
+/// Since 2026-11-11 it also reads the most recently used wallpaper pictures back from disk, decoded,
+/// so the first wallpaper chat after a relaunch finds its blur in memory and opens with it at once,
+/// and it trims the folder (old builds' folders go, and only the newest files are kept).
 enum WallpaperBlurWarmup {
     nonisolated static func run() {
-        DispatchQueue.global(qos: .utility).async {
+        WallpaperBlurRender.run {
             let box = CGRect(x: 0, y: 0, width: 8, height: 8)
             let img = CIImage(color: .black).cropped(to: box).clampedToExtent()
                 .applyingGaussianBlur(sigma: 20).cropped(to: box)
             _ = wallpaperBlurContext.createCGImage(img, from: box)
+            preload()
+        }
+    }
+
+    private static func preload() {
+        let fm = FileManager.default
+        let folder = WallpaperPictureWork.folder
+        let parent = folder.deletingLastPathComponent()
+        if let siblings = try? fm.contentsOfDirectory(atPath: parent.path) {
+            for name in siblings where name.hasPrefix("wallpaper-pictures-") && name != folder.lastPathComponent {
+                try? fm.removeItem(at: parent.appendingPathComponent(name))
+            }
+        }
+        guard let files = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let dated = files.map { u -> (URL, Date) in
+            (u, (try? u.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+        }.sorted { $0.1 > $1.1 }
+        for (u, _) in dated.dropFirst(40) { try? fm.removeItem(at: u) }
+        var blurs = 0, headers = 0
+        for (u, _) in dated.prefix(40) {
+            guard let key = u.deletingPathExtension().lastPathComponent.removingPercentEncoding else { continue }
+            let isBlur = key.hasPrefix("b|"), isHeader = key.hasPrefix("h|")
+            guard (isBlur && blurs < 4) || (isHeader && headers < 2) else { continue }
+            guard let image = WallpaperPictureWork.load(key) else { continue }
+            if isBlur { blurs += 1 } else { headers += 1 }
+            Task { @MainActor in WallpaperBlur.insertPreloaded(image, key: key) }
+            if blurs >= 4, headers >= 2 { break }
         }
     }
 }
