@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import CryptoKit
+import ImageIO
 
 extension Notification.Name {
     // Posted with the cid as `object` when "Change Wallpaper" is tapped in a profile; the open
@@ -385,7 +386,21 @@ enum ChatWallpapers {
     private(set) var version = 0
     private(set) var libraryIds: [String]                       // user-imported photo ids, newest FIRST
     @ObservationIgnored private var cache: [String: ChatWallpaper] = [:]
-    @ObservationIgnored private var imageCache: [String: UIImage] = [:]
+    /// ⛔ BOUNDED (perf audit 2026-11-11 S6). A plain dictionary kept every library photo anyone
+    /// opened (about 10 MB each, decoded) for the life of the process. A few full pictures fit;
+    /// the picker grids use `thumbCache` instead.
+    @ObservationIgnored private let imageCache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 8
+        c.totalCostLimit = 48 * 1024 * 1024
+        return c
+    }()
+    /// Small decoded copies for picker tiles, made off the main thread (`loadLibraryThumb`).
+    @ObservationIgnored private let thumbCache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 200
+        return c
+    }()
     @ObservationIgnored private var hashes: [String: String]   // photo id -> content hash (dedup)
     // GROUP WALLPAPER (owner 2026-10-18), see "Shared group wallpaper" below.
     @ObservationIgnored private var groupShared: [String: String]          // cid -> the group's `wallpaper` field
@@ -427,7 +442,7 @@ enum ChatWallpapers {
     }
 
     private func photoExists(_ id: String) -> Bool {
-        imageCache[id] != nil || FileManager.default.fileExists(atPath: Self.libraryURL(id).path)
+        imageCache.object(forKey: id as NSString) != nil || FileManager.default.fileExists(atPath: Self.libraryURL(id).path)
     }
 
     func wallpaper(for cid: String) -> ChatWallpaper {
@@ -568,7 +583,7 @@ enum ChatWallpapers {
             guard let raw = c.groupWallpaper, raw.hasPrefix("u:") else { continue }
             let link = String(raw.dropFirst(2))
             let id = groupUrlIds[link] ?? Self.sharedPhotoId(link)
-            if imageCache[id] == nil, !FileManager.default.fileExists(atPath: Self.libraryURL(id).path) {
+            if imageCache.object(forKey: id as NSString) == nil, !FileManager.default.fileExists(atPath: Self.libraryURL(id).path) {
                 fetchGroupPhoto(link, id: id)
             }
         }
@@ -701,9 +716,36 @@ enum ChatWallpapers {
     // MARK: - User photo library (persistent history; local only)
 
     func libraryImage(_ id: String) -> UIImage? {
-        if let c = imageCache[id] { return c }
+        if let c = imageCache.object(forKey: id as NSString) { return c }
         guard let img = UIImage(contentsOfFile: Self.libraryURL(id).path) else { return nil }
-        imageCache[id] = img
+        imageCache.setObject(img, forKey: id as NSString, cost: Self.cost(img))
+        return img
+    }
+
+    private static func cost(_ img: UIImage) -> Int {
+        Int(img.size.width * img.scale * img.size.height * img.scale * 4)
+    }
+
+    /// A tile's picture if it was made already. See `loadLibraryThumb`.
+    func libraryThumb(_ id: String) -> UIImage? { thumbCache.object(forKey: id as NSString) }
+
+    /// A small copy of a library photo for a picker tile: decoded by ImageIO straight from the
+    /// stored file at tile size, off the main thread, never the 1600 px picture drawn into a square.
+    func loadLibraryThumb(_ id: String, maxPixel: Int = 360) async -> UIImage? {
+        if let hit = libraryThumb(id) { return hit }
+        let url = Self.libraryURL(id)
+        let img = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+            else { return nil }
+            let opts = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            ] as CFDictionary
+            return CGImageSourceCreateThumbnailAtIndex(src, 0, opts).map { UIImage(cgImage: $0) }
+        }.value
+        if let img { thumbCache.setObject(img, forKey: id as NSString) }
         return img
     }
 
@@ -741,7 +783,7 @@ enum ChatWallpapers {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
         do { try data.write(to: url, options: .atomic) } catch { return nil }
-        imageCache[id] = scaled
+        imageCache.setObject(scaled, forKey: id as NSString, cost: Self.cost(scaled))
         hashes[id] = hash
         libraryIds.insert(id, at: 0)                             // newest first (observed → picker updates)
         freshImports.insert(id)
@@ -763,7 +805,8 @@ enum ChatWallpapers {
         freshImports.remove(id)
         libraryIds.removeAll { $0 == id }
         hashes.removeValue(forKey: id)
-        imageCache.removeValue(forKey: id)
+        imageCache.removeObject(forKey: id as NSString)
+        thumbCache.removeObject(forKey: id as NSString)
         try? FileManager.default.removeItem(at: Self.libraryURL(id))
         persistLibrary()
         version &+= 1
@@ -795,7 +838,8 @@ enum ChatWallpapers {
         }
         try? FileManager.default.removeItem(at: Self.base.appendingPathComponent("Wallpapers"))
         cache = [:]
-        imageCache = [:]
+        imageCache.removeAllObjects()
+        thumbCache.removeAllObjects()
         hashes = [:]
         libraryIds = []
         groupShared = [:]; groupUrlIds = [:]; groupPreview = [:]; groupPending = [:]
