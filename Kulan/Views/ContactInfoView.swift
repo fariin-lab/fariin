@@ -1941,6 +1941,7 @@ struct ContactInfoView: View {
             // opens a sheet that says what was checked, and a typed one does nothing at all.
             HStack(spacing: 6) {
                 Text(shownName).font(.title.weight(.bold))
+                    .holdToCopy(shownName)   // owner 2026-11-11: hold to copy, a glass "Copy" pill
                 VerifiedMark(uid: otherUid, size: 20, explains: true)
             }
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
@@ -1950,6 +1951,7 @@ struct ContactInfoView: View {
             Text(handle.isEmpty ? " " : "@\(handle)")
                 .font(.body).foregroundStyle(.secondary)   // owner 2026-10-10: one size, as My Profile
                 .frame(minHeight: 22)
+                .holdToCopy(handle.isEmpty ? "" : "@\(handle)")
             // Bio shown as centered text under the handle (like a group's description under the member
             // count) — not a labeled "bio" card.
             if !gatedAbout.isEmpty {
@@ -2054,11 +2056,13 @@ struct ContactInfoView: View {
             HStack(spacing: 6) {
                 Text(shownName).font(.title.weight(.bold)).foregroundStyle(text)
                     .lineLimit(2).multilineTextAlignment(.center)
+                    .holdToCopy(shownName)
                 VerifiedMark(uid: otherUid, size: 20, explains: true)
             }
             Text(handle.isEmpty ? " " : "@\(handle)")
                 .font(.body).foregroundStyle(text.opacity(0.82))   // owner 2026-10-10: one size
                 .frame(minHeight: 22)
+                .holdToCopy(handle.isEmpty ? "" : "@\(handle)")
             if !gatedAbout.isEmpty {
                 Text(gatedAbout)
                     .font(.subheadline).foregroundStyle(text.opacity(0.82))

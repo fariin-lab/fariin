@@ -899,6 +899,7 @@ struct GroupInfoView: View {
             HStack(spacing: 6) {
                 Text(title).font(.title.weight(.bold)).foregroundStyle(ink)
                     .lineLimit(2).multilineTextAlignment(.center)
+                    .holdToCopy(title)   // owner 2026-11-11: hold to copy, as on a person's profile
                 GroupVerifiedMark(on: conv?.showsGroupBadge == true, size: 20, kind: conv?.groupVerifiedType, explains: true,
                                   label: conv?.groupMod.label ?? "")
             }
