@@ -79,7 +79,7 @@ final class ConversationsDiskCache {
             guard let id = entry["__id"] as? String,
                   let body = entry["__doc"] as? [String: Any],
                   let doc = restore(body) as? [String: Any] else { return nil }
-            return Conversation(id: id, data: doc)
+            return Conversation(id: id, data: doc, me: uid)
         }
     }
 
@@ -104,7 +104,7 @@ final class ConversationsDiskCache {
               let body = entry["__doc"] as? [String: Any],
               let doc = restore(body) as? [String: Any]
         else { return nil }
-        return Conversation(id: id, data: doc)
+        return Conversation(id: id, data: doc, me: uid)
     }
 
     // MARK: - Write

@@ -537,7 +537,7 @@ final class ConversationsRepository {
                 // which plain data() reads as nil → updatedAtMillis 0 → isCleared() treats the
                 // chat as delete-for-me and it vanishes from the list until the server acks.
                 let data = d.data(with: .estimate)
-                entry = (data, Conversation(id: id, data: data))
+                entry = (data, Conversation(id: id, data: data, me: uid))
                 out.fresh.append(entry.conv)
                 isFresh = true
             }

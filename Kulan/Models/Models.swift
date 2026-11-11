@@ -1667,7 +1667,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     static let deletedAccountName = "Deleted Account"
     func isDeletedAccount(_ uid: String) -> Bool { !uid.isEmpty && deletedUsers.contains(uid) }
 
-    init(id: String, data: [String: Any]) {
+    /// `me`: the signed-in uid. Background decoders (the chat-list decode queue, the disk cache) pass
+    /// the uid they were handed, so nothing here reads `AuthService` off the main thread
+    /// (2026-11-11). Main-thread callers can leave it out.
+    init(id: String, data: [String: Any], me signedIn: String? = AuthService.shared.uid) {
         self.id = id
         self.users = data["users"] as? [String] ?? []
         self.names = data["names"] as? [String: String] ?? [:]
@@ -1677,7 +1680,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         // A channel I only follow or visit (not in `users`, which is its owner and admins): the chat
         // list shows its last POST, never a notice (2026-11-06, server `postPreview`). Its notices are
         // not shown inside the channel to followers either.
-        if data["channel"] as? Bool == true, let me = AuthService.shared.uid,
+        if data["channel"] as? Bool == true, let me = signedIn,
            !(data["users"] as? [String] ?? []).contains(me) {
             let pv = data["postPreview"] as? [String: Any]
             let text = (pv?["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
