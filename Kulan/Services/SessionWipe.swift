@@ -317,6 +317,7 @@ enum SessionWipe {
         UserDefaults.standard.removeObject(forKey: keptMediaKey)
         AudioCache.removeAll()                  // decrypted voice notes on disk
         VideoCache.removeAll()                  // decrypted videos on disk
+        ChatVideoStream.removeAll()             // partly streamed plain videos
         // `wipeEverything` rather than `clear`: the owned tier is spared by every cache-management
         // path, and an account leaving the device is not cache management.
         DiskImageCache.shared.wipeEverything()

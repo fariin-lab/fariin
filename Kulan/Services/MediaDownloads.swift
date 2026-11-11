@@ -305,6 +305,28 @@ final class MediaDownloads {
         }
     }
 
+    /// The clip reached VideoCache another way: `ChatVideoStream` played it to its last byte. Any
+    /// job for it is over (its transfer is dropped, not paused), and every view watching this url
+    /// hears `.done`, so a bubble behind the player stops offering a download.
+    func noteStoredElsewhere(_ url: String) {
+        guard !url.isEmpty else { return }
+        pending.removeAll { $0 == url }
+        removeResume(url)
+        guard let job = jobs[url] else {
+            observers[url]?.values.forEach { $0(.done) }
+            return
+        }
+        job.retryWork?.cancel(); job.retryWork = nil
+        if let task = job.task {
+            // Cleared first, so its completion finds no job of its own and only tidies its file.
+            job.task = nil
+            task.cancel()
+        }
+        finishJob(job, .done)
+        startNextPending()
+        updateBackgroundTime()
+    }
+
     /// The size of a remote file without downloading it, for a Download button that names its cost.
     /// Storage metadata is one small request, readable by exactly whoever may read the file.
     func fetchSize(_ url: String) async -> Int64? {
