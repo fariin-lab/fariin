@@ -321,9 +321,15 @@ final class ConversationsRepository {
 
     /// ⛔ IS THE LIST BEHIND THE SERVER? (owner 2026-11-01). The stall watchdog has one clock, and
     /// any answer from the server counts as healthy for everything, so a list stuck on old data
-    /// looked fine for as long as the heartbeat answered. Once a minute on screen this asks the server
-    /// for the same query's newest row, one document, and compares. Well behind: the list's listener
-    /// is rebuilt, at most once in five minutes, so a slow line cannot make it churn.
+    /// looked fine for as long as the heartbeat answered. This asks the server for the same query's
+    /// newest row, one document, and compares. Well behind: the list's listener is rebuilt, at most
+    /// once in five minutes, so a slow line cannot make it churn.
+    ///
+    /// WHEN IT ASKS (perf audit 2026-11-11, E4): it used to ask once a minute for as long as the app
+    /// was in front, about 60 queries an hour on a quiet screen. Like the reference app, which trusts
+    /// its update stream and checks its state when it comes back to the front or reconnects, it now
+    /// asks 15 s after the app becomes active, a minute after the list attaches, after a recovery or a swapped Firestore client
+    /// (the moments a stale list showed up), and otherwise once per `behindLongGap` while on screen.
     @ObservationIgnored private var behindCheck: Task<Void, Never>?
     @ObservationIgnored private var lastBehindRepair = Date.distantPast
     /// With a time limit: on a stuck client this read never answers, and the loop that asks must
@@ -344,11 +350,31 @@ final class ConversationsRepository {
         return nil
     }
 
+    private static let behindLongGap: UInt64 = 600_000_000_000   // 10 min
+
     private func startBehindServerCheck() {
         guard behindCheck == nil else { return }
         behindCheck = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
+            // Wakes: back in front, a recovery, a swapped client, or the long gap. A wake that lands
+            // while one is already queued folds into it.
+            let (wakes, wake) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+            let nc = NotificationCenter.default
+            let tokens = [UIApplication.didBecomeActiveNotification, SessionRecovery.recovered, FirestoreHub.swapped]
+                .map { nc.addObserver(forName: $0, object: nil, queue: nil) { _ in wake.yield() } }
+            // The first ask a minute after the list attaches, as before (a stale saved copy shows up
+            // at launch), then the long gap.
+            let gap = Task {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
+                while !Task.isCancelled {
+                    wake.yield()
+                    try? await Task.sleep(nanoseconds: ConversationsRepository.behindLongGap)
+                }
+            }
+            defer { gap.cancel(); wake.finish(); tokens.forEach { nc.removeObserver($0) } }
+            for await _ in wakes {
+                guard !Task.isCancelled else { return }
+                // Give the list's own listener time to reconnect and bring its answer first.
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
                 guard let self, UIApplication.shared.applicationState == .active,
                       self.listener != nil, let uid = Auth.auth().currentUser?.uid, uid == self.listenerUid,
                       let top = await self.newestOnServer(uid) else { continue }

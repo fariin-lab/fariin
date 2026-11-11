@@ -100,19 +100,35 @@ final class ConnectionStatus {
     // quiet cache, and on its own it fired a reset every minute through a whole outage.
     private static let stallAfter: TimeInterval = 20
     private static let tickEvery: TimeInterval = 5
+    // NO IDLE TICKING (perf audit 2026-11-11, E4). The watchdog used to wake every 5 s for as long as
+    // the app was in front, and start a pending-writes wait each time, on an app where nothing was
+    // happening. The reference app keeps no idle timer of this kind: it waits on its update stream and
+    // checks its state when something happens (back in front, a reconnect, a gap). So the watchdog now
+    // runs only while there is something it could judge: for `busyWindow` after the app comes to the
+    // front, a route comes up, a recovery or a client swap, or any snapshot or local write (Firestore's
+    // snapshots-in-sync event, which a send raises at once even on a dead stream); and for as long as a
+    // read or a pending-writes wait it started is still out. Then it stops until the next such event.
+    private static let busyWindow: TimeInterval = 60
 
     // ⛔ THE KEEPALIVE — owner, 2026-10-08, round 2. A stream can go dead without an error and without
     // anything waiting on it, so nothing above would ever notice. The reference app pings its socket;
     // this does the Firestore version: while the app is active, the path is up and someone is signed
-    // in, one small server read of the probe's own document every `heartbeatEvery`. An answer ends
+    // in, one small server read of the probe's own document after `heartbeatQuiet` of silence. An answer ends
     // any stall episode; no answer in `heartbeatTimeout` (or code 14 / 4) is a stall; a refusal goes
     // to SessionRecovery as one. Paused in the background.
-    private static let heartbeatEvery: TimeInterval = 30
+    // E4, 2026-11-11: was one read every 30 s of quiet, about 120 an hour on an idle screen. Now only
+    // after `heartbeatQuiet` of silence, and the moments that matter are asked at once instead: back in
+    // front (`becameActive`), a route change (`armSettle`), and a push that arrives while the app is
+    // open but no listener has heard anything (`pushArrived`), which is the reference app's own cue that
+    // its stream is behind.
+    private static let heartbeatQuiet: TimeInterval = 300
     private static let heartbeatTimeout: TimeInterval = 15
     private var heartbeatLoop: Task<Void, Never>?
     private var heartbeatStarted: Date?
     private var heartbeatGen = 0
     private var watchdog: Task<Void, Never>?
+    private var watchdogBusyUntil = Date.distantPast
+    private var inSync: ListenerRegistration?
     private var observers: [NSObjectProtocol] = []
     private var routeUpSince = Date()
     private var activeSince = Date()
@@ -161,10 +177,35 @@ final class ConnectionStatus {
                 MainActor.assumeIsolated { self?.stopHeartbeat() }
             })
         if UIApplication.shared.applicationState != .background { startHeartbeat() }
+        listenInSync()
+        armWatchdog()
+    }
+
+    /// Any snapshot or local write anywhere in the app wakes the watchdog for `busyWindow`. A quiet app
+    /// raises none, so nothing ticks.
+    private func listenInSync() {
+        inSync?.remove()
+        inSync = FirestoreHub.db.addSnapshotsInSyncListener { [weak self] in
+            Task { @MainActor in self?.armWatchdog() }
+        }
+    }
+
+    private var watchdogNeeded: Bool {
+        Date() < watchdogBusyUntil || probeReadStarted != nil || heartbeatStarted != nil
+            || writesWaitStarted != nil
+    }
+
+    /// Start the 5 s watchdog, or keep it running for another `busyWindow`.
+    private func armWatchdog() {
+        watchdogBusyUntil = Date().addingTimeInterval(Self.busyWindow)
+        guard watchdog == nil else { return }
         watchdog = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(Self.tickEvery))
                 guard let self else { return }
+                // A pending-writes wait from the last tick that is still out means writes are waiting,
+                // so this stays on until they land or the stall is called.
+                guard self.watchdogNeeded else { self.watchdog = nil; return }
                 self.watchdogTick()
             }
         }
@@ -176,6 +217,7 @@ final class ConnectionStatus {
     /// `noteSnapshot`.
     private func afterRecovery() {
         recoveredAt = Date()
+        armWatchdog()
         probeReadStarted = nil
         probeReadGen += 1
         guard let uid = probeUid else { return }
@@ -195,8 +237,11 @@ final class ConnectionStatus {
         heartbeatGen += 1
         writesWaitStarted = nil
         writesWaitGen += 1
-        FirestoreHub.drop([probe])
+        FirestoreHub.drop([probe, inSync])
         probe = nil
+        inSync = nil
+        listenInSync()
+        armWatchdog()
         guard let uid = probeUid else { return }
         watch(uid: uid, force: true)
     }
@@ -205,6 +250,7 @@ final class ConnectionStatus {
     /// been quiet for a minute is asked once, so a stall that began off screen is noticed.
     private func becameActive() {
         activeSince = Date()
+        armWatchdog()
         startHeartbeat()
         if let uid = probeUid, probe == nil { watch(uid: uid, force: true) }
         if Date().timeIntervalSince(lastServerAnswer) > 60 { armSettle() }
@@ -240,10 +286,25 @@ final class ConnectionStatus {
         guard heartbeatLoop == nil else { return }
         heartbeatLoop = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(Self.heartbeatEvery))
+                // Sleep until the silence would reach `heartbeatQuiet`, not on a fixed beat: any
+                // server answer in between pushes the next read back.
+                guard let quietFor = self.map({ Date().timeIntervalSince($0.lastServerAnswer) }) else { return }
+                try? await Task.sleep(for: .seconds(max(30, Self.heartbeatQuiet - quietFor)))
                 guard !Task.isCancelled, let self else { return }
                 self.heartbeat()
             }
+        }
+    }
+
+    /// A push for this account arrived while the app is open. If no listener has heard from the server
+    /// within a few seconds of it, the stream may be behind: ask the server once, now, instead of
+    /// waiting out `heartbeatQuiet`.
+    func pushArrived() {
+        let at = Date()
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, self.lastServerAnswer < at else { return }
+            self.heartbeat(minQuiet: 0)
         }
     }
 
@@ -255,15 +316,16 @@ final class ConnectionStatus {
     }
 
     /// One server read of the probe's document, with its own 15s limit. One at a time.
-    private func heartbeat() {
+    private func heartbeat(minQuiet: TimeInterval = ConnectionStatus.heartbeatQuiet) {
         guard hasRoute, let uid = probeUid, Auth.auth().currentUser != nil,
               UIApplication.shared.applicationState == .active, heartbeatStarted == nil else { return }
-        // The server answered something in the last 30s (a listener snapshot, a read): the stream is
-        // alive, and a keepalive read would only cost money.
-        guard Date().timeIntervalSince(lastServerAnswer) >= 30 else { return }
+        // The server answered something recently (a listener snapshot, a read): the stream is alive,
+        // and a keepalive read would only cost money.
+        guard Date().timeIntervalSince(lastServerAnswer) >= minQuiet else { return }
         heartbeatGen += 1
         let gen = heartbeatGen
         heartbeatStarted = Date()
+        armWatchdog()   // it judges a read that hangs
         Task { [weak self] in
             do {
                 _ = try await FirestoreHub.db.collection("users").document(uid)
@@ -363,7 +425,7 @@ final class ConnectionStatus {
     /// stood down while nothing was reaching the server.
     func noteSnapshot(fromCache: Bool, pendingWrites: Bool = false) {
         guard !fromCache else { armSettle(); return }
-        guard !pendingWrites else { return }
+        guard !pendingWrites else { armWatchdog(); return }
         pending?.cancel(); pending = nil
         serverAnswered()
     }
@@ -380,6 +442,7 @@ final class ConnectionStatus {
         // The route came back. Whether the SERVER is reachable is a separate question, and the next
         // snapshot answers it; until then this is exactly the "connecting" case.
         routeUpSince = Date()   // the watchdog gives a new path its 20s before judging it
+        armWatchdog()
         if state == .waitingForNetwork { state = .connecting }
         armSettle()
     }
@@ -433,6 +496,7 @@ final class ConnectionStatus {
         probeReadGen += 1
         let gen = probeReadGen
         probeReadStarted = Date()
+        armWatchdog()   // it judges a read that hangs
         do {
             _ = try await FirestoreHub.db.collection("users").document(uid)
                 .getDocument(source: .server)

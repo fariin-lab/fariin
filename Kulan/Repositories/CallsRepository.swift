@@ -184,6 +184,18 @@ final class CallsRepository {
     /// can still change (ringing, ongoing, the last two hours) are read on every load anyway.
     static let fullEvery: TimeInterval = 6 * 3600
 
+    /// Perf audit 2026-11-11, S7: every return to the app read the WHOLE conversations collection
+    /// again just to learn which chats had moved. The reference app's call list is a view over what
+    /// it already holds, moved along by the updates that arrive; it never rereads every chat to build
+    /// it. Here: the chats as last read (`convIndex`), and a return to the app asks the server only
+    /// for the chats whose `updatedAt` reached the newest one seen (the chat list's own index:
+    /// users array-contains + updatedAt). Chats that did not move cost nothing. The whole collection
+    /// is still read on the first load of a run, on a forced load (pull to refresh, Try Again), and
+    /// once per `convFullEvery`, which is what drops chats I left or deleted.
+    @ObservationIgnored private var convIndex: [String: Conversation] = [:]
+    @ObservationIgnored private var convIndexAt: Date?
+    static let convFullEvery: TimeInterval = 30 * 60
+
     /// The chat's name, photo and other person, as its call rows show them.
     static func label(_ c: Conversation, me: String) -> (name: String, photo: String?, other: String) {
         if c.isGroup { return (name: c.title.isEmpty ? "Group" : c.title, photo: c.avatarUrl, other: "") }
@@ -214,6 +226,8 @@ final class CallsRepository {
         generation &+= 1
         chatCache = [:]
         lastFullAt = nil
+        convIndex = [:]
+        convIndexAt = nil
         restoredFromDisk = false
         CallLogDiskCache.remove()   // H10: the disk copy is the previous account's too
         calls = []
@@ -269,8 +283,24 @@ final class CallsRepository {
         // audit M-090, 2026-10-07: a thrown query is NOT an empty history. `try?` made the two the
         // same, so a weak network published "No calls", zeroed the badge, and the 30 s TTL then
         // protected the empty list. On a failure the list on screen stays as it was.
-        guard let convSnap = try? await database.collection("conversations")
-            .whereField("users", arrayContains: me).getDocuments() else {
+        // S7: only the chats that moved, when the known set is recent enough to build on.
+        let (known, knownAt) = await MainActor.run { (self.convIndex, self.convIndexAt) }
+        let mine = database.collection("conversations").whereField("users", arrayContains: me)
+        var convDocs: [QueryDocumentSnapshot]?
+        var incremental = false
+        if !force, let knownAt, !known.isEmpty, Date().timeIntervalSince(knownAt) < Self.convFullEvery {
+            // From two minutes before the newest `updatedAt` seen: a few chats come back again, which
+            // is cheaper than missing one whose time was a local estimate or written in the same moment.
+            let newest = known.values.map(\.updatedAtMillis).max() ?? 0
+            let since = Timestamp(date: Date(timeIntervalSince1970: max(0, newest - 120_000) / 1000))
+            if let delta = try? await mine.whereField("updatedAt", isGreaterThanOrEqualTo: since)
+                .order(by: "updatedAt", descending: true).getDocuments() {
+                convDocs = delta.documents
+                incremental = true
+            }
+        }
+        if convDocs == nil { convDocs = try? await mine.getDocuments().documents }
+        guard let convDocs else {
             let again = await MainActor.run { () -> Bool in
                 guard self.generation == myGeneration else { return false }
                 self.loading = false; self.hasLoaded = true; self.loadFailed = true
@@ -280,7 +310,10 @@ final class CallsRepository {
             if again { await load(force: true) }
             return
         }
-        let convs = convSnap.documents.map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
+        var index = incremental ? known : [:]
+        for d in convDocs { index[d.documentID] = Conversation(id: d.documentID, data: d.data(with: .estimate)) }
+        let newIndex = index, indexWasFull = !incremental
+        let convs = Array(index.values)
             // A silently blocked contact's activity is hidden everywhere else — frozen previews, no
             // unread badges, no reordering — but their timed-out call still wrote a shared record,
             // so the Calls tab showed "Missed call" and badged it red (audit).
@@ -372,6 +405,8 @@ final class CallsRepository {
             merged.sort { $0.date > $1.date }
             self.calls = merged; self.loading = false; self.hasLoaded = true; self.loadFailed = false
             self.chatCache = newCache   // chats gone from my list drop out with it
+            self.convIndex = newIndex   // S7
+            if indexWasFull { self.convIndexAt = Date() }
             // A partial read is not a fresh list: leave the TTL open so the next visit tries again.
             if failed.isEmpty, !adhocFailed {
                 self.lastLoadedAt = Date()

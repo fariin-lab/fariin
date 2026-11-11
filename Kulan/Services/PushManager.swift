@@ -278,6 +278,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         let content = notification.request.content
+        // Something happened on the server while the app is open: if no listener hears of it within a
+        // few seconds, ConnectionStatus asks the server whether the stream is behind (perf E4).
+        await MainActor.run { ConnectionStatus.shared.pushArrived() }
         // A multi-person call invitation while the app is open: the full-screen invitation
         // (IncomingGroupCallLayer) is already up from the live listener, so no banner on top of it.
         if content.userInfo["type"] as? String == "adhoccall" { return [] }
@@ -357,7 +360,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // a follow-up). "None" → silent banner.
         let sound = SoundStore.sound(cid, .message)
         guard wantSound, sound.id != "none" else { return [.badge] }
-        await MainActor.run { SoundPlayer.shared.play(sound) }
+        SoundPlayer.shared.playAlert(sound)
         return [.badge]
     }
 

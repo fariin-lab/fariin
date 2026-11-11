@@ -46,8 +46,17 @@ enum ConnectionDiag {
     static func start(uid: String) {
         guard DiagUpload.allowed, startedFor != uid, watched.contains(hashed(uid)) else { return }
         startedFor = uid
+        // Firebase's detailed log only in a local debug build (perf audit 2026-11-11, E6). It writes a
+        // line for every watch-stream message, snapshot and write on Firestore's own worker queue, so
+        // on a TestFlight phone it slowed every snapshot for the whole session, and those are the
+        // phones lag is judged on. The reference app likewise keeps its network log off unless a
+        // developer turns it on. TestFlight keeps the cheap NET# / POWER# / APP# lines below.
+        #if DEBUG
         Firestore.enableLogging(true)
         DiagLog.add("CONNDIAG# on: detailed Firebase log, network and power changes")
+        #else
+        DiagLog.add("CONNDIAG# on: network and power changes (no Firebase log outside debug builds)")
+        #endif
 
         let m = NWPathMonitor()
         m.pathUpdateHandler = { path in
@@ -84,6 +93,10 @@ enum ConnectionDiag {
     nonisolated private static let gate = OSAllocatedUnfairLock(initialState: (busy: false, last: Date.distantPast))
 
     static func captureFirebaseLog(_ why: String, minutes: Double = 3) {
+        // Outside a debug build Firebase's detailed log is off (see `start`), so there is nothing to copy.
+        #if !DEBUG
+        return
+        #endif
         guard startedFor != nil else { return }
         let now = Date()
         let go = gate.withLock { s -> Bool in

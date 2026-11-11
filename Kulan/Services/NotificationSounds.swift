@@ -270,50 +270,86 @@ enum SoundStore {
     }
 }
 
-// Plays a tone for previewing / foreground alerts. Holds the AVAudioPlayer so custom sounds
-// aren't deallocated mid-play.
-final class SoundPlayer {
+// Plays a tone for previewing / foreground alerts.
+//
+// Two paths, and neither runs on the main thread (perf audit 2026-11-11, E1):
+//
+// - `playAlert`: a message arriving while the app is open. Done the way the reference app does its
+//   in-app tones: the file is registered once as a system sound and played as one. A system sound
+//   never touches the app's audio session, so music or a podcast in another app keeps playing at
+//   full volume (it used to stay ducked after the first alert), a voice note or call in this app is
+//   not disturbed, and there is no 100-300 ms `setActive` on the main thread while the banner slides
+//   in. Like every iOS alert it follows the ring/silent switch.
+// - `play`: the preview in the sound picker, which the user asked to hear, so it still plays through
+//   a .playback session (audible on silent). The session is now let go when the tone ends, with
+//   `.notifyOthersOnDeactivation`, so other apps' audio comes back up.
+final class SoundPlayer: NSObject, AVAudioPlayerDelegate {
     static let shared = SoundPlayer()
-    private init() {}
+    private override init() {}
+    private let queue = DispatchQueue(label: "SoundPlayer", qos: .userInitiated)
+    // Touched only on `queue`.
     private var player: AVAudioPlayer?
     private var registered: [String: SystemSoundID] = [:]
 
-    func play(_ sound: NotificationSound, loop: Bool = false) {
-        // Neither of these is a file we hold. "None" is silence by definition, and the phone's own
-        // ringtone cannot be read by an app at all, let alone played — see `systemRingtone`.
-        guard sound.id != "none", sound.id != "system" else { return }
-        // A bundled ringtone is a real file — play it directly (this is the preview you hear in the
-        // Call Sound picker; CallKit plays the same file when the phone actually rings).
+    /// The file behind a tone: a bundled ringtone, an imported file, or the tone's on-device .caf.
+    private func fileURL(_ sound: NotificationSound) -> URL? {
         if let file = sound.bundleFile,
            let url = Bundle.main.url(forResource: (file as NSString).deletingPathExtension,
                                      withExtension: (file as NSString).pathExtension) {
-            do {
-                let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playback, options: [.duckOthers])
-                try session.setActive(true)
-                let p = try AVAudioPlayer(contentsOf: url)
-                p.numberOfLoops = loop ? -1 : 0
-                player = p
-                p.play()
-                return
-            } catch { /* fall through */ }
+            return url
         }
-        // Prefer a real audio file (custom import, else the tone's on-device .caf) played through a
-        // .playback session so it's AUDIBLE — the system-alert route (AudioServicesPlaySystemSound)
-        // is muted by the ring/silent switch, which is why it only vibrated. Fall back to the system
-        // sound if the file is missing.
-        let path = sound.customPath ?? sound.cafPath
-        if let path, FileManager.default.fileExists(atPath: path) {
-            do {
-                let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playback, options: [.duckOthers])
-                try session.setActive(true)
-                let p = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
-                player = p          // retain so it isn't deallocated mid-play
-                p.play()
-                return
-            } catch { /* fall through to the system tone */ }
+        if let path = sound.customPath ?? sound.cafPath, FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
         }
-        if let sid = sound.systemID { AudioServicesPlaySystemSound(sid) }
+        return nil
+    }
+
+    /// Foreground message alert. Safe to call from any thread.
+    func playAlert(_ sound: NotificationSound) {
+        guard sound.id != "none", sound.id != "system" else { return }
+        queue.async { [self] in
+            if let url = fileURL(sound) {
+                let key = url.path
+                var sid = registered[key] ?? 0
+                if sid == 0, AudioServicesCreateSystemSoundID(url as CFURL, &sid) == kAudioServicesNoError {
+                    registered[key] = sid
+                }
+                if sid != 0 { AudioServicesPlaySystemSound(sid); return }
+            }
+            // A file the system cannot take as an alert (too long, odd format): the built-in tone.
+            if let sid = sound.systemID { AudioServicesPlaySystemSound(sid) }
+        }
+    }
+
+    /// Picker preview. Safe to call from any thread.
+    func play(_ sound: NotificationSound, loop: Bool = false) {
+        // Neither of these is a file we hold. "None" is silence by definition, and the phone's own
+        // ringtone cannot be read by an app at all, let alone played. See `systemRingtone`.
+        guard sound.id != "none", sound.id != "system" else { return }
+        queue.async { [self] in
+            if let url = fileURL(sound) {
+                do {
+                    player?.stop()
+                    let session = AVAudioSession.sharedInstance()
+                    try session.setCategory(.playback, options: [.duckOthers])
+                    try session.setActive(true)
+                    let p = try AVAudioPlayer(contentsOf: url)
+                    p.numberOfLoops = loop ? -1 : 0
+                    p.delegate = self
+                    player = p      // retain so it isn't deallocated mid-play
+                    p.play()
+                    return
+                } catch { /* fall through to the system tone */ }
+            }
+            if let sid = sound.systemID { AudioServicesPlaySystemSound(sid) }
+        }
+    }
+
+    func audioPlayerDidFinishPlaying(_ p: AVAudioPlayer, successfully flag: Bool) {
+        queue.async { [self] in
+            guard player === p else { return }   // a newer preview took over; it releases the session
+            player = nil
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        }
     }
 }

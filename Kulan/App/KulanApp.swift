@@ -93,7 +93,9 @@ struct KulanApp: App {
                 }
         }
         .onChange(of: scenePhase) { _, phase in
-            Task { await PresenceService.set(online: phase == .active) }
+            // .inactive (Control Center, Notification Center, the app switcher on its way) is not a
+            // presence change: only active and background write (perf audit 2026-11-11, E7).
+            if phase != .inactive { Task { await PresenceService.set(online: phase == .active) } }
             // "Last active" on the Devices screen is only as true as this. Foreground beats,
             // background stops. See DeviceRegistry.startHeartbeat.
             if phase == .active { DeviceRegistry.shared.startHeartbeat() }
