@@ -5,8 +5,10 @@ import librlottie
 // of TGSSticker.swift for why it exists. Three pieces:
 //
 //   TGSDoc     one parsed .tgs (an rlottie handle). Lives on ONE render queue for its whole life.
-//   TGSEngine  one CADisplayLink on main; each tick asks the render queues for every playing
-//              sticker's next frame, then sets all the results in one main-thread pass.
+//   TGSEngine  one CADisplayLink on main; each tick hands every playing sticker its next frame:
+//              from the shared frame cache when that frame was drawn before (any player of the
+//              same sticker at the same size), else from a render queue, each frame going up as
+//              soon as it is drawn. Perf audit 2026-11-11 M7.
 //   TGSPlayer  a CALayer that shows one sticker. Views host it; they say play, pause and size.
 
 /// One parsed sticker. rlottie draws premultiplied ARGB32 (0xAARRGGBB in a native word), which on

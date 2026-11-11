@@ -128,13 +128,38 @@ final class VoiceBubbleView: UIView {
             // mode) nothing painted and the progress froze, then jumped. The main queue runs in
             // every mode and still hops to the next turn, so the load-bearing delay above stays.
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.paint() }
+            .sink { [weak self] _ in self?.paintIfChanged() }
             .store(in: &bag)
+    }
+
+    /// Everything `paint` reads from the player for THIS note. The player publishes its progress
+    /// 20 times a second, and every voice row in the chat heard it.
+    private struct PaintState: Equatable {
+        var playing: Bool, loading: Bool, failed: Bool, heard: Bool
+        var progress: Double, rate: Float
+    }
+    private var painted: PaintState?
+
+    private func paintState() -> PaintState? {
+        guard let b = body else { return nil }
+        let p = VoiceNotePlayer.shared
+        return PaintState(playing: p.isPlaying(b.messageId), loading: p.isLoading(b.messageId),
+                          failed: p.loadFailed(b.messageId), heard: PlayedVoice.shared.ids.contains(b.messageId),
+                          progress: p.progress(for: b.messageId), rate: p.rate(for: cid))
+    }
+
+    /// ⛔ A TICK FOR ANOTHER NOTE PAINTS NOTHING HERE (perf audit 2026-11-11 L8): every row ran the
+    /// whole `paint`, label writes included, 20 times a second while any note played. Now a row
+    /// repaints only when its own note's state moved.
+    private func paintIfChanged() {
+        guard paintState() != painted else { return }
+        paint()
     }
 
     /// Playback → the disc's glyph, the waveform's progress, the speed label. No geometry.
     private func paint() {
         guard let b = body else { return }
+        painted = paintState()
         let player = VoiceNotePlayer.shared
         // ⛔ A NOTE THAT IS PLAYING IS NOT UPLOADING (owner 2026-10-27: "I hear the voice but the
         // loading keeps spinning"). The row can still carry the upload flag from the snapshot that
