@@ -201,6 +201,10 @@ struct DiscoverChannelsView: View {
     /// Explore's two tabs (owner 2026-11-10): Channels, then public Groups.
     enum Tab: String, CaseIterable { case channels = "Channels", groups = "Groups" }
     @State private var tab: Tab = .channels
+    /// The page's width, for the bar's switch.
+    @State private var barWidth: CGFloat = 0
+    /// What the back button takes at each side of the bar: 16 margin, a 44 circle, 10 air.
+    static let barSide: CGFloat = 70
     @State private var groupRows: [GroupDirectory.Discovered] = ExploreCache.cachedGroups() ?? []
     @State private var groupsLoading = true
     @State private var groupsFailed = false
@@ -233,13 +237,8 @@ struct DiscoverChannelsView: View {
 
     private var content: some View {
             List {
-                // The two tabs, first in the list under the search field (owner 2026-11-10).
-                Picker("Show", selection: $tab) {
-                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+                // The tabs moved up into the bar (design C, owner 2026-11-11): the list starts right
+                // under the search field.
                 if tab == .groups {
                     groupsSection
                 } else if loading && rows.isEmpty {
@@ -267,10 +266,20 @@ struct DiscoverChannelsView: View {
             .listStyle(.plain)
             // ⛔ AT THE TOP, ALWAYS SHOWN (owner 2026-11-10, his mockup): the grey field under the title,
             // as the chat list's and Add People's, not iOS 26's default bar at the bottom.
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: tab == .groups ? "Search groups" : "Search channels")
+            // The title stays for VoiceOver and the back menu; the bar shows the switch in its place.
             .navigationTitle("Explore")
             .navigationBarTitleDisplayMode(.inline)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
             .toolbar {
+                // ⛔ DESIGN C (owner 2026-11-11): "Channels | Groups" in the bar where the title was,
+                // filling it, with the back button's width left free on the right too so it sits centred.
+                ToolbarItem(placement: .principal) {
+                    ExploreTabSwitch(tab: $tab)
+                        .frame(width: max(160, barWidth - 2 * Self.barSide))
+                }
+                .sharedBackgroundVisibility(.hidden)   // the switch is its own glass; no second capsule
                 if !embedded {
                     ToolbarItem(placement: .topBarLeading) {
                         Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
@@ -542,6 +551,47 @@ struct DiscoverChannelsView: View {
         }
         catch { failed = true }
         loading = false
+    }
+}
+
+/// Explore's tab switch in the bar (design C, owner 2026-11-11): a glass capsule, the selected half a
+/// lighter pill, the other half muted words; the pill slides between them on the app's spring.
+private struct ExploreTabSwitch: View {
+    @Binding var tab: DiscoverChannelsView.Tab
+    @Namespace private var pill
+    /// Lighter than the glass in both looks: white on light, a soft white wash on dark.
+    private static let pillFill = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor.white.withAlphaComponent(0.2) : UIColor.white })
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(DiscoverChannelsView.Tab.allCases, id: \.self) { t in
+                let on = tab == t
+                Button {
+                    guard !on else { return }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { tab = t }
+                } label: {
+                    Text(t.rawValue)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(on ? Color(uiColor: .label) : Color(uiColor: .secondaryLabel))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 34)
+                        .background {
+                            if on {
+                                Capsule().fill(Self.pillFill)
+                                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                                    .matchedGeometryEffect(id: "pill", in: pill)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .liquidGlass(Capsule())
     }
 }
 
