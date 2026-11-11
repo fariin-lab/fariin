@@ -692,6 +692,7 @@ final class BubbleFillView: UIView {
                 // off the side a cluster continues, and a rounded-rect mask would round the two
                 // corners the shape deliberately keeps sharp.
                 bv.layer.mask = blurMask
+                bv.contentView.backgroundColor = Theme.receivedMaterialWash   // light mode reads light
                 insertSubview(bv, at: 0)
                 blurView = bv
                 return bv

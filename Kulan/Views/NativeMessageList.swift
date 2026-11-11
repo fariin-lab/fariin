@@ -6729,6 +6729,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The same live glass the bubble wears in the chat, not a solid colour (owner 2026-11-06:
         // "long press bubble becomes full color, use the color you used before").
         let back = UIVisualEffectView(effect: UIBlurEffect(style: Theme.receivedBlurStyle))
+        back.contentView.backgroundColor = Theme.receivedMaterialWash   // as the bubble wears it
         back.frame = r
         back.layer.cornerRadius = min(18, r.height / 2)
         back.layer.cornerCurve = .continuous
