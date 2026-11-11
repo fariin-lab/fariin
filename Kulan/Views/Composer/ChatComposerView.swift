@@ -292,7 +292,7 @@ final class ChatComposerView: UIView {
     // Slow mode: the ring on the send button, the countdown's clock, the tip above send.
     private let slowRing = CAShapeLayer()
     private var slowTimer: Timer?
-    /// Format > Bold in the selection menu (channel posts, `ChatComposerState.canFormat`).
+    /// Format > Bold in the selection menu (`ChatComposerState.canFormat`).
     private var formatAllowed = false
     private let slowTip = UIView()
     private let slowTipLabel = UILabel()
@@ -497,6 +497,8 @@ final class ChatComposerView: UIView {
             self.actions.pasteImages(imgs)
             return true
         }
+        // Pasted bold stays bold (owner 2026-11-11).
+        textView.onPasteBold = { [weak self] text, bold in self?.pasteBold(text, bold) ?? false }
         // ⛔ DIMMER THAN THE MIC, AND ONLY THIS ONE (owner 2026-08-22: "GIF icon make it low
         // brightness but don't touch the voice recording icon"). The mic is the button people
         // reach for without looking; the stickers are a browse.
@@ -1904,9 +1906,34 @@ extension ChatComposerView: UITextViewDelegate {
         DispatchQueue.main.async { [weak self] in self?.actions.caretChanged(at) }
     }
 
-    // MARK: Bold (channel posts, owner 2026-11-07)
+    // MARK: Bold (channel posts owner 2026-11-07, every chat 2026-11-11)
 
-    /// Format > Bold in the selection menu, only in a channel I post in and only over a selection.
+    /// Pasted rich text with bold: the words go in plain with our own bold marks on the bold parts.
+    /// False = paste the ordinary way (bold not offered here, or it would pass the length cap).
+    private func pasteBold(_ text: String, _ bold: [NSRange]) -> Bool {
+        guard formatAllowed else { return false }
+        let range = textView.selectedRange
+        let ns = (textView.text ?? "") as NSString
+        guard NSMaxRange(range) <= ns.length,
+              ns.length - range.length + (text as NSString).length <= Limits.messageMaxChars else { return false }
+        let piece = NSMutableAttributedString(string: text, attributes: textView.typingAttributes)
+        piece.addAttribute(.font, value: baseFont, range: NSRange(location: 0, length: piece.length))
+        piece.removeAttribute(.composerBold, range: NSRange(location: 0, length: piece.length))
+        for r in TextFormat.normalized(bold, length: piece.length) {
+            piece.addAttribute(.composerBold, value: true, range: r)
+            piece.addAttribute(.font, value: boldFont, range: r)
+        }
+        let storage = textView.textStorage
+        storage.beginEditing()
+        storage.replaceCharacters(in: range, with: piece)
+        storage.endEditing()
+        textView.selectedRange = NSRange(location: range.location + piece.length, length: 0)
+        resetTypingAttributes()
+        textViewDidChange(textView)   // placeholder, send button, height and the stored spans
+        return true
+    }
+
+    /// Format > Bold in the selection menu, wherever I can write, and only over a selection.
     func textView(_ tv: UITextView, editMenuForTextIn range: NSRange,
                   suggestedActions: [UIMenuElement]) -> UIMenu? {
         guard formatAllowed, range.length > 0 else { return nil }
@@ -2142,8 +2169,12 @@ final class ComposerTextView: UITextView {
         return super.canPerformAction(action, withSender: sender)
     }
 
+    /// Rich text with bold on the clipboard (owner 2026-11-11): the composer keeps the bold.
+    var onPasteBold: ((String, [NSRange]) -> Bool)?
+
     override func paste(_ sender: Any?) {
         if let imgs = pastedImages, onPasteImages?(imgs) == true { return }
+        if let rich = TextFormat.pastedBold(), onPasteBold?(rich.text, rich.bold) == true { return }
         super.paste(sender)
     }
 

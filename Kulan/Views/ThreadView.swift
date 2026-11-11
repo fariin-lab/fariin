@@ -4405,7 +4405,7 @@ struct ThreadView: View {
         if savingAllowed {
             items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
                 guard savingAllowed else { return }   // switched on while the menu was open
-                UIPasteboard.general.string = m.text
+                TextFormat.copy(m.text, bold: m.boldRanges)   // bold goes too (owner 2026-11-11)
             })
         }
         // Same `canForward` as the other two paths. Today every row that reaches this menu already
@@ -4604,7 +4604,7 @@ struct ThreadView: View {
                     showJumpToast("That message is no longer available")
                     return
                 }
-                UIPasteboard.general.string = live.text
+                TextFormat.copy(live.text, bold: live.boldRanges)   // bold goes too (owner 2026-11-11)
             })
         }
         // ⛔ BUBBLE STYLE (owner 2026-11-07, the reference app's menu): on MY text messages only, it
@@ -6305,7 +6305,7 @@ struct ThreadView: View {
             case .share:
                 multiSwipeShare(live)
             case .copy:   // the menu's Copy, plus a toast: a swipe has no menu closing to say it worked
-                UIPasteboard.general.string = live.text
+                TextFormat.copy(live.text, bold: live.boldRanges)
                 showJumpToast("Copied")
             case .save:
                 // A photo (or an album still uploading) goes through the menu's Save Image; a
@@ -7810,7 +7810,7 @@ struct ThreadView: View {
         // 2026-09-24 decision D-composer-5: only people still in the group. A member picked and then
         // gone before Send was still tagged and notified.
         let mentions = resolveMentions(in: text).filter { groupMembers.contains($0) }
-        // Bold spans from the field, on the trimmed text (channel posts; empty anywhere else).
+        // Bold spans from the field, on the trimmed text.
         let bold = ComposerFormat.bold(for: input)
         mentionMap = [:]
         input = ""
@@ -10897,12 +10897,13 @@ struct ThreadView: View {
             ChannelPosting.shared.load(cid)   // once per launch; the answer lands a moment later
             s.channelSilent = ChannelPosting.shared.isSilent(cid)
             s.canSchedule = true
-            s.canFormat = true
         } else {
             s.channelSilent = nil
             s.canSchedule = false
-            s.canFormat = false
         }
+        // Bold everywhere a person writes (owner 2026-11-11): channels, groups and 1:1 chats. Not
+        // in a channel I only follow, where there is no composer to write in.
+        s.canFormat = conversation?.isChannel != true || conversation?.users.contains(me) == true
         s.banners = composerBanners
         s.sendsWithoutText = quoting != nil && editingMessage == nil   // a quote may go with no words
         // The bar is shown the REVEALED hold, not the raw touch-down — see `holdRevealed`.

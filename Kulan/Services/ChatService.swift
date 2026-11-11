@@ -1369,6 +1369,8 @@ enum ChatService {
         }
 
         let cipher = try await Crypto.shared.encryptForConversation(cid, t)
+        // Bold spans (owner 2026-11-11), sealed for the pair exactly like the text, never in the clear.
+        let fmt = try await sealedPairFormat(bold, text: t, cid: cid)
         // A quote with no words of mine: the chat list says "Quoted post" (owner 2026-11-06).
         let summary = t.isEmpty && quote != nil ? try await Crypto.shared.encryptForConversation(cid, "Quoted post") : cipher
         var replyEnc: [String: Any]?
@@ -1506,6 +1508,7 @@ enum ChatService {
             msg["bs"] = bs
             if style.decor { msg["bsd"] = true }
         }
+        if let fmt { msg["fmt"] = fmt }   // bold spans, sealed (owner 2026-11-11)
         // 2026-09-24 feature-audit: a knock carries no link card. The rules take a request's one
         // message as plain short text and refuse `linkPreview` on it, so the card turned every first
         // message holding a link into a send that failed on every Resend. Stripped here rather than
@@ -1599,6 +1602,14 @@ enum ChatService {
     private static func sealedFormat(_ bold: [NSRange], text t: String, members: [String], cid: String) async throws -> String? {
         guard let json = TextFormat.json(TextFormat.normalized(bold, length: (t as NSString).length)) else { return nil }
         return try await Crypto.shared.sealForGroup(json, members: members, cid: cid)
+    }
+
+    /// The same for a 1:1 (owner 2026-11-11): sealed for the pair like the text. Nil when nothing
+    /// is bold, or when the seal did not come out sealed: bold is never written in the clear there.
+    private static func sealedPairFormat(_ bold: [NSRange], text t: String, cid: String) async throws -> String? {
+        guard let json = TextFormat.json(TextFormat.normalized(bold, length: (t as NSString).length)) else { return nil }
+        let sealed = try await Crypto.shared.encryptForConversation(cid, json)
+        return sealed.hasPrefix("enc1:") ? sealed : nil
     }
 
     /// Group text send: encrypt once per member, fan out the unread increment to everyone
@@ -3197,6 +3208,8 @@ enum ChatService {
     private static func forwardMessageBody(_ m: Message, from sourceCid: String, to targetCid: String,
                                            clientId: String?) async throws {
         guard let liveText = await liveForwardText(m, in: sourceCid) else { throw ForwardGoneError() }
+        // The bold goes along (owner 2026-11-11) while the words are the ones it was made for.
+        let bold = liveText == m.text ? m.boldRanges : []
         var m = m
         m.text = liveText
         let forwarded = isForward(m, from: sourceCid, to: targetCid)
@@ -3330,7 +3343,7 @@ enum ChatService {
             else { throw ForwardError.sourceUnavailable }
             try await sendFile(cid: targetCid, data: dec, fileName: m.fileName ?? "File", clientId: clientId, forwarded: forwarded)
         } else {
-            try await sendText(cid: targetCid, text: m.text, clientId: clientId, forwarded: forwarded)
+            try await sendText(cid: targetCid, text: m.text, clientId: clientId, forwarded: forwarded, bold: bold)
         }
     }
 
@@ -4259,12 +4272,13 @@ enum ChatService {
         let isChannel = ConversationsRepository.shared.conversations.first { $0.id == cid }?.isChannel == true
         if size(edits) <= 700_000 && !isChannel { update["edits"] = edits }
         // Bold spans go with the new text; written only when there are some now or were before.
-        if let members {
-            if let fmt = try await sealedFormat(bold, text: t, members: members, cid: cid) {
-                update["fmt"] = fmt
-            } else if data["fmt"] != nil {
-                update["fmt"] = FieldValue.delete()
-            }
+        let fmt = members != nil
+            ? try await sealedFormat(bold, text: t, members: members!, cid: cid)
+            : try await sealedPairFormat(bold, text: t, cid: cid)
+        if let fmt {
+            update["fmt"] = fmt
+        } else if data["fmt"] != nil {
+            update["fmt"] = FieldValue.delete()
         }
         try await msgRef.updateData(update)
         // If this WAS the newest message, the chat list still shows the pre-edit text on both
