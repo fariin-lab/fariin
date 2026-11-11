@@ -99,7 +99,9 @@ final class ChatComposerView: UIView {
 
     // MARK: - Wiring
 
-    var actions = ChatComposerActions()
+    var actions = ChatComposerActions() {
+        didSet { actions.live?.bar = self }   // perf audit T1/T3/T6: the chat's live pushes land here
+    }
     /// The bar's preferred height changed. The host re-lays out, on `animation` when there is one.
     var onHeightChange: ((Animation?) -> Void)?
     /// The paddings around the bar, written by the controller that places it (`positionBottomBar`)
@@ -1721,6 +1723,31 @@ extension ChatComposerView: UITextViewDelegate {
                 self.layoutIfNeeded()
             }
         }
+        // ⛔ THE BAR TAKES ITS OWN TEXT (perf audit T1). The chat no longer redraws per key, so the
+        // state it would have handed back (the same, with this text) is applied here, after the
+        // height above, exactly where the round trip used to land: the send button, the mic and the
+        // field icons still change over on the text clock when the field empties or fills.
+        let typed = tv.text ?? ""
+        if shown.text != typed {
+            var s = shown
+            s.text = typed
+            apply(s)
+        }
+    }
+
+    /// The finger's drag on the mic, pushed straight from the chat per touch sample (perf audit T3).
+    /// A live finger is 1:1, as `apply` drew it; the chat's next pass carries the same value.
+    func liveDrag(_ d: CGSize) {
+        guard d != shown.recordDrag else { return }
+        shown.recordDrag = d
+        applyDrag()
+    }
+
+    /// The review playback's position, pushed straight from the chat's ticker (perf audit T6).
+    func liveProgress(_ p: Double) {
+        guard p != shown.previewProgress else { return }
+        shown.previewProgress = p
+        waveform.progress = p
     }
 
     // Reported a turn later: the delegate fires inside UIKit's responder change, which can itself

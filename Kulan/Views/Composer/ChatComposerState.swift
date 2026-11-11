@@ -236,4 +236,25 @@ struct ChatComposerActions {
     var schedulePost: () -> Void = {}
     var seekPreview: (Double) -> Void = { _ in }
     var toggleVoiceOnce: () -> Void = {}
+    /// The chat's box for what changes faster than the chat should redraw (perf audit T1/T3/T6).
+    /// The bar registers itself on it when the actions are handed over.
+    var live: ComposerLive? = nil
+}
+
+/// ⛔ WHAT CHANGES PER KEY, PER TOUCH SAMPLE OR PER TICK, KEPT OUT OF THE CHAT'S STATE (perf audit
+/// T1/T3/T6, the reference app's way: its input panel holds its own text and owns the record
+/// button's drag). The chat screen used to hold these as `@State`, so each key, each finger move on
+/// the mic and each 20 Hz review tick re-ran the whole chat screen. Now the chat writes here and the
+/// bar is pushed the drag and the review progress directly (`liveDrag`, `liveProgress`); typed text
+/// the bar already shows. A plain class: nothing observes it.
+final class ComposerLive {
+    weak var bar: ChatComposerView?
+    /// What is in the field. The chat's `input` reads and writes this.
+    var text = ""
+    /// The text as it was before the first write not yet reacted to (see `ThreadView.setComposerText`).
+    var pendingOld: String?
+    var caret: Int?
+    var typingIdleStop: DispatchWorkItem?
+    var drag: CGSize = .zero
+    var progress: Double = 0
 }

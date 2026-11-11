@@ -92,7 +92,19 @@ struct ThreadView: View {
     @State private var repo: ThreadRepository
     /// This chat's own row in the chat list, with its live title and photo (perf audit T5).
     @HeapState private var listHead = ListedConversation(nil)
-    @State private var input = ""
+    /// ⛔ THE TYPED TEXT IS NOT THIS VIEW'S STATE (perf audit T1, the reference app's way: its input
+    /// panel holds its own text). Every key wrote `@State` here and re-ran this whole screen, the list
+    /// diff included, two or three times per key. The text, the caret and the idle timer live in
+    /// `chrome.composer`; the bar draws what is typed by itself. Only a change made HERE (a draft
+    /// restored, a send clearing the field, a mention inserted, the first-message cap) bumps
+    /// `inputRevision`, the one value the body reads to hand the bar new text.
+    private var input: String {
+        get { chrome.composer.text }
+        nonmutating set { setComposerText(newValue, fromBar: false) }
+    }
+    @State private var inputRevision = 0
+    /// The "@token" at the caret (groups), the only fact about the text the body draws from.
+    @State private var mentionToken: String?
     /// Hold Post > Schedule Post in a channel (2026-10-28).
     @State private var showSchedulePost = false
     // Inserted "@name" -> the uids picked under it, in pick order (groups). A list: two members
@@ -102,7 +114,10 @@ struct ThreadView: View {
     // 2026-09-24 decision D-composer-5: the composer's caret (UTF-16 offset), so the @mention popup
     // and insertion follow the cursor, not the end of the text; and where to put the caret after an
     // insertion, valid only for the exact text it was computed with (never stale on another text).
-    @State private var composerCaret: Int?
+    private var composerCaret: Int? {
+        get { chrome.composer.caret }
+        nonmutating set { chrome.composer.caret = newValue; refreshMentionToken() }
+    }
     @State private var caretAfterMention: (text: String, at: Int)?
     @State private var showGroupAdd = false
     @State private var showGroupCall = false
@@ -214,7 +229,11 @@ struct ThreadView: View {
     @HeapState private var pendingViewOnceConsume: Message? = nil   // view-once photo open in the viewer → mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
-    @State private var typingIdleStop: DispatchWorkItem?   // 3s idle → auto-stop typing (idle pause timer)
+    // 3s idle → auto-stop typing (idle pause timer). In the composer box, not state (perf audit T1).
+    private var typingIdleStop: DispatchWorkItem? {
+        get { chrome.composer.typingIdleStop }
+        nonmutating set { chrome.composer.typingIdleStop = newValue }
+    }
     @HeapState private var viewerImage: Message? = nil
     @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
     @HeapState private var albumScreen: Message? = nil           // tapped a photo GROUP → the album list screen
@@ -313,7 +332,12 @@ struct ThreadView: View {
     /// The review strip's bars, sampled from the stitched file the way the reference app samples a
     /// note (see `SampledWaveform`). Filled by the `.task(id: previewURL)` on the strip.
     @State private var previewDecibels: [Float] = []
-    @State private var previewProgress: Double = 0
+    /// ⛔ NOT STATE (perf audit T6): the review ticker writes it 20 times a second, and as `@State`
+    /// each tick re-ran this whole screen. Written straight onto the bar's waveform instead.
+    private var previewProgress: Double {
+        get { chrome.composer.progress }
+        nonmutating set { chrome.composer.progress = newValue; chrome.composer.bar?.liveProgress(newValue) }
+    }
     @State private var previewTimer: Timer?
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var holdHintDismiss: DispatchWorkItem?   // cancels a superseded flash's own timer (audit)
@@ -324,7 +348,14 @@ struct ThreadView: View {
     @State private var voiceOnceDismiss: DispatchWorkItem?   // cancels a superseded toast's own timer (audit)
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
-    @State private var recordDrag: CGSize = .zero   // live finger translation while holding
+    /// Live finger translation while holding. ⛔ NOT STATE (perf audit T3): every touch sample re-ran
+    /// this whole screen. A move is pushed straight onto the bar (`updateHoldRecording`); a reset to
+    /// zero always comes with a state change (lock, cancel, interruption), whose pass carries it with
+    /// the bar's own clock, as before.
+    private var recordDrag: CGSize {
+        get { chrome.composer.drag }
+        nonmutating set { chrome.composer.drag = newValue }
+    }
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
     /// ⛔ THE HOLD UI WAKES ONLY FOR A REAL HOLD — owner, 2026-08-27: "the hold to record system
@@ -2821,11 +2852,7 @@ struct ThreadView: View {
         .onChange(of: photoItems) { _, items in Task { await sendPickedMulti(items) } }
         // Draft follows every edit (so the chat list is correct the moment you leave), but
         // NOT while inline-editing a sent message — that text is the message, not a draft.
-        .onChange(of: input) { _, v in
-            // owner audit 2026-10-06 chat #44: `set` is cheap now; sealing and the disk write are
-            // coalesced inside Drafts and flushed on pause, on leaving and on backgrounding.
-            if editingMessage == nil { Drafts.shared.set(cid, v) }
-        }
+        // (The draft follows every edit from `inputChanged` now, perf audit T1.)
         // owner audit 2026-10-06 chat #73: midnight (and a carrier time fix or DST), a time zone change
         // and a locale or 12/24-hour change move every day label and time on the page while nothing
         // in the data does. One tick re-keys the grouping, signature and row-model caches.
@@ -7803,9 +7830,47 @@ struct ThreadView: View {
         // here would silently never notify anyone — better to not offer the picker at all than to
         // let it look like it did something.
         guard isGroup, editingMessage == nil else { return nil }
-        let head = mentionSplit.head
-        guard let r = head.range(of: "@[^\\s@]*$", options: .regularExpression) else { return nil }
-        return String(head[r].dropFirst())
+        return mentionToken   // perf audit T1: worked out on a text or caret change, not per render
+    }
+
+    private func refreshMentionToken() {
+        var t: String?
+        if isGroup {
+            let head = mentionSplit.head
+            if let r = head.range(of: "@[^\\s@]*$", options: .regularExpression) { t = String(head[r].dropFirst()) }
+        }
+        if t != mentionToken { mentionToken = t }
+    }
+
+    /// The text changed (typed in the bar, or set here). Recorded at once; what reacts to it runs
+    /// once per change on the next turn, with the text as it was before the first write and as it
+    /// is now: the same once-per-update, old-and-new contract the `.onChange(of: input)` handlers
+    /// had (perf audit T1).
+    private func setComposerText(_ v: String, fromBar: Bool) {
+        let c = chrome.composer
+        guard v != c.text else { return }
+        if c.pendingOld == nil {
+            c.pendingOld = c.text
+            DispatchQueue.main.async { flushComposerText() }
+        }
+        c.text = v
+        if !fromBar { inputRevision &+= 1 }
+    }
+
+    private func flushComposerText() {
+        let c = chrome.composer
+        guard let old = c.pendingOld else { return }
+        c.pendingOld = nil
+        let v = c.text
+        guard old != v else { return }
+        refreshMentionToken()
+        // Draft follows every edit (so the chat list is correct the moment you leave), but
+        // NOT while inline-editing a sent message — that text is the message, not a draft.
+        // owner audit 2026-10-06 chat #44: `set` is cheap now; sealing and the disk write are
+        // coalesced inside Drafts and flushed on pause, on leaving and on backgrounding.
+        if editingMessage == nil { Drafts.shared.set(cid, v) }
+        linkDetectOnInput(old, v)
+        typingOnInput(v)
     }
 
     /// The input cut at the caret (2026-09-24 decision D-composer-5). The caret is reported a turn
@@ -10707,106 +10772,112 @@ struct ThreadView: View {
 
     // The reply preview nests INSIDE the input pill (see `ChatComposerView` / `ComposerBannerView`).
     private var composerArea: some View {
+        // perf audit T1: the text is not this view's state any more, so the three reactions to
+        // it that hung here as `.onChange(of: input)` run from `flushComposerText` instead, once
+        // per change and in the same order, for typed and programmatic text alike.
         composer
-            // LINK DETECTION while typing (debounced): resolve the first https link into a draft
-            // preview card. Cleared when the text no longer holds a link; the X suppresses one URL.
-            .onChange(of: input) { old, text in
-                linkDetectTask?.cancel()
-                // 2026-09-24 feature-audit: a spinner for a link no longer in the text goes with it.
-                if let l = linkLoadingUrl, l != LinkPreviewService.firstURL(in: text) { linkLoadingUrl = nil }
-                guard let url = LinkPreviewService.firstURL(in: text) else {
-                    if linkDraft != nil { withAnimation(.easeInOut(duration: 0.2)) { linkDraft = nil } }
-                    suppressedLinkUrl = nil
-                    return
-                }
-                // 2026-09-24 feature-audit: no card where the rules refuse one (a knock, or a group
-                // member kept from sending media). The link goes as plain text, as it will be sent.
-                guard linkCardAllowed else {
-                    if linkDraft != nil { linkDraft = nil }
-                    return
-                }
-                if url.absoluteString == suppressedLinkUrl { return }
-                if url == linkDraft?.url { return }
-                // A PASTE arrives whole and complete, so there is nothing to wait for and the debounce
-                // was pure dead time before the card appeared (owner report: "the preview is late").
-                // TYPING still needs it, or every keystroke fires a fetch at a half-written url. The
-                // jump in length is what separates them: a keystroke moves it by one.
-                // ⛔ AND NOTHING IS FETCHED IF THE READER HAS TURNED PREVIEWS OFF. Building a preview
-                // means THIS DEVICE contacting the linked site — with a browser User-Agent — before
-                // anything is sent, so it is a request the person makes whether they meant to or not:
-                // paste a link into the composer to ask somebody about it, delete it unsent, and the
-                // site already has your address and the time. Theirs puts the whole feature behind a
-                // setting and checks it before the fetch, which is the only way to make that
-                // avoidable. Default on, as theirs is.
-                guard UserDefaults.standard.object(forKey: "linkPreviewsEnabled") as? Bool ?? true else { return }
-                let pasted = text.count - old.count > 1
-                linkDetectTask = Task {
-                    if !pasted { try? await Task.sleep(nanoseconds: 400_000_000) }   // let typing settle
-                    guard !Task.isCancelled else { return }
-                    // 2026-09-24 feature-audit: the loading card, once typing has settled (so a
-                    // half-typed address does not flash one per keystroke).
-                    await MainActor.run {
-                        if LinkPreviewService.firstURL(in: input) == url { linkLoadingUrl = url }
-                    }
-                    let d = await LinkPreviewService.shared.draft(for: url)
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run {
-                        if linkLoadingUrl == url { linkLoadingUrl = nil }
-                        guard let d else { return }   // no card for this page: the spinner just goes
-                        // The text may have changed while fetching — only show a still-current link.
-                        guard LinkPreviewService.firstURL(in: input) == url else { return }
-                        withAnimation(.easeInOut(duration: 0.2)) { linkDraft = d }
-                    }
+    }
+
+    // LINK DETECTION while typing (debounced): resolve the first https link into a draft
+    // preview card. Cleared when the text no longer holds a link; the X suppresses one URL.
+    private func linkDetectOnInput(_ old: String, _ text: String) {
+        linkDetectTask?.cancel()
+        // 2026-09-24 feature-audit: a spinner for a link no longer in the text goes with it.
+        if let l = linkLoadingUrl, l != LinkPreviewService.firstURL(in: text) { linkLoadingUrl = nil }
+        guard let url = LinkPreviewService.firstURL(in: text) else {
+            if linkDraft != nil { withAnimation(.easeInOut(duration: 0.2)) { linkDraft = nil } }
+            suppressedLinkUrl = nil
+            return
+        }
+        // 2026-09-24 feature-audit: no card where the rules refuse one (a knock, or a group
+        // member kept from sending media). The link goes as plain text, as it will be sent.
+        guard linkCardAllowed else {
+            if linkDraft != nil { linkDraft = nil }
+            return
+        }
+        if url.absoluteString == suppressedLinkUrl { return }
+        if url == linkDraft?.url { return }
+        // A PASTE arrives whole and complete, so there is nothing to wait for and the debounce
+        // was pure dead time before the card appeared (owner report: "the preview is late").
+        // TYPING still needs it, or every keystroke fires a fetch at a half-written url. The
+        // jump in length is what separates them: a keystroke moves it by one.
+        // ⛔ AND NOTHING IS FETCHED IF THE READER HAS TURNED PREVIEWS OFF. Building a preview
+        // means THIS DEVICE contacting the linked site — with a browser User-Agent — before
+        // anything is sent, so it is a request the person makes whether they meant to or not:
+        // paste a link into the composer to ask somebody about it, delete it unsent, and the
+        // site already has your address and the time. Theirs puts the whole feature behind a
+        // setting and checks it before the fetch, which is the only way to make that
+        // avoidable. Default on, as theirs is.
+        guard UserDefaults.standard.object(forKey: "linkPreviewsEnabled") as? Bool ?? true else { return }
+        let pasted = text.count - old.count > 1
+        linkDetectTask = Task {
+            if !pasted { try? await Task.sleep(nanoseconds: 400_000_000) }   // let typing settle
+            guard !Task.isCancelled else { return }
+            // 2026-09-24 feature-audit: the loading card, once typing has settled (so a
+            // half-typed address does not flash one per keystroke).
+            await MainActor.run {
+                if LinkPreviewService.firstURL(in: input) == url { linkLoadingUrl = url }
+            }
+            let d = await LinkPreviewService.shared.draft(for: url)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if linkLoadingUrl == url { linkLoadingUrl = nil }
+                guard let d else { return }   // no card for this page: the spinner just goes
+                // The text may have changed while fetching — only show a still-current link.
+                guard LinkPreviewService.firstURL(in: input) == url else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { linkDraft = d }
+            }
+        }
+    }
+
+
+    // TYPING BROADCAST + the first-message cap. This sat on the SwiftUI field's own
+    // `.onChange`; the field is UIKit now and reports through `input`, so the composer
+    // slot is the one place that sees every change, typed or programmatic.
+    private func typingOnInput(_ v: String) {
+        // A first message to a stranger is capped. Trimmed as it is typed rather than
+        // refused on send, so you can see the limit instead of losing what you wrote to it.
+        // 2026-09-24 decision D-composer-4: and by bytes too. The rules measure the SEALED
+        // text (880), which 150 of the widest single characters fit, but 150 joined emoji
+        // (a family, a flag with a tag) are several times that and were refused only after
+        // Send. 4 bytes a character is exactly what the rule's 880 was sized for.
+        let byteCap = MessageRequests.firstMessageLimit * 4
+        if requestStance == .firstMessage,
+           v.count > MessageRequests.firstMessageLimit || v.utf8.count > byteCap {
+            var t = String(v.prefix(MessageRequests.firstMessageLimit))
+            while t.utf8.count > byteCap { t.removeLast() }
+            input = t
+            return
+        }
+        // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
+        if typingBox.suppressNext { typingBox.suppressNext = false; return }
+        // Don't broadcast "typing" while we're seeding the field for an inline EDIT.
+        let now = editingMessage == nil && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if now != typingSent {
+            typingSent = now
+            broadcastTyping(now)   // serialized — writes can't land out of order
+            // Receivers self-clear at 15s and composing produces no doc changes — the 10s
+            // refresh (a changing "text-<seconds>" value) keeps a long burst alive (audit).
+            typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
+            if now {
+                typingBox.typingRefresh = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+                    broadcastTyping(true)
                 }
             }
-            // TYPING BROADCAST + the first-message cap. This sat on the SwiftUI field's own
-            // `.onChange`; the field is UIKit now and reports through `input`, so the composer
-            // slot is the one place that sees every change, typed or programmatic.
-            .onChange(of: input) { _, v in
-                // A first message to a stranger is capped. Trimmed as it is typed rather than
-                // refused on send, so you can see the limit instead of losing what you wrote to it.
-                // 2026-09-24 decision D-composer-4: and by bytes too. The rules measure the SEALED
-                // text (880), which 150 of the widest single characters fit, but 150 joined emoji
-                // (a family, a flag with a tag) are several times that and were refused only after
-                // Send. 4 bytes a character is exactly what the rule's 880 was sized for.
-                let byteCap = MessageRequests.firstMessageLimit * 4
-                if requestStance == .firstMessage,
-                   v.count > MessageRequests.firstMessageLimit || v.utf8.count > byteCap {
-                    var t = String(v.prefix(MessageRequests.firstMessageLimit))
-                    while t.utf8.count > byteCap { t.removeLast() }
-                    input = t
-                    return
-                }
-                // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
-                if typingBox.suppressNext { typingBox.suppressNext = false; return }
-                // Don't broadcast "typing" while we're seeding the field for an inline EDIT.
-                let now = editingMessage == nil && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                if now != typingSent {
-                    typingSent = now
-                    broadcastTyping(now)   // serialized — writes can't land out of order
-                    // Receivers self-clear at 15s and composing produces no doc changes — the 10s
-                    // refresh (a changing "text-<seconds>" value) keeps a long burst alive (audit).
-                    typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
-                    if now {
-                        typingBox.typingRefresh = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-                            broadcastTyping(true)
-                        }
-                    }
-                }
-                // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
-                // in the field), so a parked draft doesn't show "typing…" forever on the other side.
-                typingIdleStop?.cancel()
-                if now {
-                    let work = DispatchWorkItem {
-                        guard typingSent else { return }
-                        typingSent = false
-                        broadcastTyping(false)
-                        typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
-                    }
-                    typingIdleStop = work
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
-                }
+        }
+        // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
+        // in the field), so a parked draft doesn't show "typing…" forever on the other side.
+        typingIdleStop?.cancel()
+        if now {
+            let work = DispatchWorkItem {
+                guard typingSent else { return }
+                typingSent = false
+                broadcastTyping(false)
+                typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
             }
+            typingIdleStop = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+        }
     }
 
     private func cancelEdit() {
@@ -11041,6 +11112,7 @@ struct ThreadView: View {
     /// Everything the bar draws, from this view's state. Cheap to build; the bar diffs it.
     private var composerState: ChatComposerState {
         var s = ChatComposerState()
+        _ = inputRevision   // perf audit T1: a text set here (not typed) reaches the bar through this pass
         s.text = input
         // 2026-09-24 decision D-composer-5: only for the very text the insertion produced.
         if let m = caretAfterMention, m.text == input { s.caret = m.at }
@@ -11133,7 +11205,8 @@ struct ThreadView: View {
     /// What the bar can ask of the chat. Each one is the exact body the SwiftUI button carried.
     private var composerActions: ChatComposerActions {
         var a = ChatComposerActions()
-        a.textChanged = { if $0 != input { AttachDraftCaption.text = "" }; input = $0 }
+        a.textChanged = { if $0 != input { AttachDraftCaption.text = "" }; setComposerText($0, fromBar: true) }
+        a.live = chrome.composer   // perf audit T1/T3/T6: the bar registers itself for live pushes
         a.caretChanged = { composerCaret = $0 }   // 2026-09-24 decision D-composer-5
         // 2026-09-24 decision D-composer-5: a pasted picture opens the same approval the picker
         // does (one → the photo editor, several → the pager), after the keyboard is down, as "+".
@@ -11439,6 +11512,7 @@ struct ThreadView: View {
         // cancel/lock affordances exist where the drag is going.
         if !holdRevealed, abs(t.width) > 10 || abs(t.height) > 10 { holdRevealed = true }
         recordDrag = t
+        chrome.composer.bar?.liveDrag(t)   // perf audit T3: the bar follows the finger; this view does not redraw
         let armed = clampedDrag.width < -Self.cancelThreshold
         if armed != recordCancelArmed { recordCancelArmed = armed; impact(.soft) }
         if clampedDrag.height < -Self.lockThreshold { lockRecording() }
@@ -14910,6 +14984,7 @@ struct InChatSearchField: View {
 final class ThreadChrome: ObservableObject {
     let keyboard = KeyboardWatcher()
     let lift = ComposerLiftBox()
+    let composer = ComposerLive()
 }
 
 /// How far the composer stands above the keyboard or the safe-area line, from the list controller
