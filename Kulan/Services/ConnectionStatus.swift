@@ -289,7 +289,7 @@ final class ConnectionStatus {
                 // Sleep until the silence would reach `heartbeatQuiet`, not on a fixed beat: any
                 // server answer in between pushes the next read back.
                 guard let quietFor = self.map({ Date().timeIntervalSince($0.lastServerAnswer) }) else { return }
-                try? await Task.sleep(for: .seconds(max(5, Self.heartbeatQuiet - quietFor)))
+                try? await Task.sleep(for: .seconds(max(30, Self.heartbeatQuiet - quietFor)))
                 guard !Task.isCancelled, let self else { return }
                 self.heartbeat()
             }
