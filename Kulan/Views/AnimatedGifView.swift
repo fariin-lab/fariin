@@ -227,7 +227,7 @@ class GifPlayerImageView: UIImageView {
     private var link: CADisplayLink?
     private var index = 0
     private var due: CFTimeInterval = 0
-    private var next: UIImage?
+    private var pendingFrame: UIImage?
     private var nextIndex = -1
     private var decoding = false
     private var generation = 0
@@ -238,7 +238,7 @@ class GifPlayerImageView: UIImageView {
         if let m, m === movie { return }
         generation += 1
         movie = m
-        index = 0; next = nil; nextIndex = -1; decoding = false; due = 0; showingWhole = false
+        index = 0; pendingFrame = nil; nextIndex = -1; decoding = false; due = 0; showingWhole = false
         image = m?.still
         updatePlayback()
     }
@@ -275,17 +275,17 @@ class GifPlayerImageView: UIImageView {
         guard now >= due else { return }
         let want = (index + 1) % m.frameCount
         // Not decoded yet: hold the current frame rather than skip ahead.
-        guard nextIndex == want, let img = next else { prefetch(); return }
+        guard nextIndex == want, let img = pendingFrame else { prefetch(); return }
         image = img
         index = want
-        next = nil; nextIndex = -1
+        pendingFrame = nil; nextIndex = -1
         // A late tick does not build a debt of frames to catch up on.
         due = max(due + m.delays[index], now)
         prefetch()
     }
 
     private func prefetch() {
-        guard let m = movie, m.isStreamed, !decoding, next == nil else { return }
+        guard let m = movie, m.isStreamed, !decoding, pendingFrame == nil else { return }
         let want = (index + 1) % m.frameCount
         decoding = true
         let gen = generation
@@ -294,7 +294,7 @@ class GifPlayerImageView: UIImageView {
                 guard let self, self.generation == gen else { return }
                 self.decoding = false
                 // A frame that will not decode is stepped over.
-                if let img { self.next = img; self.nextIndex = want } else { self.index = want }
+                if let img { self.pendingFrame = img; self.nextIndex = want } else { self.index = want }
             }
         }
     }
