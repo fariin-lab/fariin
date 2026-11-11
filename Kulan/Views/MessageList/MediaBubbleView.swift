@@ -351,10 +351,15 @@ final class MediaBubbleView: UIView {
         sticker?.reset()
         ring?.stop()
         unwatchDownload()
+        download.endPreload()
     }
 
     /// 2026-10-17 chat stickers: an animated sticker plays only while its row is on screen.
-    func setOnScreen(_ on: Bool) { sticker?.setOnScreen(on) }
+    /// 2026-11-11: a plain video on screen also fetches its opening (see `MediaDownloadOverlay.setOnScreen`).
+    func setOnScreen(_ on: Bool) {
+        sticker?.setOnScreen(on)
+        download.setOnScreen(on)
+    }
 
     /// The sticker's decrypted bytes, when this bubble is a sticker that has loaded.
     var stickerBytes: Data? { sticker?.isHidden == false ? sticker?.loadedBytes : nil }
@@ -425,6 +430,9 @@ final class MediaDownloadOverlay {
     private var target: Target?
     private var watched: (url: String, id: UUID)?
     private var sizeAskedFor: String?
+    /// The row is on screen (willDisplay / didEndDisplaying), and the clip whose opening it fetches.
+    private var onScreen = false
+    private var preloadingId: String?
 
     init(host: UIView, playBadge: UIView?) {
         self.host = host
@@ -436,6 +444,7 @@ final class MediaDownloadOverlay {
     /// nil, or a file that is already on the phone: nothing is drawn and taps open as before.
     func configure(_ t: Target?, frame: CGRect) {
         reset()
+        if let p = preloadingId, p != t?.itemId { ChatVideoStream.cancelPreload(itemId: p); preloadingId = nil }
         guard let t, let host, !isLocal(t) else { badge?.isHidden = true; return }
         target = t
         let v = badge ?? {
@@ -462,6 +471,39 @@ final class MediaDownloadOverlay {
         let url = t.url
         let id = MediaDownloads.shared.observe(url) { [weak self] state in self?.render(state) }
         watched = (url, id)
+        if onScreen { startPreload(t) }
+    }
+
+    /// A plain video in a group or channel: a tap opens the player, which streams it.
+    private func streams(_ t: Target) -> Bool {
+        t.isVideo && ChatVideoStream.canStream(enc: t.enc, cid: t.cid, url: t.url)
+    }
+
+    /// ⛔ THE OPENING OF A VIDEO ON SCREEN IS FETCHED BEFORE THE TAP (owner approved 2026-11-11),
+    /// about 1.5 MB into the same partial file the player reads, so Play starts at once. On Wi-Fi
+    /// always; on mobile data only when Settings > Storage and Data lets videos download there.
+    /// Nothing when the full download is already running or done. Leaving the screen cancels it.
+    func setOnScreen(_ on: Bool) {
+        onScreen = on
+        if on, let t = target { startPreload(t) } else if !on { endPreload() }
+    }
+
+    func endPreload() {
+        guard let p = preloadingId else { return }
+        preloadingId = nil
+        ChatVideoStream.cancelPreload(itemId: p)
+    }
+
+    private func startPreload(_ t: Target) {
+        guard streams(t), preloadingId != t.itemId, !isLocal(t), !DeadMedia.contains(t.itemId) else { return }
+        switch MediaDownloads.shared.state(for: t.url) {
+        case .downloading, .done: return
+        default: break
+        }
+        let cellularOK = AutoDownloadPrefs.policy(.videos) == "always"
+        guard AutoDownloadPrefs.currentNetwork == .wifi || cellularOK else { return }
+        preloadingId = t.itemId
+        ChatVideoStream.preload(itemId: t.itemId, url: t.url, allowCellular: cellularOK)
     }
 
     func reset() {
@@ -496,6 +538,11 @@ final class MediaDownloadOverlay {
             return
         case .failed(true) where t.isVideo:
             DeadMedia.mark(t.itemId)
+        case .none where streams(t), .waitingTap where streams(t), .failed(false) where streams(t):
+            // Nothing to download first: the play button is the control, and the tap streams.
+            v.isHidden = true
+            playBadge?.isHidden = false
+            return
         case .none where !t.isVideo:
             // A photo with no job yet: the picture view is about to ask. Draw nothing rather than
             // flash a Download arrow at a photo that is on its way by itself.
@@ -520,6 +567,8 @@ final class MediaDownloadOverlay {
         guard let t = target, !isLocal(t) else { return false }
         // Known gone: the player says so in words; a download would only 404 again.
         if t.isVideo, DeadMedia.contains(t.itemId) { return false }
+        // A plain video plays while it downloads: the tap opens the player (2026-11-11).
+        if streams(t) { return false }
         switch MediaDownloads.shared.state(for: t.url) {
         case .downloading:
             MediaDownloads.shared.cancel(t.url)
