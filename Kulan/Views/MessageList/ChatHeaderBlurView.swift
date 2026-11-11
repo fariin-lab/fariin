@@ -53,6 +53,9 @@ final class ChatHeaderBlurView: UIView {
     private var cid = ""
     private var screenSize: CGSize = .zero
     private var appliedKey = ""
+    /// The wallpaper copy was asked for and is still being made (`WallpaperBlur.headerPicture`).
+    private var waitingForPicture = false
+    private var readyObserver: NSObjectProtocol?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -64,6 +67,17 @@ final class ChatHeaderBlurView: UIView {
         addSubview(blur)      // behind
         addSubview(content)   // the faded background over it
         fadeMask.colors = Self.fadeAlphas.map { UIColor(white: 0, alpha: $0).cgColor }
+        readyObserver = NotificationCenter.default.addObserver(forName: .headerPictureReady, object: nil,
+                                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.waitingForPicture else { return }
+                self.appliedKey = ""
+                self.apply()
+            }
+        }
+    }
+    deinit {
+        if let readyObserver { NotificationCenter.default.removeObserver(readyObserver) }
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -85,12 +99,21 @@ final class ChatHeaderBlurView: UIView {
         // for his other chats. The official page never hands the list a cid, and an empty cid is not
         // the official one, so the store fell through to the all-chats default.
         let kind: ChatWallpaper = cid.isEmpty ? .none : store.wallpaper(for: cid)
-        if kind != .none, let image = WallpaperBlur.headerPicture(for: cid, dark: dark, size: screenSize) {
+        // Perf audit 2026-11-11 (L2): the copy is made off the main thread and kept per wallpaper,
+        // not rendered here inside the push. Until it lands this layer stays clear, so the live
+        // wallpaper under it is what shows (the same picture), and the copy fades in over it.
+        let answer: WallpaperBlur.HeaderPicture = kind == .none ? .none
+            : WallpaperBlur.headerPicture(for: cid, dark: dark, size: screenSize,
+                                          darkTopHeight: Self.minHeight, darkLuminance: Self.darkLuminance)
+        if case .ready(let image, let darkTop) = answer {
+            let fadeIn = waitingForPicture
+            waitingForPicture = false
             // The wallpaper itself, at the same place it has on screen: this view starts at the
-            // top of the full-screen chat, so the picture's own origin is ours.
+            // top of the full-screen chat, so the picture's own origin is ours. (Only the top
+            // `WallpaperBlur.headerBand` points are in it; the view is never taller.)
             picture.image = image
             picture.isHidden = false
-            picture.frame = CGRect(origin: .zero, size: screenSize)
+            picture.frame = CGRect(origin: .zero, size: image.size)
             content.backgroundColor = .clear
             let base: CGFloat
             switch kind {
@@ -100,7 +123,21 @@ final class ChatHeaderBlurView: UIView {
             }
             // ⛔ Owner, 2026-10-04: "with a black wallpaper the blur feels too dark". A near-black
             // copy at 0.7 over bright bubbles reads as a dark wash, so a dark top edge gets less.
-            content.alpha = Self.isDark(image, topHeight: Self.minHeight) ? base * Self.darkScale : base
+            let target = darkTop ? base * Self.darkScale : base
+            if fadeIn {
+                content.alpha = 0
+                UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+                    self.content.alpha = target
+                }
+            } else {
+                content.alpha = target
+            }
+        } else if case .pending = answer {
+            waitingForPicture = true
+            picture.image = nil
+            picture.isHidden = true
+            content.backgroundColor = .clear
+            content.alpha = 0
         } else if case .animated(let id) = kind, let a = AnimatedWallpapers.find(id) {
             // ⛔ A MOVING WALLPAPER SHOWS THROUGH (owner 2026-11-06: "the header is a dark blur in dark
             // mode and a white one in light mode; it must look like the wallpaper"). It has no still
@@ -125,21 +162,8 @@ final class ChatHeaderBlurView: UIView {
     /// Average brightness of the top `topHeight` points under this, below which it counts as dark.
     static let darkLuminance: CGFloat = 0.2
 
-    /// The top strip's average colour, from a 1×1 redraw; run once per wallpaper change.
-    private static func isDark(_ image: UIImage, topHeight: CGFloat) -> Bool {
-        guard let cg = image.cgImage else { return false }
-        let strip = CGRect(x: 0, y: 0, width: cg.width,
-                           height: min(cg.height, Int(topHeight * image.scale)))
-        guard let top = cg.cropping(to: strip) else { return false }
-        var px = [UInt8](repeating: 0, count: 4)
-        guard let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
-        ctx.interpolationQuality = .medium
-        ctx.draw(top, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-        let lum = (0.2126 * CGFloat(px[0]) + 0.7152 * CGFloat(px[1]) + 0.0722 * CGFloat(px[2])) / 255
-        return lum < darkLuminance
-    }
+    // (The top strip's darkness is measured with the copy, off the main thread:
+    // `WallpaperPictureWork.topIsDark`.)
 
     override func traitCollectionDidChange(_ previous: UITraitCollection?) {
         super.traitCollectionDidChange(previous)
