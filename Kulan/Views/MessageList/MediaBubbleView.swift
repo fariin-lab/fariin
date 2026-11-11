@@ -8,11 +8,10 @@ import Combine
 //
 // Every rect comes from `MediaPlan`. Nothing here measures anything.
 
-/// An animated GIF, on the app's existing gif pipeline — the same memory cache, the same
-/// `GifBytesCache` bytes on disk, the same decode. A second pipeline would re-download every gif
-/// the SwiftUI path had already stored.
-final class RowGifView: UIImageView {
-    private static let cache = NSCache<NSString, UIImage>()
+/// An animated GIF, on the app's one gif pipeline (`GifStore`): the same byte-bounded memory cache,
+/// the same `GifBytesCache` bytes on disk, the same decode. A second pipeline would re-download
+/// every gif the SwiftUI path had already stored.
+final class RowGifView: GifPlayerImageView {
     /// The url whose bytes are actually ON SCREEN — as opposed to one that was merely asked for.
     /// A request that fails must not look like a finished picture. See `configure`.
     private var displayedURL: String?
@@ -32,7 +31,7 @@ final class RowGifView: UIImageView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(url: String?) {
-        guard let url, !url.isEmpty else { token += 1; displayedURL = nil; inFlight = nil; image = nil; return }
+        guard let url, !url.isEmpty else { token += 1; displayedURL = nil; inFlight = nil; show(nil); return }
         // ⛔ THREE STATES, NOT TWO: shown, in flight, and neither. Collapsing them is what broke this.
         //
         // The original guard was `url != loadedURL`, with `loadedURL` set BEFORE the fetch — which
@@ -54,61 +53,27 @@ final class RowGifView: UIImageView {
         token += 1
         let mine = token
         inFlight = nil
-        if let hit = Self.cache.object(forKey: url as NSString) { image = hit; displayedURL = url; return }
-        // ⛔ NO DISK READ OR DECODE ON MAIN - owner audit 2026-10-06 chat #42. `GifBytesCache.data`
-        // and `animatedGif` (every frame through ImageIO) ran right here, inside the cell's
-        // configure, so a cold gif scrolling in cost the frame it arrived in. The same fault the
-        // photo view lost on 2026-10-03. Both now run in the shared job below, behind the grey fill.
-        image = nil
+        if let hit = GifStore.cached(url) { show(hit); displayedURL = url; return }
+        // ⛔ NO DISK READ OR DECODE ON MAIN - owner audit 2026-10-06 chat #42. Both run in the shared
+        // job (`GifStore.load`), behind the grey fill.
+        //
+        // ⛔ ONE JOB PER URL, AND IT FINISHES WHETHER ANYONE IS STILL LOOKING - chat #43: a gif
+        // scrolled past mid-download is still stored, and a view coming back joins the running job.
+        show(nil)
         inFlight = url
-        let job = Self.job(for: url)
-        Task { [weak self] in
-            let img = await job.value
-            if Self.jobs[url] == job { Self.jobs[url] = nil }
+        Task { @MainActor [weak self] in
+            let movie = await GifStore.load(url)
             guard let self, self.token == mine else { return }
             self.inFlight = nil
-            // ⚠️ A FAILURE LEAVES NOTHING BEHIND, so the next configure retries. `animatedGif`
-            // already falls back to a still frame for anything with one usable image in it, so
-            // reaching here with nil means the bytes were not an image at all — an error page, or
-            // an empty body — and re-asking is the only thing that can help.
-            guard let img else { return }
+            // ⚠️ A FAILURE LEAVES NOTHING BEHIND, so the next configure retries: nil means the
+            // bytes were not an image at all (an error page, an empty body).
+            guard let movie else { return }
             self.displayedURL = url
-            self.image = img
+            self.show(movie)
         }
     }
 
-    /// ⛔ ONE JOB PER URL, AND IT FINISHES WHETHER ANYONE IS STILL LOOKING - owner audit 2026-10-06
-    /// chat #43. The download used to sit behind the view's own "still mine?" guard, and `reset()`
-    /// clears that on reuse, so a gif scrolled past mid-download was thrown away before it reached
-    /// `GifBytesCache` and started again from zero on the way back. The photo path was fixed the
-    /// same way on 2026-09-26 (see `RowImageView`'s shared job). Now the job stores the bytes and the
-    /// decoded gif itself, and a view coming back to the same url joins the running job instead of
-    /// starting a second download.
-    private static var jobs: [String: Task<UIImage?, Never>] = [:]
-
-    private static func job(for url: String) -> Task<UIImage?, Never> {
-        if let running = jobs[url] { return running }
-        let cache = Self.cache
-        // Detached: the disk read, the download and the frame decode all stay off the main thread.
-        let t = Task.detached(priority: .userInitiated) { () async -> UIImage? in
-            if let bytes = GifBytesCache.data(url), let img = UIImage.animatedGif(data: bytes) {
-                cache.setObject(img, forKey: url as NSString)
-                return img
-            }
-            // The app's own session rather than `URLSession.shared`, which is the shared cookie jar
-            // every other request in the app deliberately avoids.
-            guard let u = URL(string: url),
-                  let data = try? await MediaSession.shared.data(from: u).0,
-                  let img = UIImage.animatedGif(data: data) else { return nil }
-            GifBytesCache.store(data, url)
-            cache.setObject(img, forKey: url as NSString)
-            return img
-        }
-        jobs[url] = t
-        return t
-    }
-
-    func reset() { token += 1; displayedURL = nil; inFlight = nil; image = nil }
+    func reset() { token += 1; displayedURL = nil; inFlight = nil; show(nil) }
 }
 
 final class MediaBubbleView: UIView {
@@ -354,7 +319,7 @@ final class MediaBubbleView: UIView {
     }
 
     /// 2026-10-17 chat stickers: an animated sticker plays only while its row is on screen.
-    func setOnScreen(_ on: Bool) { sticker?.setOnScreen(on) }
+    func setOnScreen(_ on: Bool) { sticker?.setOnScreen(on); gif?.onScreen = on }
 
     /// The sticker's decrypted bytes, when this bubble is a sticker that has loaded.
     var stickerBytes: Data? { sticker?.isHidden == false ? sticker?.loadedBytes : nil }

@@ -286,7 +286,16 @@ final class ThumbImageView: UIImageView {
         case .gif(let url):
             guard key != url else { return }
             key = url
-            image = GifBytesCache.data(url).flatMap { UIImage.animatedGif(data: $0) }
+            // Perf audit 2026-11-11 M4: the disk read and every frame's decode ran here, on main,
+            // in the frame the banner rose. Now the shared GIF store loads it off main, and the
+            // banner's small thumbnail is the GIF's first frame: a still, not a player.
+            if let hit = GifStore.cached(url) { image = hit.still; return }
+            image = nil
+            Task { @MainActor [weak self] in
+                let movie = await GifStore.load(url)
+                guard let self, self.key == url else { return }
+                self.image = movie?.still
+            }
         }
     }
 }
