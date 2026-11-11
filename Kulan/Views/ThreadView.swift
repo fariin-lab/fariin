@@ -5937,7 +5937,10 @@ struct ThreadView: View {
             // ⛔ LIFTED 2026-09-29 (see `dark`): a wallpapered chat follows the phone again, so the
             // UIKit half is no longer pinned either.
             forceDark: false,
-            noScreenshots: repo.noScreenshots,  // Disable Sharing (2026-10-03)
+            // Disable Sharing (2026-10-03). The chat's own listener starts false, so the first
+            // frame also reads the cached chat-list copy: a restricted chat is never capturable
+            // in the moment before that listener lands (2026-11-11).
+            noScreenshots: repo.noScreenshots || (cachedConv?.noScreenshots ?? false),
             hidesHeaderBlur: preview,           // the long-press peek has no header (2026-10-11)
             // owner 2026-10-21 (the open jump): why these rows changed, keyed by the version that
             // produced them, so the list holds the reader still for a cache-to-server swap.
