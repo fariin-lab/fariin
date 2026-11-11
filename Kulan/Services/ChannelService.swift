@@ -59,7 +59,7 @@ enum ChannelService {
     }
 
     /// One channel on the Discover page.
-    struct Discovered: Identifiable, Equatable {
+    struct Discovered: Identifiable, Equatable, Codable {
         let cid: String
         let handle: String
         let title: String

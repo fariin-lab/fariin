@@ -177,8 +177,13 @@ struct DiscoverChannelsView: View {
     /// Opens the channel once the sheets above it are down (the presenter closes them).
     var onOpen: (_ cid: String, _ handle: String?) -> Void = { cid, handle in GroupDirectory.open(cid: cid, name: handle) }
     @Environment(\.dismiss) private var dismiss
-    @State private var rows: [ChannelService.Discovered] = []
+    // ⛔ THE LAST ANSWER ON THE FIRST FRAME (owner 2026-11-11: "this skeleton is taking time"): the
+    // kept list is drawn at once and the server's answer replaces it in place. See `ExploreCache`.
+    @State private var rows: [ChannelService.Discovered] = ExploreCache.cachedChannels() ?? []
     @State private var loading = true
+    /// When the page was made, for the one EXPLORE# line per tab (ms to the first rows, cache or network).
+    @State private var openedAt = Date()
+    @State private var loggedTabs: Set<String> = []
     @State private var failed = false
     @State private var busy: Set<String> = []
     /// Followed from this list, before the follow list says so; each id goes once the listener has it.
@@ -196,7 +201,11 @@ struct DiscoverChannelsView: View {
     /// Explore's two tabs (owner 2026-11-10): Channels, then public Groups.
     enum Tab: String, CaseIterable { case channels = "Channels", groups = "Groups" }
     @State private var tab: Tab = .channels
-    @State private var groupRows: [GroupDirectory.Discovered] = []
+    /// The page's width, for the bar's switch.
+    @State private var barWidth: CGFloat = 0
+    /// What the back button takes at each side of the bar: 16 margin, a 44 circle, 10 air.
+    static let barSide: CGFloat = 70
+    @State private var groupRows: [GroupDirectory.Discovered] = ExploreCache.cachedGroups() ?? []
     @State private var groupsLoading = true
     @State private var groupsFailed = false
     @State private var groupsLoaded = false
@@ -228,19 +237,14 @@ struct DiscoverChannelsView: View {
 
     private var content: some View {
             List {
-                // The two tabs, first in the list under the search field (owner 2026-11-10).
-                Picker("Show", selection: $tab) {
-                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+                // The tabs moved up into the bar (design C, owner 2026-11-11): the list starts right
+                // under the search field.
                 if tab == .groups {
                     groupsSection
                 } else if loading && rows.isEmpty {
                     // Rows shaped like the channels on their way, not a spinner (owner 2026-10-31).
                     ForEach(0..<8, id: \.self) { i in
-                        DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4])
+                        DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4], delayed: true)
                             .listRowSeparator(.hidden)
                     }
                 } else if failed && rows.isEmpty {
@@ -262,20 +266,37 @@ struct DiscoverChannelsView: View {
             .listStyle(.plain)
             // ⛔ AT THE TOP, ALWAYS SHOWN (owner 2026-11-10, his mockup): the grey field under the title,
             // as the chat list's and Add People's, not iOS 26's default bar at the bottom.
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: tab == .groups ? "Search groups" : "Search channels")
+            // The title stays for VoiceOver and the back menu; the bar shows the switch in its place.
             .navigationTitle("Explore")
             .navigationBarTitleDisplayMode(.inline)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
             .toolbar {
+                // ⛔ DESIGN C (owner 2026-11-11): "Channels | Groups" in the bar where the title was,
+                // filling it, with the back button's width left free on the right too so it sits centred.
+                ToolbarItem(placement: .principal) {
+                    ExploreTabSwitch(tab: $tab)
+                        .frame(width: max(160, barWidth - 2 * Self.barSide))
+                }
+                .sharedBackgroundVisibility(.hidden)   // the switch is its own glass; no second capsule
                 if !embedded {
                     ToolbarItem(placement: .topBarLeading) {
                         Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
                     }
                 }
             }
-            .refreshable { if tab == .groups { await loadGroups() } else { await load() } }
-            .task { await load() }
+            .refreshable { if tab == .groups { await loadGroups(force: true) } else { await load(force: true) } }
+            // Channels first, then the Groups tab behind it, so switching tabs finds it ready.
+            .task {
+                await load()
+                if !groupsLoaded { await loadGroups(priority: .utility) }
+            }
             // The Groups tab loads the first time it is shown (owner 2026-11-10).
-            .task(id: tab) { if tab == .groups && !groupsLoaded { await loadGroups() } }
+            .task(id: tab) {
+                if tab == .groups && !groupRows.isEmpty { noteFirstRows("groups", from: "cache", count: groupRows.count) }
+                if tab == .groups && !groupsLoaded { await loadGroups() }
+            }
             // The listener has it now: the stand-in goes, so a later unfollow shows Follow again.
             .onChange(of: confirmedIds) { _, ids in if !ids.isEmpty { justFollowed.subtract(ids) } }
             // Left from inside (its page's Leave): back to the list at once, not a chat I no longer follow.
@@ -295,7 +316,7 @@ struct DiscoverChannelsView: View {
     @ViewBuilder private var groupsSection: some View {
         if groupsLoading && groupRows.isEmpty {
             ForEach(0..<8, id: \.self) { i in
-                DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4]).listRowSeparator(.hidden)
+                DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4], delayed: true).listRowSeparator(.hidden)
             }
         } else if groupsFailed && groupRows.isEmpty {
             Text("Couldn't load groups. Check your connection and try again.")
@@ -384,11 +405,31 @@ struct DiscoverChannelsView: View {
         .disabled(mine)
     }
 
-    private func loadGroups() async {
+    /// The kept groups stay on screen while the server answers; a fresh-enough answer is not asked again.
+    private func loadGroups(force: Bool = false, priority: TaskPriority? = nil) async {
+        if !force, let fresh = ExploreCache.freshGroups() {
+            if fresh != groupRows { groupRows = fresh }
+            groupsFailed = false; groupsLoaded = true; groupsLoading = false
+            return
+        }
         groupsLoading = true
-        do { groupRows = try await GroupDirectory.discover(); groupsFailed = false; groupsLoaded = true }
+        do {
+            let fresh = try await ExploreCache.fetchGroups(priority: priority)
+            if fresh != groupRows { groupRows = fresh }   // unchanged: nothing redrawn, nothing moves
+            groupsFailed = false; groupsLoaded = true
+            if tab == .groups { noteFirstRows("groups", from: "network", count: fresh.count) }
+        }
         catch { groupsFailed = true }
         groupsLoading = false
+    }
+
+    /// One EXPLORE# diag line per tab per open: ms from the page's making to its first rows, and where
+    /// they came from.
+    private func noteFirstRows(_ which: String, from: String, count: Int) {
+        guard !loggedTabs.contains(which) else { return }
+        loggedTabs.insert(which)
+        let ms = Int(Date().timeIntervalSince(openedAt) * 1000)
+        DiagLog.add("EXPLORE# \(which) first rows \(ms) ms from \(from) (\(count) rows)")
     }
 
     /// Find Channels pushed from the chat list's compass (owner 2026-11-10: slides in from the right).
@@ -491,12 +532,66 @@ struct DiscoverChannelsView: View {
         .disabled(mine)
     }
 
-    private func load() async {
-        loading = true
+    /// The kept channels stay on screen while the server answers; a fresh-enough answer is not asked
+    /// again. Follow state is read live (`isMine`), so a kept row never shows a stale Follow.
+    private func load(force: Bool = false) async {
         if DemoMode.storeShots { rows = DemoMode.storeChannels(); failed = false; loading = false; return }
-        do { rows = try await ChannelService.discover(); failed = false }
+        if !rows.isEmpty { noteFirstRows("channels", from: "cache", count: rows.count) }
+        if !force, let fresh = ExploreCache.freshChannels() {
+            if fresh != rows { rows = fresh }
+            failed = false; loading = false
+            return
+        }
+        loading = true
+        do {
+            let fresh = try await ExploreCache.fetchChannels()
+            if fresh != rows { rows = fresh }   // unchanged: nothing redrawn, nothing moves
+            failed = false
+            noteFirstRows("channels", from: "network", count: fresh.count)
+        }
         catch { failed = true }
         loading = false
+    }
+}
+
+/// Explore's tab switch in the bar (design C, owner 2026-11-11): a glass capsule, the selected half a
+/// lighter pill, the other half muted words; the pill slides between them on the app's spring.
+private struct ExploreTabSwitch: View {
+    @Binding var tab: DiscoverChannelsView.Tab
+    @Namespace private var pill
+    /// Lighter than the glass in both looks: white on light, a soft white wash on dark.
+    private static let pillFill = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor.white.withAlphaComponent(0.2) : UIColor.white })
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(DiscoverChannelsView.Tab.allCases, id: \.self) { t in
+                let on = tab == t
+                Button {
+                    guard !on else { return }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { tab = t }
+                } label: {
+                    Text(t.rawValue)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(on ? Color(uiColor: .label) : Color(uiColor: .secondaryLabel))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 34)
+                        .background {
+                            if on {
+                                Capsule().fill(Self.pillFill)
+                                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                                    .matchedGeometryEffect(id: "pill", in: pill)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .liquidGlass(Capsule())
     }
 }
 

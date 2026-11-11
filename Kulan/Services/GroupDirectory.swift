@@ -470,7 +470,7 @@ enum GroupNameCheck: Equatable {
     }
 
     /// One public group in Explore's Groups tab (owner 2026-11-10, server `discoverGroups`).
-    struct Discovered: Identifiable, Equatable {
+    struct Discovered: Identifiable, Equatable, Codable {
         let cid: String
         let handle: String
         let title: String
@@ -558,4 +558,141 @@ struct PublicGroupTarget: Identifiable, Equatable, Hashable {
     var cid: String?
     var name: String?
     var id: String { (cid ?? "") + "|" + (name ?? "") }
+}
+
+// MARK: - Explore's last answer, kept on the phone
+
+/// ⛔ EXPLORE OPENS ON WHAT IT SAW LAST (owner 2026-11-11: "this skeleton is taking time"). Both tabs
+/// come from callables (`discoverChannels`, `discoverGroups`, me-central1) that can take seconds when
+/// cold, so the page stood on grey rows. Now, as large messengers do it: the last answer for each tab
+/// is a small JSON in Caches, per account, drawn on the first frame; the server's answer replaces it
+/// in place. `warm()` fetches a little after the chat list shows, at low priority, so the first open
+/// in a session is usually fresh already. One call at a time per tab: an open during a warm waits for
+/// that same call. Wiped by `SessionWipe` (every account's files).
+@MainActor enum ExploreCache {
+    private static var channels: [ChannelService.Discovered]?
+    private static var groups: [GroupDirectory.Discovered]?
+    private static var channelsAt: Date?
+    private static var groupsAt: Date?
+    private static var channelsTask: Task<[ChannelService.Discovered], Error>?
+    private static var groupsTask: Task<[GroupDirectory.Discovered], Error>?
+    private static var lastWarm: Date?
+    /// The account whose copy is in memory; another account reloads from its own file.
+    private static var memoryFor = ""
+
+    /// An answer newer than this is shown without asking the server again.
+    static let freshFor: TimeInterval = 60
+    /// `warm()` at most this often.
+    static let warmEvery: TimeInterval = 10 * 60
+
+    private static var uid: String { AuthService.shared.uid ?? "" }
+
+    private static func file(_ kind: String, _ uid: String) -> URL? {
+        guard !uid.isEmpty, let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        else { return nil }
+        return dir.appendingPathComponent("explore-\(kind)-\(uid).json")
+    }
+
+    /// Memory belongs to the signed-in account; the first ask after launch (or a switch) reads its file.
+    private static func syncAccount() {
+        let now = uid
+        guard now != memoryFor else { return }
+        memoryFor = now
+        channels = nil; groups = nil; channelsAt = nil; groupsAt = nil
+        channelsTask = nil; groupsTask = nil; lastWarm = nil
+        if let u = file("channels", now), let d = try? Data(contentsOf: u) {
+            channels = try? JSONDecoder().decode([ChannelService.Discovered].self, from: d)
+        }
+        if let u = file("groups", now), let d = try? Data(contentsOf: u) {
+            groups = try? JSONDecoder().decode([GroupDirectory.Discovered].self, from: d)
+        }
+    }
+
+    /// What to draw on the first frame (memory, else the file). nil = nothing kept.
+    static func cachedChannels() -> [ChannelService.Discovered]? { syncAccount(); return channels }
+    static func cachedGroups() -> [GroupDirectory.Discovered]? { syncAccount(); return groups }
+
+    /// The kept answer when it is younger than `freshFor`.
+    static func freshChannels() -> [ChannelService.Discovered]? {
+        syncAccount()
+        guard let t = channelsAt, Date().timeIntervalSince(t) < freshFor else { return nil }
+        return channels
+    }
+    static func freshGroups() -> [GroupDirectory.Discovered]? {
+        syncAccount()
+        guard let t = groupsAt, Date().timeIntervalSince(t) < freshFor else { return nil }
+        return groups
+    }
+
+    private static func save<T: Encodable>(_ rows: T, kind: String, uid: String) {
+        guard let u = file(kind, uid), let data = try? JSONEncoder().encode(rows) else { return }
+        Task.detached(priority: .utility) { try? data.write(to: u, options: .atomic) }
+    }
+
+    /// The server's channels, kept for next time. Joins a call already on its way.
+    static func fetchChannels(priority: TaskPriority? = nil) async throws -> [ChannelService.Discovered] {
+        syncAccount()
+        if let t = channelsTask { return try await t.value }
+        let owner = uid
+        let t = Task(priority: priority) { try await ChannelService.discover() }
+        channelsTask = t
+        do {
+            let rows = try await t.value
+            if memoryFor == owner {
+                channelsTask = nil
+                channels = rows; channelsAt = Date()
+                save(rows, kind: "channels", uid: owner)
+            }
+            return rows
+        } catch {
+            if memoryFor == owner { channelsTask = nil }
+            throw error
+        }
+    }
+
+    /// The server's public groups, kept for next time. Joins a call already on its way.
+    static func fetchGroups(priority: TaskPriority? = nil) async throws -> [GroupDirectory.Discovered] {
+        syncAccount()
+        if let t = groupsTask { return try await t.value }
+        let owner = uid
+        let t = Task(priority: priority) { try await GroupDirectory.discover() }
+        groupsTask = t
+        do {
+            let rows = try await t.value
+            if memoryFor == owner {
+                groupsTask = nil
+                groups = rows; groupsAt = Date()
+                save(rows, kind: "groups", uid: owner)
+            }
+            return rows
+        } catch {
+            if memoryFor == owner { groupsTask = nil }
+            throw error
+        }
+    }
+
+    /// A little after the chat list shows, at low priority, at most every `warmEvery`. Channels always;
+    /// groups only for an account that has opened the Groups tab before (it has a kept answer), since
+    /// that call reads far more on the server.
+    static func warm() {
+        syncAccount()
+        guard !uid.isEmpty, !DemoMode.storeShots else { return }
+        if let t = lastWarm, Date().timeIntervalSince(t) < warmEvery { return }
+        lastWarm = Date()
+        Task(priority: .utility) {
+            if freshChannels() == nil { _ = try? await fetchChannels(priority: .utility) }
+            if groups != nil, freshGroups() == nil { _ = try? await fetchGroups(priority: .utility) }
+        }
+    }
+
+    /// Sign-out / account deletion: memory and every account's files (the uid is often gone by then).
+    static func wipe() {
+        channels = nil; groups = nil; channelsAt = nil; groupsAt = nil
+        channelsTask = nil; groupsTask = nil; lastWarm = nil; memoryFor = ""
+        let fm = FileManager.default
+        if let dir = fm.urls(for: .cachesDirectory, in: .userDomainMask).first,
+           let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            for f in files where f.lastPathComponent.hasPrefix("explore-") { try? fm.removeItem(at: f) }
+        }
+    }
 }
