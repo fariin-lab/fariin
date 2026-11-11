@@ -1626,7 +1626,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // owner audit 2026-10-06 chat #57: a plan height has no rendering noise (it IS the
             // frame the cell lays out in), so any real drift is adopted, not only drift over 2pt.
             if let cached = self.heights[id], abs(cached - plan.height) > 0.5 {
-                DispatchQueue.main.async { [weak self] in self?.adoptHeight(plan.height, for: id) }
+                self.queueDequeueHeight(plan.height, for: id)   // one batch per turn (audit L5)
             }
         }
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] cv, ip, id in
@@ -1765,6 +1765,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if moved {
             let after = frameMinY(for: currentIds)
             layout.generation += 1
+            if let first = batch.compactMap({ dataSource.indexPath(for: $0)?.item }).min() {
+                layout.markRestack(from: first)
+            }
             layout.invalidateLayout()
             if let landed = continuityDelta(anchors, before: before, after: after), abs(landed.delta) > 0.5 {
                 reopenLog("MOVER settleEstimatedHeights anchor delta \(String(format: "%.1f", landed.delta)) held=\(Date() < landingHoldUntil)")
@@ -2031,15 +2034,39 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // layout transaction as the frame change, never a frame late. The delta is zero unless the changed row
     // lies ABOVE the reader's anchor; a row below the viewport moves nothing they can see.
     private func adoptHeight(_ h: CGFloat, for id: String) {
-        RxTrace.log("adoptHeight id=\(id.suffix(5)) h=\(h) cached=\(heights[id] ?? -1)")
-        // owner audit 2026-10-06 chat #57: 0.5, not 2. The 2pt noise filter belongs to the SwiftUI
-        // height REPORTS and is applied there (`reportHeight`, `applyReportedHeight`) before they
-        // get here; here it also swallowed exact plan drifts of 1-2pt, leaving the frame off for good.
-        guard collectionView.bounds.height > 0, let cached = heights[id], abs(cached - h) > 0.5 else { return }
+        adoptHeights([id: h])
+    }
+
+    // ⛔ ONE LAYOUT PASS FOR EVERY ROW THAT CORRECTED IN THE SAME TURN — perf audit 2026-11-11, L5.
+    // A fling into rows that only had an estimate brings several of them in during one frame, and
+    // each used to run its own anchor capture, two whole-list position maps, a full re-stack and a
+    // `layoutIfNeeded`. The reference app's list does the same thing with one transaction: every
+    // size change queued together is applied in one layout, with one offset correction. Here the
+    // dequeue corrections are collected (`queueDequeueHeight`) and land together, and the layout
+    // re-stacks only from the first changed row down (`MessageLayout.markRestack`).
+    //
+    // For a single row this is exactly the old path, step for step.
+    private func adoptHeights(_ batch: [String: CGFloat]) {
+        guard collectionView.bounds.height > 0, !batch.isEmpty else { return }
+        var changes: [(id: String, from: CGFloat, to: CGFloat)] = []
+        for (id, h) in batch {
+            RxTrace.log("adoptHeight id=\(id.suffix(5)) h=\(h) cached=\(heights[id] ?? -1)")
+            // owner audit 2026-10-06 chat #57: 0.5, not 2. The 2pt noise filter belongs to the SwiftUI
+            // height REPORTS and is applied there (`reportHeight`, `applyReportedHeight`) before they
+            // get here; here it also swallowed exact plan drifts of 1-2pt, leaving the frame off for good.
+            if let cached = heights[id], abs(cached - h) > 0.5 { changes.append((id, cached, h)) }
+        }
+        guard !changes.isEmpty else { return }
         guard canLandLoad else {
-            pendingSettleHeights.insert(id)
+            for c in changes { pendingSettleHeights.insert(c.id) }
             needsRefreshOnSettle = true
             return
+        }
+        let growth = changes.reduce(CGFloat(0)) { $0 + ($1.to - $1.from) }
+        let firstItem = changes.compactMap { dataSource.indexPath(for: $0.id)?.item }.min()
+        func bumpGeneration() {
+            layout.generation += 1
+            if let firstItem { layout.markRestack(from: firstItem) }
         }
         // ⛔ A READER AT THE NEWEST FOLLOWS THE NEW BOTTOM — his report, 2026-08-27: send or receive
         // a photo or video and the list ends up off the bottom, jump arrow showing.
@@ -2065,17 +2092,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // whole height change for a chat taller than the screen, nothing for a short one.
             if collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating {
                 let raw = safeContentHeight + collectionView.adjustedContentInset.bottom - collectionView.bounds.height
-                let shift = max(minContentOffsetY, raw + (h - cached)) - max(minContentOffsetY, raw)
-                heights[id] = h
-                layout.generation += 1
+                let shift = max(minContentOffsetY, raw + growth) - max(minContentOffsetY, raw)
+                for c in changes { heights[c.id] = c.to }
+                bumpGeneration()
                 let ctx = UICollectionViewLayoutInvalidationContext()
                 if shift != 0 { ctx.contentOffsetAdjustment = CGPoint(x: 0, y: shift) }
                 layout.invalidateLayout(with: ctx)
                 collectionView.layoutIfNeeded()
                 return
             }
-            heights[id] = h
-            layout.generation += 1
+            for c in changes { heights[c.id] = c.to }
+            bumpGeneration()
             layout.invalidateLayout()
             collectionView.layoutIfNeeded()
             let bound = maxContentOffsetY
@@ -2095,9 +2122,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // them move and returned a zero correction while the content grew taller.
         let anchors = continuityAnchors(relativeToTop: false)
         let beforeY = frameMinY(for: currentIds)
-        heights[id] = h
+        for c in changes { heights[c.id] = c.to }
         let afterY = frameMinY(for: currentIds)
-        layout.generation += 1
+        bumpGeneration()
         let landed = continuityDelta(anchors, before: beforeY, after: afterY)
         let delta = landed?.delta ?? 0
         let ctx = UICollectionViewLayoutInvalidationContext()
@@ -2106,8 +2133,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.layoutIfNeeded()
         var anchorName = "NONE"
         if let l = landed, let a = l.anchor { anchorName = String(a.id.suffix(6)) }
-        reopenLog("MOVER adoptHeight id=\(id.suffix(5)) \(String(format: "%.1f", cached)) -> \(String(format: "%.1f", h)) anchor=\(anchorName) delta=\(String(format: "%.1f", delta))")
+        for c in changes {
+            reopenLog("MOVER adoptHeight id=\(c.id.suffix(5)) \(String(format: "%.1f", c.from)) -> \(String(format: "%.1f", c.to)) anchor=\(anchorName) delta=\(String(format: "%.1f", delta)) batch=\(changes.count)")
+        }
         if delta != 0 { verifyAnchor(landed?.anchor) }
+    }
+
+    /// Dequeue-time corrections (the cell registration's safety net), collected and applied as one
+    /// batch on the next main-queue turn: the same async hop each one used to take alone, so the
+    /// correction still never runs inside the dequeue that found it. See `adoptHeights`.
+    private var queuedDequeueHeights: [String: CGFloat] = [:]
+    private var dequeueHeightFlushScheduled = false
+
+    private func queueDequeueHeight(_ h: CGFloat, for id: String) {
+        queuedDequeueHeights[id] = h
+        guard !dequeueHeightFlushScheduled else { return }
+        dequeueHeightFlushScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.dequeueHeightFlushScheduled = false
+            let batch = self.queuedDequeueHeights
+            self.queuedDequeueHeights = [:]
+            self.adoptHeights(batch)
+        }
     }
 
     // The row the reader's position is measured against. WHICH visible row that is depends on the
@@ -7683,6 +7731,13 @@ final class MessageLayout: UICollectionViewLayout {
     /// come with a `generation` bump.
     var headerHeight: CGFloat = 0
 
+    /// Perf audit 2026-11-11, L5: a height change at row `item` moves only that row and the ones
+    /// after it, so the next prepare re-stacks from there instead of from the top. Honoured only
+    /// when it is the ONE change since the last build (same width and count, generation exactly one
+    /// ahead); anything else, a header change or a second bump, takes the full re-stack.
+    private var restack: (item: Int, generation: Int)?
+    func markRestack(from item: Int) { restack = (item, generation) }
+
     override func prepare() {
         super.prepare()
         if frozen { return }   // keep the current frames untouched for the whole swipe
@@ -7696,6 +7751,21 @@ final class MessageLayout: UICollectionViewLayout {
         }
         let count = cv.numberOfItems(inSection: 0)
         if builtGeneration == generation, cv.bounds.width == layoutWidth, count == builtCount { return }
+        if let r = restack, r.generation == generation, builtGeneration == generation - 1,
+           cv.bounds.width == layoutWidth, count == builtCount, frames.count == count, r.item >= 0, r.item < count {
+            restack = nil
+            var y = frames[r.item].minY
+            for i in r.item..<count {
+                let h = heightForItem?(i) ?? 44
+                frames[i] = CGRect(x: 0, y: y, width: layoutWidth, height: h)
+                y += h
+            }
+            contentHeight = y + Self.contentMarginBottom
+            builtGeneration = generation
+            onFramesRebuilt?()
+            return
+        }
+        restack = nil
         layoutWidth = cv.bounds.width
         frames.removeAll(keepingCapacity: true)
         frames.reserveCapacity(count)
