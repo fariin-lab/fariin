@@ -10099,6 +10099,11 @@ struct ThreadView: View {
                                   // — which is the one gesture that lets you see the conversation behind them.
                                   onSubmit: {
                                       searchFocused = false
+                                      // A term handed over just now (Search pressed inside the
+                                      // 250 ms pause) is still being matched, and its answer jumps
+                                      // to the match itself; stepping now would move on the OLD
+                                      // matches (2026-11-11).
+                                      if searchRun.pendingNavigate { return }
                                       if !searchMatches.isEmpty { stepSearch(1) }
                                   })
         // ⛔ AND WHENEVER THE CONVERSATION ITSELF CHANGES. Matches used to recompute on keystroke and
