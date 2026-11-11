@@ -86,9 +86,9 @@ struct FloatingCardShell<Spot: FloatingCardSpot, Card: View, Picture: View>: Vie
     private let onTap: () -> Void
     private let card: () -> Card
     private let picture: () -> Picture
-    /// The group card's keyboard rule (owner, 2026-10-06): a card the keyboard would cover moves up
-    /// above it and goes back when the keyboard leaves. The 1:1 card never had it and is unchanged:
-    /// with this off `keyboardTop` stays nil and every limit is the 1:1 card's own.
+    /// The keyboard rule (group card 2026-10-06, 1:1 card too since 2026-11-11): a card the keyboard
+    /// would cover moves up above it and goes back when the keyboard leaves. With this off
+    /// `keyboardTop` stays nil and every limit is the card's own.
     private let avoidsKeyboard: Bool
 
     private var call: CallService { CallService.shared }
@@ -470,7 +470,7 @@ struct FloatingCardShell<Spot: FloatingCardSpot, Card: View, Picture: View>: Vie
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: spot.cardStashed)
         // Resolved once. See `insetsCache` for why this is not read live from `body`.
         .onAppear { insetsCache = Self.resolveInsets() }
-        // The group card's keyboard rule; returns at once for the 1:1 card (`avoidsKeyboard` off).
+        // The keyboard rule; returns at once when `avoidsKeyboard` is off.
         .onReceive(FloatingCardMetrics.keyboardFrames) { note in keyboardMoved(note) }
     }
 

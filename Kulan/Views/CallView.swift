@@ -1933,7 +1933,9 @@ struct FloatingCallWindow: View {
     private var h: CGFloat { 199 * call.cardScale }   // 9:16
 
     var body: some View {
-        FloatingCardShell(spot: call, onTap: {
+        // Moves up above the keyboard when the keyboard would cover it, and back down when it
+        // leaves, like the group card (owner 2026-11-11: the 1:1 card went under the keyboard).
+        FloatingCardShell(spot: call, avoidsKeyboard: true, onTap: {
             // Audit M-146, 2026-10-07: the card stays up for the 1s end label, and a tap in
             // that second grew a dead call back to full screen. Over is over: ignored.
             guard call.state != .ended, call.state != .idle else { return }
