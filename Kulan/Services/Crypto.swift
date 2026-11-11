@@ -114,6 +114,7 @@ final class Crypto {
         guard list != (ring[uid] ?? []) else { return }
         ring[uid] = Array(list.prefix(8))
         UserDefaults.standard.set(ring, forKey: Self.pubRingDefaultsKey)
+        bumpKeyEpoch()   // an earlier key may open a preview that drew the lock
         NotifShare.mirrorRing(ring)   // owner 2026-10-18 readable banners, see persistPubKey
     }
 
@@ -173,15 +174,15 @@ final class Crypto {
     // key generation — just enough to decrypt the last-message previews immediately (fixes the "…" flash
     // where the chat list rendered before the async initKeys + network key fetches completed).
     private func warmIfNeeded() {
-        lock.withLock {
-            guard !didWarm else { return }
+        let warmed: Bool = lock.withLock {
+            guard !didWarm else { return false }
             // ⛔ NOT WHILE SIGNED OUT — owner, 2026-09-26: "logout then login again, I lose my
             // messages; the chat list shows only …". Sign-out resets this flag, but the chat list is
             // still on screen for a moment and decrypts once more with nobody signed in. That call
             // found no uid, loaded nothing, and still marked the warm-up done, so after signing back
             // in the Keychain key was never read synchronously again and every preview drew the
             // "keys not ready" marker. Only a warm-up that knew WHOSE key to load counts.
-            guard currentUid() != nil else { return }
+            guard currentUid() != nil else { return false }
             didWarm = true
             if let dict = UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String] {
                 for (uid, b64) in dict where pubCache[uid] == nil {
@@ -198,7 +199,9 @@ final class Crypto {
                 mySecretKey = Bytes(sk); myPublicKey = Bytes(pk)
                 pubCache[uid] = Bytes(pk)
             }
+            return true
         }
+        if warmed { bumpKeyEpoch() }   // E5: keys came off disk, so a cached lock may open now
     }
 
     // MARK: - Setup
@@ -290,6 +293,7 @@ final class Crypto {
         }
         // Single lock-guarded write (memory barrier); the keypair is immutable after this.
         lock.withLock { mySecretKey = skBytes; myPublicKey = pkBytes; pubCache[uid] = pkBytes }
+        bumpKeyEpoch()
         // ⛔ READABLE BANNERS — owner 2026-10-18: a COPY of the secret key for the notification
         // extension, in the App Group's keychain group (Shared/NotifShared.swift), plus the peer key
         // caches it opens messages with. The private item above is untouched and stays the original.
@@ -390,6 +394,7 @@ final class Crypto {
         // `refreshKeyAfterFailure`. The reference apps keep their local store across a sign-out for
         // the same reason: the list must read on its first frame. (`pubCache` in memory is cleared
         // above and refilled from this dictionary by `warmIfNeeded`.)
+        bumpKeyEpoch()
     }
 
     /// Account DELETION: the account is gone for good, so its private key should go too
@@ -640,6 +645,7 @@ final class Crypto {
                 _ = b   // adoptKey already replaced memory and disk
             case .noKey:
                 lock.withLock { _ = pubCache.removeValue(forKey: uid) }
+                bumpKeyEpoch()
                 // The DISK copy too (same shared dictionary persistPubKey writes), or the next cold
                 // launch would warm the dead key straight back into memory.
                 var dict = (UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String]) ?? [:]
@@ -732,6 +738,7 @@ final class Crypto {
     private func adoptKey(_ uid: String, _ data: Data) -> Bytes {
         let key = Bytes(data)
         lock.withLock { pubCache[uid] = key }
+        bumpKeyEpoch()
         persistPubKey(uid, key)   // disk cache → decrypt works on the next cold launch's first render
         // AND SAY SO WHEN IT IS A DIFFERENT KEY THAN LAST TIME. This is the one place every
         // peer key enters the app, so it is the only place that can notice. See SafetyKeyLog:
@@ -824,7 +831,10 @@ final class Crypto {
             // so the next render heals instead of showing this lock forever. See refreshKeyAfterFailure.
             // Keyed by this message's nonce (2026-09-24 fix-all #70): once per message per session.
             refreshKeyAfterFailure(otherUid(cid), item: parts[1])
-            Telemetry.event(.warning, component: "crypto", code: "decrypt_text_failed")   // owner 2026-10-21
+            // E5: once per message per session, not once per chat-list redraw.
+            if firstFailureReport("t|" + parts[1]) {
+                Telemetry.event(.warning, component: "crypto", code: "decrypt_text_failed")   // owner 2026-10-21
+            }
             return "🔒"
         }
         return text
@@ -869,14 +879,41 @@ final class Crypto {
     /// A short cache key for a sealed text: its length and last 96 characters (the sealed body and
     /// its tag, random per message), not the whole text. A group message carries a key wrap per
     /// member, about 17 KB at 100 members; keyed whole, 500 entries could hold 8 MB of keys alone.
+    /// E5 (perf audit 2026-11-11): a preview that drew the lock, with the key state it failed under.
+    /// A sealed text that will not open used to be tried again with the current key and up to eight
+    /// earlier ones (each a UserDefaults read and a box.open), plus a telemetry event, on EVERY
+    /// chat-list redraw. It is now tried once per key state: `keyEpoch` moves whenever any key this
+    /// phone could open a message with changes (a peer key fetched, dropped or remembered, my own
+    /// key loaded or wiped, a group key released), and an entry from an older epoch is ignored.
+    private let lockedPreviews: NSCache<NSString, NSNumber> = {
+        let c = NSCache<NSString, NSNumber>()
+        c.countLimit = 500
+        return c
+    }()
+    private var keyEpoch = 0
+    private let keyEpochLock = NSLock()
+    private func bumpKeyEpoch() { keyEpochLock.withLock { keyEpoch &+= 1 } }
+    private var currentKeyEpoch: Int { keyEpochLock.withLock { keyEpoch } }
+    /// Failure telemetry once per message per session (E5).
+    private var reportedFailures = Set<String>()
+    private func firstFailureReport(_ k: String) -> Bool {
+        keyEpochLock.withLock {
+            if reportedFailures.count > 5000 { reportedFailures.removeAll() }   // bounded
+            return reportedFailures.insert(k).inserted
+        }
+    }
     private static func previewKey(_ raw: String) -> String { "\(raw.utf8.count)|\(raw.suffix(96))" }
     func decryptCached(_ raw: String, cid: String) -> String {
         let key = "\(cid)|\(Self.previewKey(raw))" as NSString
         if let hit = previewCache.object(forKey: key) { return hit as String }
+        // E5: read BEFORE the decrypt, so a key landing during it can only make the entry stale.
+        let epoch = currentKeyEpoch
+        if lockedPreviews.object(forKey: key)?.intValue == epoch { return "🔒" }
         let out = decrypt(raw, cid: cid)
-        // Don't memoize failure sentinels — the recipient's key may just not be warm yet.
-        // Caching "…"/"🔒" would freeze the chat-list preview until a new message arrives.
-        if out != "…" && out != "🔒" { previewCache.setObject(out as NSString, forKey: key) }
+        // "…" (keys not warm yet) is never kept. "🔒" is kept only for the key state it failed
+        // under (see `lockedPreviews`); any key change retries it on the next draw.
+        if out == "🔒" { lockedPreviews.setObject(NSNumber(value: epoch), forKey: key) }
+        else if out != "…" { previewCache.setObject(out as NSString, forKey: key) }
         return out
     }
 
@@ -886,8 +923,11 @@ final class Crypto {
     func decryptGroupCached(_ raw: String, cid: String, authorId: String) -> String {
         let key = "g|\(cid)|\(authorId)|\(Self.previewKey(raw))" as NSString
         if let hit = previewCache.object(forKey: key) { return hit as String }
+        let epoch = currentKeyEpoch   // E5, as in `decryptCached`
+        if lockedPreviews.object(forKey: key)?.intValue == epoch { return "🔒" }
         let out = decrypt(raw, cid: cid, authorId: authorId)
-        if out != "…" && out != "🔒" { previewCache.setObject(out as NSString, forKey: key) }
+        if out == "🔒" { lockedPreviews.setObject(NSNumber(value: epoch), forKey: key) }
+        else if out != "…" { previewCache.setObject(out as NSString, forKey: key) }
         return out
     }
 
@@ -1098,7 +1138,10 @@ final class Crypto {
         guard let msgKey = openFrom(authorId, current: authorPub, box: Bytes(wrappedKey),
                                     nonce: Bytes(keyNonce), sk: sk) else {
             if let t = openReleased() { return t }
-            Telemetry.event(.warning, component: "crypto", code: "decrypt_group_failed"); return "🔒"   // owner 2026-10-21
+            if firstFailureReport("g|" + nB64) {   // E5: once per message per session
+                Telemetry.event(.warning, component: "crypto", code: "decrypt_group_failed")   // owner 2026-10-21
+            }
+            return "🔒"
         }
         guard let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(ct),
                                                  secretKey: msgKey, nonce: Bytes(dataNonce)),
@@ -1151,6 +1194,7 @@ final class Crypto {
                 fresh.insert(nonce)
             }
         }
+        if !fresh.isEmpty { bumpKeyEpoch() }   // a released key may open a locked group preview
         return fresh
     }
 

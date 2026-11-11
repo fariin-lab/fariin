@@ -70,6 +70,10 @@ final class ConversationsRepository {
     /// code, so a group link card knows on its first frame whether it says Open Group.
     var conversations: [Conversation] = [] {
         didSet {
+            listVersion &+= 1
+            // S8 (perf audit 2026-11-11): the Calls tab follows my groups, not every typing flag.
+            let gids = conversations.filter(\.isGroup).map(\.id)
+            if gids != groupIds { groupIds = gids }
             GroupLinkDoor.noteConversations(conversations)
             // owner 2026-10-18 readable banners: names + photo URLs for the notification extension.
             // At most once a second: every typing flag lands here, and this walks the whole list.
@@ -95,6 +99,13 @@ final class ConversationsRepository {
         }
     }
     @ObservationIgnored private var repairedPreviews = Set<String>()
+    /// Moves on every assignment of `conversations` (perf audit 2026-11-11, S2): the chat list keys
+    /// its one filter-and-sort per change on it instead of re-running it on every read. Not observed:
+    /// readers read `conversations` itself to subscribe.
+    @ObservationIgnored private(set) var listVersion = 0
+    /// The ids of my groups in the list, in list order, assigned only when they change (S8), so a
+    /// screen that needs only these is not redrawn by every typing flag and read receipt.
+    private(set) var groupIds: [String] = []
     @ObservationIgnored private var notifSharePending = false
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
     /// owner 2026-10-27 (a brand-new account showed a blank list before "No chats yet"): set when
@@ -431,14 +442,11 @@ final class ConversationsRepository {
                 // flip this off, stop the paging and drop every pinned chat kept below the window.
                 let fromServer = !snap.metadata.isFromCache
                 if fromServer { PerfTrace.mark("chatlist_first_server_answer") }
-                let full = snap.documents.count >= limit
+                let full = snap.count >= limit
                 if fromServer || full { self.hasOlder = full }
-                if fromServer {
-                    self.loadingOlder = false
-                    // 2026-09-24 feature-audit: the next page for a whole-list screen, after this
-                    // snapshot has been published (hopped, so it never re-attaches from inside it).
-                    DispatchQueue.main.async { [weak self] in self?.continueWholeList() }
-                }
+                // The next page for a whole-list screen is asked for in `applySnapshot`, once this
+                // snapshot has been decoded and published.
+                if fromServer { self.loadingOlder = false }
                 // ⚠️ REPORTED BEFORE THE GUARD BELOW, on purpose. The empty-cached case is exactly
                 // the offline cold start, and it is the one the header most needs to hear about —
                 // returning first would make this listener silent precisely when it has the most to
@@ -446,135 +454,238 @@ final class ConversationsRepository {
                 Task { @MainActor in ConnectionStatus.shared.noteSnapshot(fromCache: snap.metadata.isFromCache, pendingWrites: snap.metadata.hasPendingWrites) }
                 // Offline cold-start: ignore an empty cached snapshot so the
                 // last-known chats stay visible (parity with the RN fromCache guard).
-                if snap.metadata.isFromCache && snap.documents.isEmpty { return }
+                if snap.metadata.isFromCache && snap.isEmpty { return }
 
-                // No sort here — every consumer (ChatsView, SearchViews) applies its own
-                // richer comparator (pins, recency). Sorting twice was wasted CPU.
+                // ⛔ DECODED OFF THE MAIN THREAD (perf audit 2026-11-11, S1/E2). This handler runs on
+                // main for EVERY hot-field change in ANY chat (typing flags, read receipts), and it
+                // used to re-read and re-build all of the window (up to 300 documents, more after a
+                // search) right here, every time. Now only the documents that changed are decoded,
+                // on `decodeQueue`, and a burst that lands while one decode is running collapses
+                // into one more pass over the newest snapshot. Main gets back a finished list and
+                // only applies it (`applySnapshot`), the way the reference app's list prepares its
+                // transition on a background queue and hands the main thread something to apply.
+                self.enqueueDecode(snap, uid: uid)
+            }
+    }
+
+    // MARK: - Snapshot decode, off the main thread (perf audit 2026-11-11, S1/E2)
+
+    /// One decoded window, ready for main: the raw documents (for the launch cache), the parsed
+    /// conversations in snapshot order, the ones parsed fresh this pass, and the key owners whose
+    /// public key should be warmed (fresh chats, plus any whose key is still not cached).
+    private struct DecodedWindow {
+        var docs: [(id: String, data: [String: Any])] = []
+        var convs: [Conversation] = []
+        var fresh: [Conversation] = []
+        var keysToWarm: [String] = []
+    }
+
+    private static let decodeQueue = DispatchQueue(label: "fariin.chatlist.decode", qos: .userInitiated)
+    /// Parsed documents by id from the last decode. `decodeQueue` only.
+    @ObservationIgnored private var decodeCache: [String: (data: [String: Any], conv: Conversation)] = [:]
+    @ObservationIgnored private var decodeCacheGeneration = -1
+    /// Moves on every `stop()` (so on every attach): a decode still running for a listener that has
+    /// been replaced is thrown away, and the parse cache starts again. Main only.
+    @ObservationIgnored private var decodeGeneration = 0
+    @ObservationIgnored private var decodeBusy = false
+    /// The newest snapshot not decoded yet. Newest wins: they are whole windows, not deltas.
+    @ObservationIgnored private var queuedSnap: (snap: QuerySnapshot, uid: String)?
+    /// Ids changed by every snapshot since the last decode began, replaced ones included, so a
+    /// snapshot that was overtaken in the queue cannot hide a change from the parse cache.
+    @ObservationIgnored private var dirtyIds = Set<String>()
+
+    private func enqueueDecode(_ snap: QuerySnapshot, uid: String) {
+        for change in snap.documentChanges { dirtyIds.insert(change.document.documentID) }
+        queuedSnap = (snap, uid)
+        runDecodeIfIdle()
+    }
+
+    private func runDecodeIfIdle() {
+        guard !decodeBusy, let job = queuedSnap else { return }
+        queuedSnap = nil
+        let dirty = dirtyIds
+        dirtyIds = []
+        decodeBusy = true
+        let gen = decodeGeneration
+        Self.decodeQueue.async { [weak self] in
+            guard let self else { return }
+            let window = self.decode(job.snap, dirty: dirty, generation: gen, uid: job.uid)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.decodeBusy = false
+                if gen == self.decodeGeneration { self.applySnapshot(job.snap, window, uid: job.uid) }
+                self.runDecodeIfIdle()
+            }
+        }
+    }
+
+    /// `decodeQueue` only. A document is parsed again only if a snapshot said it changed, it has a
+    /// write of mine still pending (its `.estimate` time may move), or it was not in the last pass.
+    private func decode(_ snap: QuerySnapshot, dirty: Set<String>, generation: Int, uid: String) -> DecodedWindow {
+        if decodeCacheGeneration != generation { decodeCache = [:]; decodeCacheGeneration = generation }
+        var next: [String: (data: [String: Any], conv: Conversation)] = [:]
+        var out = DecodedWindow()
+        var warmed = Set<String>()
+        for d in snap.documents {
+            let id = d.documentID
+            let entry: (data: [String: Any], conv: Conversation)
+            var isFresh = false
+            if !dirty.contains(id), !d.metadata.hasPendingWrites, let hit = decodeCache[id] {
+                entry = hit
+            } else {
                 // .estimate: an offline send leaves updatedAt as a PENDING server timestamp,
                 // which plain data() reads as nil → updatedAtMillis 0 → isCleared() treats the
                 // chat as delete-for-me and it vanishes from the list until the server acks.
-                let docs = snap.documents.map { (id: $0.documentID, data: $0.data(with: .estimate)) }
-                let convs = docs.map { Conversation(id: $0.id, data: $0.data) }
-                // ⛔ A SAVED COPY NEVER WALKS THE LIST BACKWARDS (owner 2026-11-01: the whole list went
-                // back to old pins, old photos, old names until the app was reopened). Only an empty
-                // cached snapshot was ever refused, so an older one replaced what was on screen and
-                // then overwrote the launch file too. The cache can be old: after a client swap the
-                // default client missed that session, and a fresh client reopens an earlier run's
-                // files under the same app name. Refused here, before anything is written; the
-                // server's answer still comes through, and `startBehindServerCheck` catches a list
-                // that stays behind.
-                if snap.metadata.isFromCache, !snap.metadata.hasPendingWrites {   // my own delete or leave passes
-                    // Chats only: a channel is not in this query, so a newer one refused a good copy.
-                    let shownNewest = self.newestMillis(self.lastRaw + self.conversations.filter { !$0.isChannel })
-                    if self.newestMillis(convs) + 1_000 < shownNewest {
-                        DiagLog.add("CHATLIST# refused an older saved copy, \((shownNewest - self.newestMillis(convs)) / 1000)s behind")
-                        DiagUpload.flag(after: 5)
-                        return
-                    }
-                }
-                // Keep the launch cache current. The RAW documents go in, so the cache is rebuilt by
-                // the same initializer the live path uses and cannot drift from it as fields are
-                // added. Written off the main thread; see ConversationsDiskCache.
-                // L10: merged with any pinned chat below this window, via `writeDiskCache` — storing
-                // just this window left a below-window pin out of the cache that answers the first
-                // frame, so it only showed up a moment later once the live listener caught up.
-                self.lastRawDocs = docs
-                self.writeDiskCache(uid: uid)
-                // "Automatically Archive new chats from unknown users" (Settings > Chats). Here
-                // rather than inside publish() because publish coalesces and can skip a snapshot
-                // outright — this must see every one, since the request it has to catch may arrive
-                // in a snapshot that changes nothing else. No-op while the setting is off.
-                // 2026-09-24 decision D8: the raw list is kept so a block list change can re-filter it.
-                self.lastRaw = convs
-                // owner 2026-10-18: each group's shared wallpaper, before anyone opens the group.
-                WallpaperStore.shared.syncGroupWallpapers(convs)
-                // 2026-09-24 fix-all #6: a pinned chat older than the window stays on the list.
-                self.syncPinnedExtras(convs, uid: uid, fromServer: !snap.metadata.isFromCache)
-                // 2026-09-26 block rebuild: NOTHING IS PUBLISHED BEFORE MY BLOCK LIST HAS ANSWERED.
-                // This listener can beat the block list's own; a chat from somebody I blocked, and
-                // its preview, would be on screen for that moment. `blockListChanged` publishes the
-                // held list the instant the block list lands (from its saved copy, usually at once).
-                guard BlockList.shared.isLoaded else { return }
-                let visible = self.hideAccountBlocked(self.withPinnedExtras(convs), me: uid)
-                UnknownChatArchiver.sweep(visible)
-                self.publish(visible)
-                if fromServer { self.endCatchUpAfterPublish() }
-                // 2026-09-25 delivered ticks: this phone has these chats' newest messages now. Only
-                // from the server (a cached snapshot proves nothing arrived), and never for a chat
-                // I blocked, so a blocked sender keeps seeing one tick.
-                if !snap.metadata.isFromCache { Task { @MainActor in DeliveryReceipts.mark(visible, me: uid) } }
-                // 2026-09-27: a request I answered the old way is written as accepted (see the note
-                // on `healAnsweredRequests`). Server data only, like the line above.
-                if !snap.metadata.isFromCache {
-                    Task { @MainActor in MessageRequests.healAnsweredRequests(visible, me: uid) }
-                }
-
-                // Warm recipient public keys so last-message previews can decrypt — CONCURRENTLY
-                // (was N sequential round-trips → slow cold start). preloadKey is cached, so the
-                // re-run on later snapshots is mostly hits.
-                Task {
-                    // ⛔ AND TELL THE LIST WHEN A KEY ARRIVES — owner, 2026-09-11: "when I send a
-                    // message for someone for request message, in the chat list I can't see the
-                    // message I sent ... 2 people I sent request message but the message I sent I
-                    // can't see."
-                    //
-                    // ⚠️ THE PREVIEW WAS NOT EMPTY, IT WAS THE "KEYS NOT READY" MARKER. `decrypt`
-                    // returns "…" when the other person's public key is not in the cache yet, and
-                    // that ellipsis is exactly what he photographed. The order here is what put it
-                    // there: `publish` hands the rows to SwiftUI, the rows decrypt immediately, and
-                    // only THEN does this task fetch the keys they needed.
-                    //
-                    // ⚠️ WHY IT ONLY BIT REQUEST CHATS, which is the part worth keeping. The sentinel
-                    // is deliberately not memoised (see `decryptCached`), so any later render heals
-                    // it — and a busy chat gets one within seconds, because every typing flag and
-                    // read receipt is another snapshot. A request nobody has answered produces NO
-                    // further snapshots at all: the one message is the last thing that will ever
-                    // happen in it until they reply. So the first render was the only render, and
-                    // the ellipsis was permanent in precisely the chats that never change.
-                    //
-                    // Republishing once, and only when something was actually fetched, is the whole
-                    // fix: the rows re-decrypt with the keys now in hand. `wasCached` costs a
-                    // dictionary read, so a snapshot whose keys are all warm — which is nearly all
-                    // of them — does nothing at all.
-                    var fetchedAny = false
-                    await withTaskGroup(of: Bool.self) { group in
-                        for c in convs {
-                            let key = c.isGroup ? c.lastSender : c.otherUid(uid)
-                            guard !key.isEmpty else { continue }
-                            group.addTask {
-                                let alreadyWarm = Crypto.shared.hasCachedKey(key)
-                                _ = await Crypto.shared.preloadKey(key)
-                                return !alreadyWarm && Crypto.shared.hasCachedKey(key)
-                            }
-                        }
-                        for await didFetch in group where didFetch { fetchedAny = true }
-                    }
-                    // ⛔ AND THE PHOTOS THE MIRROR NEVER GOT — owner, 2026-09-27: some people have a
-                    // photo, hide nothing, and still draw as a silhouette. A chat's `photos` entry
-                    // is written only by that person's own phone; if it never did, this list had
-                    // nothing to draw. Their profile record is read once per session per person
-                    // (only where the mirror is empty and nothing is known yet), and
-                    // `Conversation.photoUrl(for:)` then prefers it.
-                    let peers: [String] = await MainActor.run {
-                        var out: [String] = []
-                        for c in convs where !c.isGroup {
-                            let o = c.otherUid(uid)
-                            guard !o.isEmpty, (c.photos[o] ?? "").isEmpty,
-                                  ProfilePhotoIndex.facts(o) == nil,
-                                  !self.askedPhotoPeers.contains(o) else { continue }
-                            self.askedPhotoPeers.insert(o)
-                            out.append(o)
-                        }
-                        return out
-                    }
-                    var learnedPhoto = false
-                    for o in peers.prefix(20) {
-                        if let p = await ProfileStore.shared.fetch(o), !(p.photoUrl ?? "").isEmpty { learnedPhoto = true }
-                    }
-                    guard fetchedAny || learnedPhoto else { return }
-                    await MainActor.run { self.republishForKeys() }
-                }
+                let data = d.data(with: .estimate)
+                entry = (data, Conversation(id: id, data: data))
+                out.fresh.append(entry.conv)
+                isFresh = true
             }
+            next[id] = entry
+            out.docs.append((id: id, data: entry.data))
+            out.convs.append(entry.conv)
+            // Key warming only where it can matter: a chat that just changed, or one whose key is
+            // still missing (a fetch that failed offline is retried on the next snapshot, as
+            // before). It used to start one task per chat per snapshot, all of them cache hits.
+            let key = entry.conv.isGroup ? entry.conv.lastSender : entry.conv.otherUid(uid)
+            if !key.isEmpty, (isFresh || !Crypto.shared.hasCachedKey(key)), warmed.insert(key).inserted {
+                out.keysToWarm.append(key)
+            }
+        }
+        decodeCache = next
+        return out
+    }
+
+    /// Main: everything the listener did after parsing, in the same order, fed a decoded window.
+    private func applySnapshot(_ snap: QuerySnapshot, _ window: DecodedWindow, uid: String) {
+        let docs = window.docs
+        let convs = window.convs
+        let freshConvs = window.fresh
+        let fromServer = !snap.metadata.isFromCache
+        // 2026-09-24 feature-audit: the next page for a whole-list screen, after this snapshot has
+        // been published (hopped, so it never re-attaches from inside it). Moved here from the
+        // listener with the decode, so the re-attach cannot throw away the decode in flight.
+        if !snap.metadata.isFromCache { DispatchQueue.main.async { [weak self] in self?.continueWholeList() } }
+        // ⛔ A SAVED COPY NEVER WALKS THE LIST BACKWARDS (owner 2026-11-01: the whole list went
+        // back to old pins, old photos, old names until the app was reopened). Only an empty
+        // cached snapshot was ever refused, so an older one replaced what was on screen and
+        // then overwrote the launch file too. The cache can be old: after a client swap the
+        // default client missed that session, and a fresh client reopens an earlier run's
+        // files under the same app name. Refused here, before anything is written; the
+        // server's answer still comes through, and `startBehindServerCheck` catches a list
+        // that stays behind.
+        if snap.metadata.isFromCache, !snap.metadata.hasPendingWrites {   // my own delete or leave passes
+            // Chats only: a channel is not in this query, so a newer one refused a good copy.
+            let shownNewest = newestMillis(lastRaw + conversations.filter { !$0.isChannel })
+            if newestMillis(convs) + 1_000 < shownNewest {
+                DiagLog.add("CHATLIST# refused an older saved copy, \((shownNewest - newestMillis(convs)) / 1000)s behind")
+                DiagUpload.flag(after: 5)
+                return
+            }
+        }
+        // Keep the launch cache current. The RAW documents go in, so the cache is rebuilt by
+        // the same initializer the live path uses and cannot drift from it as fields are
+        // added. Written off the main thread; see ConversationsDiskCache.
+        // L10: merged with any pinned chat below this window, via `writeDiskCache` — storing
+        // just this window left a below-window pin out of the cache that answers the first
+        // frame, so it only showed up a moment later once the live listener caught up.
+        lastRawDocs = docs
+        writeDiskCache(uid: uid)
+        // "Automatically Archive new chats from unknown users" (Settings > Chats). Here
+        // rather than inside publish() because publish coalesces and can skip a snapshot
+        // outright — this must see every one, since the request it has to catch may arrive
+        // in a snapshot that changes nothing else. No-op while the setting is off.
+        // 2026-09-24 decision D8: the raw list is kept so a block list change can re-filter it.
+        lastRaw = convs
+        // owner 2026-10-18: each group's shared wallpaper, before anyone opens the group.
+        WallpaperStore.shared.syncGroupWallpapers(convs)
+        // 2026-09-24 fix-all #6: a pinned chat older than the window stays on the list.
+        syncPinnedExtras(convs, uid: uid, fromServer: !snap.metadata.isFromCache)
+        // 2026-09-26 block rebuild: NOTHING IS PUBLISHED BEFORE MY BLOCK LIST HAS ANSWERED.
+        // This listener can beat the block list's own; a chat from somebody I blocked, and
+        // its preview, would be on screen for that moment. `blockListChanged` publishes the
+        // held list the instant the block list lands (from its saved copy, usually at once).
+        guard BlockList.shared.isLoaded else { return }
+        let visible = hideAccountBlocked(withPinnedExtras(convs), me: uid)
+        UnknownChatArchiver.sweep(visible)
+        publish(visible)
+        if fromServer { endCatchUpAfterPublish() }
+        // 2026-09-25 delivered ticks: this phone has these chats' newest messages now. Only
+        // from the server (a cached snapshot proves nothing arrived), and never for a chat
+        // I blocked, so a blocked sender keeps seeing one tick.
+        if !snap.metadata.isFromCache { Task { @MainActor in DeliveryReceipts.mark(visible, me: uid) } }
+        // 2026-09-27: a request I answered the old way is written as accepted (see the note
+        // on `healAnsweredRequests`). Server data only, like the line above.
+        if !snap.metadata.isFromCache {
+            Task { @MainActor in MessageRequests.healAnsweredRequests(visible, me: uid) }
+        }
+
+        // Warm recipient public keys so last-message previews can decrypt — CONCURRENTLY
+        // (was N sequential round-trips → slow cold start). Only the keys `decode` picked: chats
+        // that changed and keys still missing (perf audit 2026-11-11), so a typing tick starts
+        // nothing at all.
+        guard !window.keysToWarm.isEmpty || !freshConvs.isEmpty else { return }
+        Task {
+            // ⛔ AND TELL THE LIST WHEN A KEY ARRIVES — owner, 2026-09-11: "when I send a
+            // message for someone for request message, in the chat list I can't see the
+            // message I sent ... 2 people I sent request message but the message I sent I
+            // can't see."
+            //
+            // ⚠️ THE PREVIEW WAS NOT EMPTY, IT WAS THE "KEYS NOT READY" MARKER. `decrypt`
+            // returns "…" when the other person's public key is not in the cache yet, and
+            // that ellipsis is exactly what he photographed. The order here is what put it
+            // there: `publish` hands the rows to SwiftUI, the rows decrypt immediately, and
+            // only THEN does this task fetch the keys they needed.
+            //
+            // ⚠️ WHY IT ONLY BIT REQUEST CHATS, which is the part worth keeping. The sentinel
+            // is deliberately not memoised (see `decryptCached`), so any later render heals
+            // it — and a busy chat gets one within seconds, because every typing flag and
+            // read receipt is another snapshot. A request nobody has answered produces NO
+            // further snapshots at all: the one message is the last thing that will ever
+            // happen in it until they reply. So the first render was the only render, and
+            // the ellipsis was permanent in precisely the chats that never change.
+            //
+            // Republishing once, and only when something was actually fetched, is the whole
+            // fix: the rows re-decrypt with the keys now in hand. `wasCached` costs a
+            // dictionary read, so a snapshot whose keys are all warm — which is nearly all
+            // of them — does nothing at all.
+            var fetchedAny = false
+            let keysToWarm = window.keysToWarm
+            await withTaskGroup(of: Bool.self) { group in
+                for key in keysToWarm {
+                    group.addTask {
+                        let alreadyWarm = Crypto.shared.hasCachedKey(key)
+                        _ = await Crypto.shared.preloadKey(key)
+                        return !alreadyWarm && Crypto.shared.hasCachedKey(key)
+                    }
+                }
+                for await didFetch in group where didFetch { fetchedAny = true }
+            }
+            // ⛔ AND THE PHOTOS THE MIRROR NEVER GOT — owner, 2026-09-27: some people have a
+            // photo, hide nothing, and still draw as a silhouette. A chat's `photos` entry
+            // is written only by that person's own phone; if it never did, this list had
+            // nothing to draw. Their profile record is read once per session per person
+            // (only where the mirror is empty and nothing is known yet), and
+            // `Conversation.photoUrl(for:)` then prefers it.
+            let peers: [String] = await MainActor.run {
+                var out: [String] = []
+                for c in freshConvs where !c.isGroup {
+                    let o = c.otherUid(uid)
+                    guard !o.isEmpty, (c.photos[o] ?? "").isEmpty,
+                          ProfilePhotoIndex.facts(o) == nil,
+                          !self.askedPhotoPeers.contains(o) else { continue }
+                    self.askedPhotoPeers.insert(o)
+                    out.append(o)
+                }
+                return out
+            }
+            var learnedPhoto = false
+            for o in peers.prefix(20) {
+                if let p = await ProfileStore.shared.fetch(o), !(p.photoUrl ?? "").isEmpty { learnedPhoto = true }
+            }
+            guard fetchedAny || learnedPhoto else { return }
+            await MainActor.run { self.republishForKeys() }
+        }
     }
 
     // Coalesced publish (change-observer idea): the conversations query fires on EVERY
@@ -865,6 +976,10 @@ final class ConversationsRepository {
     func stop() {
         listener?.remove()
         listener = nil
+        // A decode still running belongs to the listener that just went (perf audit 2026-11-11).
+        decodeGeneration &+= 1
+        queuedSnap = nil
+        dirtyIds = []
         listBurnTimer?.invalidate(); listBurnTimer = nil
     }
 

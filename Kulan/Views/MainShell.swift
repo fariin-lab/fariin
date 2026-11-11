@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 import FirebaseAuth
 
 /// Ticking a row on or off, everywhere a list in this file has multi-select.
@@ -1200,7 +1201,10 @@ struct CallsView: View {
             // Live group calls (2026-10-20): follow my groups while the tab is up.
             .onAppear { liveCalls.sync(groups: ConversationsRepository.shared.conversations) }
             .onDisappear { liveCalls.stopAll() }   // only while the Calls tab is up (audit)
-            .onChange(of: ConversationsRepository.shared.conversations.filter(\.isGroup).map(\.id)) { _, _ in
+            // S8 (perf audit 2026-11-11): keyed on the repository's `groupIds`, which changes only
+            // when my groups do. Keying on `conversations` itself redrew this tab, rows and all,
+            // on every typing flag and read receipt in any chat, on whatever tab was showing.
+            .onChange(of: ConversationsRepository.shared.groupIds) { _, _ in
                 liveCalls.sync(groups: ConversationsRepository.shared.conversations)
             }
             .searchable(text: $searchText, prompt: "Search calls")
@@ -1538,7 +1542,9 @@ struct ChatsView: View {
     /// @Observable, like its neighbours here: reading `state` in the toolbar is what subscribes this
     /// screen to it, so the title follows the connection with no notification plumbing.
     private var connection = ConnectionStatus.shared
-    @ObservedObject private var groupCall = GroupCallService.shared   // ObservableObject, so it needs the wrapper
+    /// S2 (perf audit 2026-11-11): the filtered and sorted list, made once per change of what it is
+    /// made from, not three or four times per body pass. See `visible`.
+    @State private var visibleMemo = ChatListVisibleMemo()
     @Environment(\.colorScheme) private var scheme
     @State private var showNew = false
     /// The Undo bar following a finger down (swiped away = done now).
@@ -1825,7 +1831,16 @@ struct ChatsView: View {
     /// already in the list; offering to "start" a chat you are in the middle of would be two rows
     /// for one person saying different things.
     private var newPeople: [UserProfile] {
-        let known = Set(visible.compactMap { $0.isGroup ? nil : $0.otherUid(me) })
+        let v = visible
+        // S2: the set of people already in the list, once per new `visible`.
+        let known: Set<String>
+        if let k = visibleMemo.knownPeople, visibleMemo.knownStamp == visibleMemo.stamp {
+            known = k
+        } else {
+            known = Set(v.compactMap { $0.isGroup ? nil : $0.otherUid(me) })
+            visibleMemo.knownPeople = known
+            visibleMemo.knownStamp = visibleMemo.stamp
+        }
         return userHits.filter { !known.contains($0.id) && $0.id != me }
     }
 
@@ -1961,7 +1976,12 @@ struct ChatsView: View {
     /// inside each section is the order it already had.
     private var chatSections: (pinned: [Conversation], rest: [Conversation]) {
         let v = visible
-        return (v.filter { $0.isPinned(me) }, v.filter { !$0.isPinned(me) })
+        // S2: split once per new `visible`, not once per read.
+        if let split = visibleMemo.sections, visibleMemo.sectionsStamp == visibleMemo.stamp { return split }
+        let split = (v.filter { $0.isPinned(me) }, v.filter { !$0.isPinned(me) })
+        visibleMemo.sections = split
+        visibleMemo.sectionsStamp = visibleMemo.stamp
+        return split
     }
 
     /// A section heading, theirs, read from source 2026-09-02 (`CLVTableDataSource.swift:309-322`):
@@ -2017,22 +2037,49 @@ struct ChatsView: View {
             .selectionDisabled(true)
     }
 
+    /// ⛔ ONCE PER CHANGE, NOT ONCE PER READ (perf audit 2026-11-11, S2). This used to run its seven
+    /// filters and the sort over every chat on each of the three or four reads a single body pass
+    /// makes (sections, empty state, get-started cue, the found-people filter). It is now made once
+    /// for each new set of inputs and handed back as is until one of them changes.
+    ///
+    /// ⚠️ EVERY OBSERVABLE INPUT IS READ BEFORE THE MEMO IS CONSULTED, and that is load-bearing:
+    /// SwiftUI re-subscribes on every body pass to exactly what that pass read, so a cache hit that
+    /// skipped the reads would quietly unsubscribe this screen from the chat list. The reads are
+    /// cheap (an array reference, a version number, a few small sets); the filtering is what is saved.
     private var visible: [Conversation] {
+        let all = repo.conversations
+        let official = officialChannel.listEntry
+        let leaving = LeaveGroupUndo.shared.hiddenIds
+        let drafts = Drafts.shared.map
+        let live = liveCallCid
+        let key = ChatListVisibleMemo.Key(list: repo.listVersion, official: official, leaving: leaving,
+                                          drafts: drafts, voiceDrafts: Set(AudioRecorder.draftIndex.keys),
+                                          live: live, search: chatSearch, filter: chatFilter, me: me,
+                                          groupsOn: Flags.groupsEnabled, policy: MsgPolicy.shared.revision)
+        if visibleMemo.key == key { return visibleMemo.value }
+        let made = makeVisible(all: all, official: official, leaving: leaving, live: live)
+        visibleMemo.key = key
+        visibleMemo.value = made
+        visibleMemo.stamp &+= 1
+        return made
+    }
+
+    private func makeVisible(all: [Conversation], official: Conversation?, leaving: Set<String>,
+                             live: String?) -> [Conversation] {
         // The official channel joins the list as an ordinary Conversation value, so every filter,
         // sort, badge and swipe below treats it like any other chat and none of them had to learn
         // what an announcement is. It is nil until it has something to say — another mainstream messenger
         // keeps its release channel hidden the same way (an internal visibility flag) so a brand-new account never
         // opens onto an empty official chat.
-        let live = liveCallCid   // read ONCE — the comparator below runs n·log n times
+        // `live` is read ONCE by the caller — the comparator below runs n·log n times.
         // ⛔ STEPS, NOT ONE CHAIN. This was a single chained expression and it sat exactly at the
         // type-checker's budget: adding one `.filter` for the search box tipped it into "unable to
         // type-check this expression in reasonable time", twice. Each step is annotated, so the
         // checker resolves them one at a time instead of solving the whole pipeline at once.
-        var out = repo.conversations + [officialChannel.listEntry].compactMap { $0 }
+        var out = all + [official].compactMap { $0 }
         out = out.filter { !$0.isCleared(me) && !$0.isArchived(me) }
         out = out.filter { Flags.groupsEnabled || !$0.isGroup }
         // A group I just left stays out of the list while its Undo bar is up (owner 2026-10-25).
-        let leaving = LeaveGroupUndo.shared.hiddenIds
         if !leaving.isEmpty { out = out.filter { !leaving.contains($0.id) } }
         // ⛔ A PENDING REQUEST IS NOT A CHAT — owner, 2026-09-11, on the new spec (§11): "A pending
         // request must NOT appear as a normal conversation in the Main Chat List." This reverses
@@ -2056,7 +2103,7 @@ struct ChatsView: View {
                 || AudioRecorder.draftIndex[c.id] != nil   // a parked voice draft keeps its chat listed
                 || c.id == live   // ...and so does a call: ringing someone you have never texted
         }                         //   otherwise the "Active call" row has no chat to sit on
-        PinnedDropTrace.check(all: repo.conversations, kept: out, me: me, leaving: leaving)
+        PinnedDropTrace.check(all: all, kept: out, me: me, leaving: leaving)
         out = out.filter { searchMatches($0) }
         out = out.filter { (c: Conversation) -> Bool in   // Filter: 0 All, 1 Unread, 2 Groups, 3 Channels
             switch chatFilter {
@@ -2085,7 +2132,10 @@ struct ChatsView: View {
 
     /// The one chat that is on a call right now — 1:1 or group — or nil. Read by the sort above and
     /// by the row, so both agree without either of them knowing how a call is put together.
-    private var liveCallCid: String? { call.liveConversationId ?? groupCall.activeCid }
+    /// S3 (perf audit 2026-11-11): the group call's cid through `LiveGroupCallCid`, which changes
+    /// only when that one value does. Observing the whole GroupCallService redrew this list (and
+    /// re-sorted it) on every member join, mute, camera toggle and toast of a minimised call.
+    private var liveCallCid: String? { call.liveConversationId ?? LiveGroupCallCid.shared.cid }
 
 
     // ⛔ THE HEADER IS THE REFERENCE APP'S, ITEM FOR ITEM — owner, 2026-09-24. Left: your own
@@ -5662,5 +5712,52 @@ private struct ChatPeekPreview: View {
             reported.insert(id)
             DiagLog.add("PINDROP# cid=\(id.suffix(6)) why=not-in-repository")
         }
+    }
+}
+
+/// S2 (perf audit 2026-11-11): the chat list's filtered and sorted rows, kept between body passes.
+/// A plain class in `@State`: not observed, so writing it during a body pass redraws nothing.
+final class ChatListVisibleMemo {
+    /// Everything `ChatsView.makeVisible` reads. A new value of any of them makes the list again.
+    struct Key: Equatable {
+        var list: Int
+        var official: Conversation?
+        var leaving: Set<String>
+        var drafts: [String: String]
+        var voiceDrafts: Set<String>
+        var live: String?
+        var search: String
+        var filter: Int
+        var me: String
+        var groupsOn: Bool
+        var policy: Int
+    }
+    var key: Key?
+    var value: [Conversation] = []
+    /// Moves with each new `value`, so the derived pieces below know when they are stale.
+    var stamp = 0
+    var sections: (pinned: [Conversation], rest: [Conversation])?
+    var sectionsStamp = -1
+    var knownPeople: Set<String>?
+    var knownStamp = -1
+}
+
+/// S3 (perf audit 2026-11-11): the active group call's conversation id, and nothing else.
+/// GroupCallService publishes about forty values; the chat list needs this one, so it watches a
+/// copy that changes only when the id does.
+@MainActor @Observable final class LiveGroupCallCid {
+    static let shared = LiveGroupCallCid()
+    private(set) var cid: String?
+    @ObservationIgnored private var sub: AnyCancellable?
+    private init() {
+        cid = GroupCallService.shared.activeCid
+        sub = GroupCallService.shared.$activeCid
+            .removeDuplicates()
+            .sink { [weak self] v in
+                MainActor.assumeIsolated {
+                    guard let self, self.cid != v else { return }
+                    self.cid = v
+                }
+            }
     }
 }

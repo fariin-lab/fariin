@@ -410,6 +410,11 @@ enum ChatWallpapers {
     @ObservationIgnored private var groupEditing: Set<String> = []
     @ObservationIgnored private var groupLastShown: [String: ChatWallpaper] = [:]
     @ObservationIgnored private var groupFetching: Set<String> = []
+    /// S10 (perf audit 2026-11-11): link -> local id, so the SHA256 is made once per link, and the
+    /// ids already seen in the photo folder (or being checked) this run, so a chat-list snapshot does
+    /// not hash and stat every group photo on the main thread each time a flag changes.
+    @ObservationIgnored private var groupPhotoIds: [String: String] = [:]
+    @ObservationIgnored private var groupPhotoKnown: Set<String> = []
     // Photos this run imported as NEW files and nothing has kept yet. Only these may be taken back
     // when a picker closes without Apply (a dedup hit returns an older photo that may be in use).
     @ObservationIgnored private var freshImports: Set<String> = []
@@ -579,12 +584,24 @@ enum ChatWallpapers {
         // the chat's own first draw, so every open after a sign-in (which wipes the photo folder)
         // or on a new phone waited for the download. Every group photo missing from the folder is
         // asked for here, when the chat list lands; a file check, no decode.
+        // S10: each id is looked for on disk once per run, off the main thread; only a missing one
+        // is fetched. A fetch that fails forgets the id, so the next snapshot tries again as before.
+        var toCheck: [(link: String, id: String)] = []
         for c in convs where c.isGroup {
             guard let raw = c.groupWallpaper, raw.hasPrefix("u:") else { continue }
             let link = String(raw.dropFirst(2))
-            let id = groupUrlIds[link] ?? Self.sharedPhotoId(link)
-            if imageCache.object(forKey: id as NSString) == nil, !FileManager.default.fileExists(atPath: Self.libraryURL(id).path) {
-                fetchGroupPhoto(link, id: id)
+            let id = groupPhotoId(link)
+            guard imageCache.object(forKey: id as NSString) == nil, groupPhotoKnown.insert(id).inserted else { continue }
+            toCheck.append((link, id))
+        }
+        if !toCheck.isEmpty {
+            DispatchQueue.global(qos: .utility).async {
+                let missing = toCheck.filter { !FileManager.default.fileExists(atPath: Self.libraryURL($0.id).path) }
+                guard !missing.isEmpty else { return }
+                DispatchQueue.main.async {
+                    let store = WallpaperStore.shared
+                    for m in missing { store.fetchGroupPhoto(m.link, id: m.id) }
+                }
             }
         }
         guard changed else { return }
@@ -603,7 +620,7 @@ enum ChatWallpapers {
             return ChatWallpaper(stored: raw)
         }
         let link = String(raw.dropFirst(2))
-        let id = groupUrlIds[link] ?? Self.sharedPhotoId(link)
+        let id = groupPhotoId(link)
         if libraryImage(id) != nil {
             groupLastShown[cid] = .photo(id)
             return .photo(id)
@@ -695,7 +712,10 @@ enum ChatWallpapers {
                 let store = WallpaperStore.shared
                 store.groupFetching.remove(link)
                 if saved { store.version &+= 1 }   // observed: the open chat redraws with it
-                else { DiagLog.add("GROUPWP# fetch failed id=\(id)") }
+                else {
+                    store.groupPhotoKnown.remove(id)   // S10: the next snapshot asks again
+                    DiagLog.add("GROUPWP# fetch failed id=\(id)")
+                }
             }
         }
     }
@@ -703,6 +723,15 @@ enum ChatWallpapers {
     /// ~2000 px JPEG at 0.8 for the shared upload (storage.rules caps it at 8 MB).
     static func sharedUploadJPEG(_ image: UIImage) -> Data? {
         downscale(image, maxDimension: 2000).jpegData(compressionQuality: 0.8)
+    }
+
+    /// The local id for a group photo link, hashed once per link per run (S10).
+    private func groupPhotoId(_ link: String) -> String {
+        if let known = groupUrlIds[link] { return known }
+        if let made = groupPhotoIds[link] { return made }
+        let made = Self.sharedPhotoId(link)
+        groupPhotoIds[link] = made
+        return made
     }
 
     /// A stable local id for a group photo link, the same on every launch.
@@ -844,6 +873,7 @@ enum ChatWallpapers {
         libraryIds = []
         groupShared = [:]; groupUrlIds = [:]; groupPreview = [:]; groupPending = [:]
         groupEditing = []; groupLastShown = [:]; freshImports = []
+        groupPhotoKnown = []   // S10: the photo folder is gone, so every id is looked for again
         version &+= 1
     }
 
