@@ -4381,6 +4381,9 @@ struct ThreadView: View {
         // The day, the sender names and the Role chips.
         add("\(dayTick)"); add("\(conversation?.names.hashValue ?? 0)")
         add("\(conversation?.roles.hashValue ?? 0)")
+        // The members' photos (reaction faces in a group) and the 1:1 title, which `personName`
+        // hands to quote and story-reply captions (2026-11-11).
+        add("\(conversation?.photos.hashValue ?? 0)"); add(title)
         // The Restricted chat request I can answer.
         add(liveRestrictRequestId ?? "-")
         // A channel draws every post as received, and its reactions are read while building a row.
