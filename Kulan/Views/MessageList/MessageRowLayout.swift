@@ -380,6 +380,11 @@ struct RowPlan {
     /// How far the row's finished picture is slid right right now (`MessageRowView`). Layout never
     /// reads it: a row is the same size in and out of selection.
     var selectionShift: CGFloat = 0
+    /// Where the row's own content starts (below a date pill and the unread divider), and which side
+    /// it sits on (nil: a notice, never selectable). Kept so a plan can be re-dressed for a selection
+    /// flip without laying the row out again (`MessageRowLayout.reselected`, perf audit L1).
+    var contentTop: CGFloat = 0
+    var leading: Bool? = nil
 }
 
 enum MessageRowLayout {
@@ -498,7 +503,25 @@ enum MessageRowLayout {
 
         return RowPlan(width: width, height: y + contentHeight,
                        dateHeader: header, divider: divider, body: body, checkbox: checkbox,
-                       selectionShift: m.selecting && leading == true ? selectionShift : 0)
+                       selectionShift: m.selecting && leading == true ? selectionShift : 0,
+                       contentTop: y, leading: leading)
+    }
+
+    /// The same plan dressed for `m`'s selection state: the checkbox and the slide are the only parts
+    /// of a plan that selection touches (it never touches the layout, see above), so a selection flip
+    /// re-dresses the plan the row already has instead of laying the row out again. The arithmetic
+    /// is the tail of `plan` exactly, so the two cannot disagree (perf audit L1).
+    static func reselected(_ p: RowPlan, for m: MessageRowModel) -> RowPlan {
+        var out = p
+        let contentHeight = p.height - p.contentTop
+        out.checkbox = nil
+        if m.selecting || m.wasSelecting, let leading = p.leading {
+            let cy = p.contentTop + (contentHeight - checkboxSize) / 2
+            out.checkbox = CGRect(x: checkboxLeading - (leading ? selectionShift : 0), y: cy,
+                                  width: checkboxSize, height: checkboxSize)
+        }
+        out.selectionShift = m.selecting && p.leading == true ? selectionShift : 0
+        return out
     }
 
     // ── The bubble ──

@@ -62,14 +62,40 @@ final class RowPlanStore {
 
     func plan(for model: MessageRowModel, width: CGFloat) -> RowPlan {
         let textSize = BubbleMetrics.contentSizeCategory
-        if let hit = entries[model.id], hit.width == width, hit.textSize == textSize, hit.model == model {
-            useClock += 1
-            entries[model.id]?.lastUse = useClock
-            return hit.plan
+        if let hit = entries[model.id], hit.width == width, hit.textSize == textSize {
+            if hit.model == model {
+                useClock += 1
+                entries[model.id]?.lastUse = useClock
+                return hit.plan
+            }
+            // ⛔ SELECTION IS NOT PART OF WHAT A PLAN IS VALID FOR (perf audit L1). Entering or leaving
+            // Select changed every loaded row's model, so every row missed here and was laid out
+            // again (TextKit, on main) at the moment the slide should start: hundreds of rows, three
+            // times. Selection never moves the layout, only the checkbox and the slide, so a model
+            // equal but for its selection decorations takes the stored plan re-dressed.
+            if Self.layoutKey(hit.model) == Self.layoutKey(model) {
+                let plan = MessageRowLayout.reselected(hit.plan, for: model)
+                useClock += 1
+                entries[model.id] = Entry(model: model, width: width, textSize: textSize, plan: plan,
+                                          lastUse: useClock)
+                return plan
+            }
         }
         let plan = MessageRowLayout.plan(model, width: width)
         seed(model, width: width, plan: plan)
         return plan
+    }
+
+    /// The model with the decorations that cannot change a layout set to one value: the selection
+    /// flags, the tick and the highlight. What is left decides the plan.
+    private static func layoutKey(_ m: MessageRowModel) -> MessageRowModel {
+        var k = m
+        k.selecting = false
+        k.wasSelecting = false
+        k.selected = false
+        k.selectionTint = 0
+        k.highlighted = false
+        return k
     }
 
     /// A plan computed somewhere else, for this exact model and width: the first open lays its
