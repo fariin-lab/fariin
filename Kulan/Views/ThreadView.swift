@@ -5689,7 +5689,7 @@ struct ThreadView: View {
             // from the list drew its old rows, then the message from a quarter of an hour ago popped
             // in). The server's window usually lands inside that, and the open then draws once, with
             // it. See `openCacheBehind`.
-            holdFirstLand: (savedRowNeedsPaging && !savedRowPagingDone) || (openCacheBehind && !behindHoldSpent),
+            holdFirstLand: (savedRowNeedsPaging && !savedRowPagingDone) || (behindHoldsLand && !behindHoldSpent),
             // The landing hold lasts until the server's window is in (capped in the list), because a
             // cold open's window lands after a fixed second would have run out (owner, 2026-10-07).
             liveWindowSettled: repo.serverWindowSettled,
@@ -9389,6 +9389,20 @@ struct ThreadView: View {
         // A background warm-up already found nothing newer for this `updatedAt` (a settings write):
         // no hold, the saved position stands.
         return !ChatHistoryPreloader.shared.knownCurrent(conv, me: me)
+    }
+
+    /// ⛔ THE BEHIND-CACHE HOLD IS ONLY FOR UNREAD (owner 2026-11-11: "when I open user chats,
+    /// messages are appearing late"). His chat with kream opened on the bare wallpaper for about
+    /// 1.7 s every time (LAND# held=true id=nil, REVEALWAIT# hold=true): its `updatedAt` stood
+    /// 16 minutes past its newest message, moved by a write that carries no row, so
+    /// `openCacheBehind` was true and the land waited the whole 1.5 s with 60 cached rows hidden.
+    /// The reference app never hides rows it already has. With nothing unread, whatever is newer
+    /// is mine from another device or no row at all: land on the cache now (at the newest, as
+    /// `openCacheBehind` still decides) and let the window glide in. With unread waiting, the
+    /// hold stays, so a new message is not drawn a beat late (owner 2026-11-07).
+    private var behindHoldsLand: Bool {
+        guard openCacheBehind else { return false }
+        return max(unreadOnOpen, cachedConv?.unread(me) ?? 0) > 0
     }
 
     /// The second half of `openAwaitsServer`: with unread waiting, the cached rows are older than

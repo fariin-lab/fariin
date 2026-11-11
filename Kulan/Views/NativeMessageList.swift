@@ -3638,7 +3638,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // ⛔ MY TEXT LEAVES THE FIELD AND FLIES INTO PLACE (owner 2026-10-25, the reference app's
             // 13.1 send transition). Only for a text bubble of mine that this phone just sent from the
             // field; everything else glides exactly as before.
-            if ownSendLanded, let source = self.textSendSource(for: ids.last) {
+            // ⛔ NOT IN A RESTRICTED CHAT (owner 2026-11-11: "restricted chat, when sending, my
+            // bubbles are flashing"). With No Screenshots on, the list lives in the secure canvas
+            // (`setCaptureProtected`) and the flight is a snapshot of the new bubble put OUTSIDE it,
+            // over the list. A snapshot of protected content comes out blank, so the row was hidden
+            // (`contentView.alpha = 0`) under an empty flying shape and popped back on landing; and
+            // where it did render, it was an unprotected copy a screenshot could catch. The source is
+            // still taken, so a later land cannot fly this send.
+            let flySource = ownSendLanded ? self.textSendSource(for: ids.last) : nil
+            if ownSendLanded {
+                DiagLog.add("FLASH# send land cid=\(self.cid.suffix(5)) restricted=\(self.captureOn) fly=\(flySource != nil && !self.captureOn) rows=\(ids.count)")
+            }
+            if let source = flySource, !self.captureOn {
                 self.flyOwnSendIntoPlace(id: ids.last ?? "", source: source)
             } else {
             // ⚠️ TEMPORARY: one of three places can animate a reader to the newest message, and
