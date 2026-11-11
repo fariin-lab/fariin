@@ -1505,7 +1505,7 @@ final class MessageRowView: UIView {
         // ⛔ THE PICTURE IS CLIPPED BY THE BUBBLE'S OWN PATH, not by a corner radius. These bubbles
         // have four different radii (a cluster squares off the side that continues), so a rounded
         // rect mask would round the two corners the shape deliberately keeps sharp.
-        v.layer.mask = bubbleMask(b)
+        v.layer.mask = bubbleMask(b, reusing: v.layer.mask)
         v.configure(media, plan: plan, cid: cid)
 
         registerFlightRects(b, model: m)
@@ -1573,7 +1573,7 @@ final class MessageRowView: UIView {
         }()
         v.isHidden = false
         v.frame = CGRect(origin: .zero, size: b.bubble.size)
-        v.layer.mask = bubbleMask(b)
+        v.layer.mask = bubbleMask(b, reusing: v.layer.mask)
         v.configure(a, plan: plan, cid: cid)
     }
 
@@ -1604,7 +1604,7 @@ final class MessageRowView: UIView {
         }()
         v.isHidden = false
         v.frame = CGRect(origin: .zero, size: b.bubble.size)
-        v.layer.mask = bubbleMask(b)      // the map is flush to the corners, so it wears them
+        v.layer.mask = bubbleMask(b, reusing: v.layer.mask)      // the map is flush to the corners, so it wears them
         v.configure(l, plan: plan, tint: b.textColor, dark: dark)
     }
 
@@ -1788,12 +1788,23 @@ final class MessageRowView: UIView {
     /// The bubble's own outline as a mask. These bubbles carry four different radii (a cluster
     /// squares off the side that continues), so a corner RADIUS would round the two corners the
     /// shape deliberately keeps sharp.
-    private func bubbleMask(_ b: BubblePlan) -> CAShapeLayer {
-        let mask = CAShapeLayer()
+    /// `reusing`: the view's current mask, given a new path in place rather than a new layer per
+    /// configure (a scroll configures a row each time it comes on screen). No implicit animation.
+    private func bubbleMask(_ b: BubblePlan, reusing old: CALayer? = nil) -> CAShapeLayer {
+        let mask = (old as? CAShapeLayer) ?? CAShapeLayer()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         // ⚠️ THE SAME SHAPE AS THE FILL ABOVE, and it has to stay that way: this masks the rim, so
         // a mismatch draws a stroke that does not follow the bubble it belongs to.
-        mask.path = (b.isCapsule ? BubbleShape.capsulePath(b.bubble.size)
-                                 : BubbleShape.path(b.bubble.size, b.radii, continuous: true)).cgPath
+        let path = (b.isCapsule ? BubbleShape.capsulePath(b.bubble.size)
+                                : BubbleShape.path(b.bubble.size, b.radii, continuous: true)).cgPath
+        // Same shape: leave it, and any reaction growth easing it, alone. A new shape (a reused row)
+        // drops a growth left from the last message, as the fresh layer used to.
+        if mask.path != path {
+            mask.removeAllAnimations()
+            mask.path = path
+        }
         return mask
     }
 

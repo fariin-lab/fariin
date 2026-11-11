@@ -1630,7 +1630,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let plan = self.planStore.plan(for: m, width: self.collectionView.bounds.width)
             cell.delegate = self
             cell.reactionGrowsFromBottom = self.reactionGrowsFromBottom
+            let cfgStart = Self.scrollDiag ? CACurrentMediaTime() : 0
             cell.configure(m, plan: plan, cid: self.cid)
+            if Self.scrollDiag { self.noteScrollConfigure(m, since: cfgStart) }
             // Safety net: UIKit rows never report a rendered height (they cannot drift on their own —
             // the plan IS the height), but an OFFSCREEN content change can leave a stale cached
             // number. Verify at dequeue and adopt if the cache drifted.
@@ -4258,6 +4260,48 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var geoLogs = 0
     private var jumpLogs = 0
     private var lastJumpLogY: CGFloat = 0
+
+    // ⚠️ DIAGNOSTIC, test builds only (owner 2026-11-11, build 1149: "channel scroll up and down is
+    // lag"). A scroll tick that comes more than 25 ms after the last one while the list is moving is
+    // a dropped frame; the line says what the main thread configured in between, so the next device
+    // run tells a slow row from a GPU-bound frame (gap with no configure work). Capped per open.
+    private static let scrollDiag = DiagUpload.allowed
+    private var scrollLogs = 0
+    private var lastScrollTickAt: CFTimeInterval = 0
+    private var scrollCfgCount = 0
+    private var scrollCfgSecs: CFTimeInterval = 0
+    private var scrollCfgSlowest: (kind: String, secs: CFTimeInterval) = ("-", 0)
+
+    private func noteScrollConfigure(_ m: MessageRowModel, since start: CFTimeInterval) {
+        let dt = CACurrentMediaTime() - start
+        scrollCfgCount += 1
+        scrollCfgSecs += dt
+        guard dt > scrollCfgSlowest.secs else { return }
+        var kind = "other"
+        if case .bubble(let row) = m.content {
+            switch row.body {
+            case .album: kind = "album"
+            case .media: kind = "media"
+            case .text: kind = "text"
+            default: kind = "bubble"
+            }
+        }
+        scrollCfgSlowest = (kind, dt)
+    }
+
+    private func noteScrollTick(_ scrollView: UIScrollView) {
+        let now = CACurrentMediaTime()
+        defer {
+            lastScrollTickAt = now
+            scrollCfgCount = 0; scrollCfgSecs = 0; scrollCfgSlowest = ("-", 0)
+        }
+        let moving = scrollView.isDragging || scrollView.isDecelerating
+        let gap = now - lastScrollTickAt
+        guard moving, scrollLogs < 40, gap > 0.025, gap < 0.5 else { return }
+        scrollLogs += 1
+        func ms(_ t: CFTimeInterval) -> Int { Int((t * 1000).rounded()) }
+        DiagLog.add("SCROLL# cid=\(cid.suffix(5)) gap=\(ms(gap))ms cfg=\(scrollCfgCount)/\(ms(scrollCfgSecs))ms slowest=\(scrollCfgSlowest.kind):\(ms(scrollCfgSlowest.secs))ms vis=\(collectionView.visibleCells.count) decel=\(scrollView.isDecelerating) v=\(Int(scrollView.panGestureRecognizer.velocity(in: scrollView).y))")
+    }
     private func logGeometry(_ why: String) {
         guard isViewLoaded, geoLogs < 24 else { return }
         geoLogs += 1
@@ -7074,6 +7118,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             DiagLog.add("JUMP# cid=\(cid.suffix(5)) y \(Int(lastJumpLogY))->\(Int(jumpY)) max=\(Int(maxContentOffsetY)) t=\(Int(Date().timeIntervalSince(landedAt) * 1000))ms send=\(sendAnimating) prog=\(programmaticScrollAnimating) newestJump=\(pendingNewestJump.map { "\($0)" } ?? "nil") repin=\(awaitingInitialRepin) pinUnread=\(pinUnreadLanding) held=\(Date() < landingHoldUntil) dist=\(lastKnownDistanceFromBottom.map { "\(Int($0))" } ?? "nil") rows=\(currentIds.count) target=\((landedTarget?.id ?? nil).map { String($0.suffix(5)) } ?? "nil")")
         }
         lastJumpLogY = jumpY
+        if Self.scrollDiag { noteScrollTick(scrollView) }
         RxTrace.log("scroll y=\(scrollView.contentOffset.y) insetTop=\(scrollView.contentInset.top) h=\(scrollView.contentSize.height)")
         // A finger on the list ends the one-shot re-pin: whatever the insets do from here, this
         // reader has chosen where they are. See `repinIfTopInsetArrived`.

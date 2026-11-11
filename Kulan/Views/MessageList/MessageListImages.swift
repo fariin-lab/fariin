@@ -42,6 +42,16 @@ final class RowImageView: UIImageView {
     /// The url currently being fetched. Without it a reconfigure mid-download looks identical to a
     /// fresh one. See `configure`.
     private var inFlight: String?
+    /// The pixel box `loadedUrl`'s picture was decoded for (zero for a full-size one).
+    private var loadedPixels: CGSize = .zero
+
+    /// What this view draws, in pixels: its bounds at the screen's scale. Zero before the caller
+    /// has given it a frame, which takes the full-size path as before.
+    private var drawPixels: CGSize {
+        var scale = window?.screen.scale ?? traitCollection.displayScale
+        if scale < 2 { scale = 3 }   // not on a screen yet: never decode too small for a phone
+        return CGSize(width: bounds.width * scale, height: bounds.height * scale)
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -63,7 +73,7 @@ final class RowImageView: UIImageView {
         // No url: forget the last one entirely (2026-10-04 audit). Leaving `loadedUrl` / `inFlight`
         // set meant a later configure with that same url returned early on the placeholder for good.
         guard let url, !url.isEmpty else {
-            token += 1; currentUrl = nil; loadedUrl = nil; inFlight = nil; unwatch(); setLoading(false)
+            token += 1; currentUrl = nil; loadedUrl = nil; loadedPixels = .zero; inFlight = nil; unwatch(); setLoading(false)
             image = placeholder; return
         }
         // ⛔ "ALREADY DRAWN" MUST MEAN THE REAL BYTES, NOT ANY IMAGE. The placeholder — an inline
@@ -81,7 +91,11 @@ final class RowImageView: UIImageView {
         //
         // `inFlight` is the missing state: a reconfigure while the bytes are coming does nothing, a
         // reconfigure after a failure retries, and a reconfigure after success returns above.
-        guard url != loadedUrl, inFlight != url else { return }
+        // The pixel box this view draws (see `DiskImageCache.fillImage`). A picture already shown
+        // for this url is kept unless the box grew past what it was decoded for.
+        let px = drawPixels
+        if url == loadedUrl, px.width <= loadedPixels.width + 1, px.height <= loadedPixels.height + 1 { return }
+        guard inFlight != url else { return }
         // ⛔ THE TOKEN MOVES ONLY WHEN A NEW LOAD REALLY STARTS — owner, 2026-09-30: "a received
         // photo stays blurred after it has loaded; tapping it opens it sharp". It was bumped at the
         // top, before the guard above, so a reconfigure DURING a download (a tick, a reaction)
@@ -98,25 +112,43 @@ final class RowImageView: UIImageView {
         // It returned without setting `loadedUrl`, so A, then B (hit), then A again on one view
         // matched the stale `loadedUrl` and kept B's picture; a spinner or watcher left by an
         // earlier in-flight url also stayed on.
-        if let mem = DiskImageCache.shared.memoryImage(url) {
+        // The display-size copy first. The full one (a download that just landed, or the viewer's)
+        // is still a finished picture, so it shows at once rather than a placeholder, and the small
+        // copy replaces it a moment later.
+        if let small = DiskImageCache.shared.memoryFillImage(url, pixels: px) {
             unwatch(); setLoading(false)
-            image = mem; loadedUrl = url; return
+            image = small; loadedUrl = url; loadedPixels = px; return
         }
+        if let full = DiskImageCache.shared.memoryImage(url) {
+            unwatch(); setLoading(false)
+            image = full; loadedUrl = url; loadedPixels = px
+            // Swap in the display-size copy off the main thread; same picture, a fraction of the bytes.
+            guard px.width >= 1, px.height >= 1 else { return }
+            Task { @MainActor [weak self] in
+                let small = await DiskImageCache.shared.fillImage(for: url, pixels: px)
+                guard let self, self.token == mine, self.loadedUrl == url, let small else { return }
+                self.image = small
+            }
+            return
+        }
+        // A sharper copy for a box that grew: keep the current picture up while it is made.
+        let keepShown = url == loadedUrl && image != nil
         // ⛔ NO SYNCHRONOUS DISK READ HERE — owner, 2026-10-03: "scroll up and down chats feels lag".
         // `smallImageSync` stood on this line. It reads the file, decodes it and scales it down to
         // 2048px, all on the main thread, and this view draws full chat photos and every album
         // tile, not thumbnails. A nine-photo album scrolling in did that nine times inside one
         // frame. `smallImageSync`'s own comment forbids it for full-size photos. A disk hit now
         // takes the Task below, which decodes off the main thread, behind the placeholder.
-        image = placeholder
+        if !keepShown { image = placeholder }
         inFlight = url
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if let cached = await DiskImageCache.shared.image(for: url) {
+            if let cached = await DiskImageCache.shared.fillImage(for: url, pixels: px) {
                 guard self.token == mine else { return }
                 self.image = cached
                 self.loadedUrl = url
+                self.loadedPixels = px
                 if self.inFlight == url { self.inFlight = nil }
                 return
             }
@@ -154,7 +186,8 @@ final class RowImageView: UIImageView {
                 self.unwatch()
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    let img = await DiskImageCache.shared.image(for: url)
+                    let px = self.drawPixels
+                    let img = await DiskImageCache.shared.fillImage(for: url, pixels: px)
                     guard self.token == mine else { return }
                     // Cleared even when the read comes back empty, so the next configure asks
                     // again instead of waiting on a load that is over.
@@ -162,6 +195,7 @@ final class RowImageView: UIImageView {
                     guard let img else { return }
                     self.image = img
                     self.loadedUrl = url
+                    self.loadedPixels = px
                 }
             case .waitingTap, .failed:
                 // Not in flight any more: a later configure (or the bubble's tap) may ask again.
@@ -242,6 +276,7 @@ final class RowImageView: UIImageView {
         unwatch()
         currentUrl = nil
         loadedUrl = nil
+        loadedPixels = .zero
         inFlight = nil
         image = nil
         setLoading(false)
