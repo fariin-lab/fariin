@@ -174,6 +174,7 @@ enum SessionWipe {
         // read it anyway, but a signed-out account's own cache has no reason to outlive the session,
         // and clearing it is also what puts the first-run skeleton back for whoever signs in next.
         GlowStoriesCache.clear()
+        ExploreCache.wipe()   // 2026-11-11: Explore's kept channel and group lists, every account's
         ThreadMessageCache.shared.removeAll()   // decrypted messages
         ChannelHistoryStore.shared.removeAll()   // 2026-11-09: channel stores (decrypted posts), memory + disk
         GalleryCache.removeAll()   // 2026-10-17: All Media's decrypted items, memory + disk

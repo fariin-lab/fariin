@@ -244,7 +244,20 @@ final class SkeletonShimmerView: UIView {
 /// Owner 2026-10-31: the list showed one spinner on an empty page while it loaded.
 struct DiscoverRowSkeleton: View {
     var nameWidth: CGFloat = 130
+    /// Shown only after 0.3 s (owner 2026-11-11, the replies sheet's way): a quick answer paints the
+    /// rows with no grey flash. Explore has nothing kept on the phone when this shows at all.
+    var delayed = false
+    @State private var shown = false
     var body: some View {
+        rowShape
+            .opacity(!delayed || shown ? 1 : 0)
+            .task {
+                guard delayed, !shown else { return }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                withAnimation(.easeOut(duration: 0.2)) { shown = true }
+            }
+    }
+    private var rowShape: some View {
         HStack(spacing: 12) {
             SkeletonBlock(width: 52, height: 52, radius: 15)
             VStack(alignment: .leading, spacing: 8) {

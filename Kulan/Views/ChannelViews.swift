@@ -177,8 +177,13 @@ struct DiscoverChannelsView: View {
     /// Opens the channel once the sheets above it are down (the presenter closes them).
     var onOpen: (_ cid: String, _ handle: String?) -> Void = { cid, handle in GroupDirectory.open(cid: cid, name: handle) }
     @Environment(\.dismiss) private var dismiss
-    @State private var rows: [ChannelService.Discovered] = []
+    // ⛔ THE LAST ANSWER ON THE FIRST FRAME (owner 2026-11-11: "this skeleton is taking time"): the
+    // kept list is drawn at once and the server's answer replaces it in place. See `ExploreCache`.
+    @State private var rows: [ChannelService.Discovered] = ExploreCache.cachedChannels() ?? []
     @State private var loading = true
+    /// When the page was made, for the one EXPLORE# line per tab (ms to the first rows, cache or network).
+    @State private var openedAt = Date()
+    @State private var loggedTabs: Set<String> = []
     @State private var failed = false
     @State private var busy: Set<String> = []
     /// Followed from this list, before the follow list says so; each id goes once the listener has it.
@@ -196,7 +201,7 @@ struct DiscoverChannelsView: View {
     /// Explore's two tabs (owner 2026-11-10): Channels, then public Groups.
     enum Tab: String, CaseIterable { case channels = "Channels", groups = "Groups" }
     @State private var tab: Tab = .channels
-    @State private var groupRows: [GroupDirectory.Discovered] = []
+    @State private var groupRows: [GroupDirectory.Discovered] = ExploreCache.cachedGroups() ?? []
     @State private var groupsLoading = true
     @State private var groupsFailed = false
     @State private var groupsLoaded = false
@@ -240,7 +245,7 @@ struct DiscoverChannelsView: View {
                 } else if loading && rows.isEmpty {
                     // Rows shaped like the channels on their way, not a spinner (owner 2026-10-31).
                     ForEach(0..<8, id: \.self) { i in
-                        DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4])
+                        DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4], delayed: true)
                             .listRowSeparator(.hidden)
                     }
                 } else if failed && rows.isEmpty {
@@ -272,10 +277,17 @@ struct DiscoverChannelsView: View {
                     }
                 }
             }
-            .refreshable { if tab == .groups { await loadGroups() } else { await load() } }
-            .task { await load() }
+            .refreshable { if tab == .groups { await loadGroups(force: true) } else { await load(force: true) } }
+            // Channels first, then the Groups tab behind it, so switching tabs finds it ready.
+            .task {
+                await load()
+                if !groupsLoaded { await loadGroups(priority: .utility) }
+            }
             // The Groups tab loads the first time it is shown (owner 2026-11-10).
-            .task(id: tab) { if tab == .groups && !groupsLoaded { await loadGroups() } }
+            .task(id: tab) {
+                if tab == .groups && !groupRows.isEmpty { noteFirstRows("groups", from: "cache", count: groupRows.count) }
+                if tab == .groups && !groupsLoaded { await loadGroups() }
+            }
             // The listener has it now: the stand-in goes, so a later unfollow shows Follow again.
             .onChange(of: confirmedIds) { _, ids in if !ids.isEmpty { justFollowed.subtract(ids) } }
             // Left from inside (its page's Leave): back to the list at once, not a chat I no longer follow.
@@ -295,7 +307,7 @@ struct DiscoverChannelsView: View {
     @ViewBuilder private var groupsSection: some View {
         if groupsLoading && groupRows.isEmpty {
             ForEach(0..<8, id: \.self) { i in
-                DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4]).listRowSeparator(.hidden)
+                DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4], delayed: true).listRowSeparator(.hidden)
             }
         } else if groupsFailed && groupRows.isEmpty {
             Text("Couldn't load groups. Check your connection and try again.")
@@ -384,11 +396,31 @@ struct DiscoverChannelsView: View {
         .disabled(mine)
     }
 
-    private func loadGroups() async {
+    /// The kept groups stay on screen while the server answers; a fresh-enough answer is not asked again.
+    private func loadGroups(force: Bool = false, priority: TaskPriority? = nil) async {
+        if !force, let fresh = ExploreCache.freshGroups() {
+            if fresh != groupRows { groupRows = fresh }
+            groupsFailed = false; groupsLoaded = true; groupsLoading = false
+            return
+        }
         groupsLoading = true
-        do { groupRows = try await GroupDirectory.discover(); groupsFailed = false; groupsLoaded = true }
+        do {
+            let fresh = try await ExploreCache.fetchGroups(priority: priority)
+            if fresh != groupRows { groupRows = fresh }   // unchanged: nothing redrawn, nothing moves
+            groupsFailed = false; groupsLoaded = true
+            if tab == .groups { noteFirstRows("groups", from: "network", count: fresh.count) }
+        }
         catch { groupsFailed = true }
         groupsLoading = false
+    }
+
+    /// One EXPLORE# diag line per tab per open: ms from the page's making to its first rows, and where
+    /// they came from.
+    private func noteFirstRows(_ which: String, from: String, count: Int) {
+        guard !loggedTabs.contains(which) else { return }
+        loggedTabs.insert(which)
+        let ms = Int(Date().timeIntervalSince(openedAt) * 1000)
+        DiagLog.add("EXPLORE# \(which) first rows \(ms) ms from \(from) (\(count) rows)")
     }
 
     /// Find Channels pushed from the chat list's compass (owner 2026-11-10: slides in from the right).
@@ -491,10 +523,23 @@ struct DiscoverChannelsView: View {
         .disabled(mine)
     }
 
-    private func load() async {
-        loading = true
+    /// The kept channels stay on screen while the server answers; a fresh-enough answer is not asked
+    /// again. Follow state is read live (`isMine`), so a kept row never shows a stale Follow.
+    private func load(force: Bool = false) async {
         if DemoMode.storeShots { rows = DemoMode.storeChannels(); failed = false; loading = false; return }
-        do { rows = try await ChannelService.discover(); failed = false }
+        if !rows.isEmpty { noteFirstRows("channels", from: "cache", count: rows.count) }
+        if !force, let fresh = ExploreCache.freshChannels() {
+            if fresh != rows { rows = fresh }
+            failed = false; loading = false
+            return
+        }
+        loading = true
+        do {
+            let fresh = try await ExploreCache.fetchChannels()
+            if fresh != rows { rows = fresh }   // unchanged: nothing redrawn, nothing moves
+            failed = false
+            noteFirstRows("channels", from: "network", count: fresh.count)
+        }
         catch { failed = true }
         loading = false
     }

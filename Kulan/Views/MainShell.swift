@@ -3332,6 +3332,14 @@ struct ChatsView: View {
             }
             // 2026-09-27: the wallpaper blur's one-time setup, paid here and not in the first chat.
             .task { WallpaperBlurWarmup.run() }
+            // 2026-11-11: Explore's lists fetched a few seconds after the chat list shows, at low
+            // priority (at most every 10 minutes), so opening Explore finds them ready. Kept out of
+            // cold start's first seconds on purpose.
+            .task {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard !Task.isCancelled else { return }
+                ExploreCache.warm()
+            }
             // 2026-09-25 photo audit: repair my own photo entry in any chat whose copy is missing or
             // older than my profile (a skipped fan-out, a group I was added to). Newer-only.
             .task(id: "\(repo.conversations.count)|\(ProfileStore.shared.me?.photoUrl ?? "")|\(ProfileStore.shared.me?.posterUrl ?? "")") {
