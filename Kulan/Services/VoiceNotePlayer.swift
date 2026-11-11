@@ -68,8 +68,27 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     /// The note being played right now. Empty means nothing is loaded.
     @Published private(set) var messageId: String = ""
     @Published private(set) var cid: String = ""
-    @Published private(set) var playing = false
-    @Published private(set) var loadingId: String = ""
+    @Published private(set) var playing = false { didSet { noteSessionUse() } }
+    @Published private(set) var loadingId: String = "" { didSet { noteSessionUse() } }
+
+    /// Whether a note is playing or loading, readable from ANY thread. The recorder gives the audio
+    /// session back on its own serial queue (`AudioRecorder.reset`), and it must not wait on main
+    /// from there; this is what it reads at the moment it deactivates (2026-11-11).
+    nonisolated static var holdsSession: Bool {
+        sessionLock.lock(); defer { sessionLock.unlock() }
+        return sessionHeld
+    }
+    nonisolated private static let sessionLock = NSLock()
+    nonisolated(unsafe) private static var sessionHeld = false   // guarded by `sessionLock`
+
+    /// Opens from `open` until their player is handed over: the session is being activated off
+    /// main. A count, because two taps can overlap.
+    private var opening = 0 { didSet { noteSessionUse() } }
+
+    private func noteSessionUse() {
+        let held = playing || opening > 0 || !loadingId.isEmpty
+        Self.sessionLock.lock(); Self.sessionHeld = held; Self.sessionLock.unlock()
+    }
     /// The note whose last load failed (no signal, a key or file we could not fetch). The disc
     /// shows the warning mark for it, the same one a photo that failed to load shows, and a tap
     /// tries again. It used to spin and then quietly go back to idle, so a failure looked exactly
@@ -469,6 +488,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // A call owns the session, or the file will not open (truncated, still uploading, wrong bytes).
         // Either way nothing is going to play, so leave nothing behind claiming otherwise.
         guard !VoiceAudio.callActive else { clearNowPlaying(); return }
+        opening += 1
         // ⚠️ ACTIVATION OFF THE MAIN THREAD — his "the wave jumps on the first play, then normal".
         // setActive(true) renegotiates the audio hardware for ~100-300ms, and doing it on main
         // froze whatever frame was mid-flight: the eye reads the dropped frames as a jump it
@@ -487,7 +507,9 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             let built = PreparedPlayer(try? AVAudioPlayer(contentsOf: url))
             built.player?.prepareToPlay()
             await MainActor.run { [weak self] in
-                guard let self, self.messageId == forNote else { return }   // another note took over meanwhile
+                guard let self else { return }
+                defer { self.opening = max(0, self.opening - 1) }
+                guard self.messageId == forNote else { return }   // another note took over meanwhile
                 guard let p = built.player else { self.clearNowPlaying(); return }
                 self.player = p
                 // Activated off-main just above, so `start()` must not pay for it again on main.

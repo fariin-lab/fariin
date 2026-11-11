@@ -793,9 +793,16 @@ final class AudioRecorder {
         // is no deactivate/reactivate churn; the next hold activates it once, on touch-down.
         // On the session queue (perf audit T7), behind any switch-on already queued; a hold that
         // has begun since (`wantsRecording`) keeps the session.
+        //
+        // ⛔ CHECKED AGAIN ON THE QUEUE (2026-11-11). The main-thread check below can pass, then a
+        // note starts playing before the queued block runs, and the session was pulled from under
+        // it. The queue may not wait on main (main can be waiting on this queue), so it reads
+        // `VoiceNotePlayer.holdsSession`, a lock-guarded copy of playing/loading, right before the
+        // deactivate. A hold begun meanwhile needs no re-check: its activation is queued after this.
         Task { @MainActor in
             guard !VoiceNotePlayer.shared.playing, !self.isRecording, !self.wantsRecording else { return }
             Self.sessionQueue.async {
+                guard !VoiceNotePlayer.holdsSession else { return }
                 try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
             }
         }
