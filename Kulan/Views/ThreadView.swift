@@ -2567,7 +2567,7 @@ struct ThreadView: View {
         // could not be sent here anyway, so it is cancelled and the partial discarded.
         .onChange(of: sendingClosed) { _, closed in
             if closed { Self.dismissKeyboard() }   // the notice replacing the box has no field
-            guard closed, recordLocked || holdStarted || reviewingNote || recorder.isRecording else { return }
+            guard closed, recordLocked || holdStarted || reviewingNote || recorder.isRecording || recorder.isStarting else { return }
             cancelRecording()
         }
         // Both retry triggers, as ONE modifier taking two method references — see `RetrySweep`.
@@ -2724,7 +2724,7 @@ struct ThreadView: View {
             // comment guarded against — and popping back adopts the draft straight away.)
             if recordLocked {
                 parkRecordingDraft()
-            } else if recorder.isRecording {
+            } else if recorder.isRecording || recorder.isStarting {   // a take whose session is still coming up too (perf T7)
                 recorder.cancel()
                 recordDrag = .zero; holdStarted = false
                 recordCancelArmed = false   // audit: a stale armed flag silently discarded the NEXT
