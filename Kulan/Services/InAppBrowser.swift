@@ -41,6 +41,8 @@ final class InAppBrowserViewController: UIViewController {
     /// app's read page has it (owner 2026-11-10: "top header is empty").
     private let titleGlass = InAppBrowserViewController.glass()
     private let titleLabel = UILabel()
+    /// Off since 2026-11-11 (owner: two bars on a file page); the title lives in the bottom capsule.
+    private static let showsFileTitleCapsule = false
     private let closeButton = UIButton(type: .system)
 
     private let backGlass = InAppBrowserViewController.glass()
@@ -209,7 +211,12 @@ final class InAppBrowserViewController: UIViewController {
             if let action { b.addAction(UIAction { _ in action() }, for: .touchUpInside) }
             glass.contentView.addSubview(b)
         }
-        setUp(backButton, "chevron.backward", "Back", in: backGlass) { [weak self] in self?.webView.goBack() }
+        setUp(backButton, "chevron.backward", "Back", in: backGlass) { [weak self] in
+            guard let self else { return }
+            // A file's page has no close circle (see `layoutBars`): Back with nothing behind closes it.
+            if self.document != nil, !self.webView.canGoBack { self.dismiss(animated: true); return }
+            self.webView.goBack()
+        }
         // Holding Back lists the pages behind, as the reference does.
         backButton.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
             done(self?.historyItems(back: true) ?? [])
@@ -304,7 +311,10 @@ final class InAppBrowserViewController: UIViewController {
 
         // The page fills the sheet and is inset so its top and bottom clear the floating glass.
         webView.frame = view.bounds
-        let inset = UIEdgeInsets(top: topPad + control + 8, left: 0, bottom: bottomPad + toolbarHeight + 8, right: 0)
+        // ⛔ A FILE'S PAGE HAS NO TOP BAR (owner 2026-11-11: "showing 2 bars, please remove the top
+        // one"). Its text starts just under the safe area; Back in the bottom row closes it.
+        let topInset = document != nil ? safe.top + 12 : topPad + control + 8
+        let inset = UIEdgeInsets(top: topInset, left: 0, bottom: bottomPad + toolbarHeight + 8, right: 0)
         let sv = webView.scrollView
         if sv.contentInset != inset {
             let atTop = sv.contentOffset.y <= -sv.contentInset.top + 1
@@ -320,10 +330,12 @@ final class InAppBrowserViewController: UIViewController {
         closeGlass.transform = CGAffineTransform(scaleX: 1 - 0.35 * f, y: 1 - 0.35 * f)
         closeGlass.alpha = 1 - f
         closeGlass.isUserInteractionEnabled = f < 0.5
+        closeGlass.isHidden = document != nil
 
-        // A file's title capsule: from beside the close circle to the right margin, same height,
-        // shrinking and fading with it. Only while the file's own page is shown.
-        let onFile = document != nil && webView.url?.scheme?.lowercased() != "http" && webView.url?.scheme?.lowercased() != "https"
+        // The file title capsule is no longer shown (owner 2026-11-11: the bottom capsule already
+        // carries the title). Kept built, hidden, per the hide-don't-delete rule.
+        let onFile = Self.showsFileTitleCapsule && document != nil
+            && webView.url?.scheme?.lowercased() != "http" && webView.url?.scheme?.lowercased() != "https"
         titleGlass.isHidden = !onFile
         if onFile {
             let x0 = side + safe.left + control + 8
@@ -457,7 +469,7 @@ final class InAppBrowserViewController: UIViewController {
     }
 
     private func refreshButtons() {
-        backButton.isEnabled = webView.canGoBack
+        backButton.isEnabled = webView.canGoBack || document != nil
         let loading = webView.isLoading
         reloadButton.setImage(barSymbol(loading ? "xmark" : "arrow.clockwise"), for: .normal)
         reloadButton.accessibilityLabel = loading ? "Stop Loading" : "Reload"
