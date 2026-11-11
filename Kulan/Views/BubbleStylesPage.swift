@@ -121,7 +121,11 @@ struct BubbleStylesPage: View {
                 Text(cid == nil ? "Applies to messages you send from now on." : "Only this chat")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
+                    // The line is as tall as the Reset pill (28) plus 3 each side, so with the
+                    // stack's 8 the pill has ~11 pt clear above and below (owner 2026-11-11: it
+                    // touched the preview and the chips). Fixed, so nothing moves when it goes.
+                    .frame(maxWidth: .infinity, minHeight: 28)
+                    .padding(.vertical, 3)
                     // An overlay, so the line keeps its height and nothing under it moves when it goes.
                     .overlay(alignment: .trailing) { if canReset { resetButton } }
                 chips

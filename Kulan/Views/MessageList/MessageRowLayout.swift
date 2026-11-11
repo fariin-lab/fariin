@@ -2040,7 +2040,13 @@ enum MessageRowLayout {
                               senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
                               forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
         let y = startY
-        let albumWidth = min(maxBubble, 300)
+        // ⛔ A CHANNEL ALBUM IS AS WIDE AS A CHANNEL POST (owner 2026-11-11: "post becomes small, add
+        // size but don't add too much"). A chat album stays at 300; a channel's takes the post width
+        // (`maxBubble` is already the column less the share button's lane).
+        let albumWidth = b.wide ? maxBubble : min(maxBubble, 300)
+        // Never taller than a chat album could get (300 x 1.5), so the wider channel album does not
+        // make a column of tall shots any taller.
+        let albumHeightCap = min(albumWidth * 1.5, 450)
         // A SQUARE box: the width is the bubble's and the height only bounds the hand-tuned 2/3/4
         // arrangements, exactly as the reference bounds them.
         let sizes = a.tiles.map { CGSize(width: max(0.01, $0.aspect), height: 1) }
@@ -2052,7 +2058,7 @@ enum MessageRowLayout {
         // kept, height capped at 1.5 widths so a column of tall shots cannot run off the screen.
         let solved: MediaGroupLayout.Result = {
             guard raw.size.width > 1, raw.size.height > 1, raw.size.width < albumWidth - 1 else { return raw }
-            let s = min(albumWidth / raw.size.width, albumWidth * 1.5 / raw.size.height)
+            let s = min(albumWidth / raw.size.width, albumHeightCap / raw.size.height)
             guard s > 1.01 else { return raw }
             func up(_ r: CGRect) -> CGRect {
                 CGRect(x: (r.minX * s).rounded(), y: (r.minY * s).rounded(),
