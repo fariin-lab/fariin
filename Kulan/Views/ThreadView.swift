@@ -3162,7 +3162,7 @@ struct ThreadView: View {
     /// re-read `repo.items` and re-asked the calendar, called two or three times per row by BOTH the
     /// signature build and the row-model build: in a 500-800 row window that was thousands of
     /// calendar calls on the main thread every time a message or a read tick landed.
-    struct RowGeometry {
+    struct RowGeometry: Equatable {
         var showDate: Bool
         var first: Bool
         var last: Bool
@@ -4202,6 +4202,44 @@ struct ThreadView: View {
         // Bumped only when the models are actually rebuilt. The list uses it to skip its direct repaint
         // pass entirely when nothing can have changed — see `uikitModelsVersion` at the call site.
         var version = 0
+        /// The chat-wide half of the key the rows below were built under (perf audit L4/E3).
+        var ctxKey = ""
+        /// Each row's inputs next to the model they produced, for the rows whose model depends on
+        /// nothing else (see `uikitRowProbe`).
+        var rows: [String: UikitRowMemo] = [:]
+    }
+
+    /// ⛔ ONLY THE ROWS WHOSE MESSAGE CHANGED ARE BUILT AGAIN (perf audit L4/E3, the reference app's
+    /// way: its list updates only the items whose entry changed). A new message, a read tick, the
+    /// disappearing-message sweep every 15 s, a search keystroke or a highlight used to rebuild the
+    /// model of every loaded row. Now, while the chat-wide half of the key is unchanged, a row whose
+    /// own inputs (`UikitRowProbe`) are equal to last time keeps its model. Anything chat-wide that
+    /// changes (theme, colour, wallpaper, names, roles, stories, the other caches' ticks, selection
+    /// mode) still rebuilds every row, exactly as before.
+    final class UikitRowProbe: Equatable {
+        let msg: Message
+        let geo: RowGeometry
+        let read: Bool, delivered: Bool, selected: Bool, highlighted: Bool
+        let term: String
+        let orig: Message?
+        let quoteFlags: Int
+        let name: String?, avatar: String?, verified: Bool
+        init(msg: Message, geo: RowGeometry, read: Bool, delivered: Bool, selected: Bool, highlighted: Bool,
+             term: String, orig: Message?, quoteFlags: Int, name: String?, avatar: String?, verified: Bool) {
+            self.msg = msg; self.geo = geo; self.read = read; self.delivered = delivered
+            self.selected = selected; self.highlighted = highlighted; self.term = term; self.orig = orig
+            self.quoteFlags = quoteFlags; self.name = name; self.avatar = avatar; self.verified = verified
+        }
+        static func == (a: UikitRowProbe, b: UikitRowProbe) -> Bool {
+            a.read == b.read && a.delivered == b.delivered && a.selected == b.selected
+                && a.highlighted == b.highlighted && a.quoteFlags == b.quoteFlags && a.verified == b.verified
+                && a.geo == b.geo && a.term == b.term && a.name == b.name && a.avatar == b.avatar
+                && a.msg == b.msg && a.orig == b.orig
+        }
+    }
+    struct UikitRowMemo {
+        var probe: UikitRowProbe
+        var model: MessageRowModel
     }
     @State private var uikitModelCache = UikitModelCache()
 
@@ -4250,14 +4288,20 @@ struct ThreadView: View {
         var k = ""
         k.reserveCapacity(512)
         func add(_ v: String) { k += v; k += "|" }
+        // ⛔ TWO HALVES (perf audit L4/E3). Before the "§": what each row can answer for itself
+        // (`UikitRowProbe`), so a change there rebuilds only the rows it touches. After it: what is
+        // the same for every row, so a change there rebuilds them all. Nothing was taken out.
         add("\(repo.itemsVersion)"); add("\(repo.otherLastReadMillis)"); add("\(repo.otherDeliveredMillis)")
         add(highlightId ?? "-")
+        // Hashed, not joined: Set's hashValue is order-independent and does not allocate.
+        add("\(selectedIds.count):\(selectedIds.hashValue)")
+        add(searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "")
+        add("\(repo.expiryTick)")
+        k += "§"
         add("\(repo.iBlocked)"); add("\(readReceiptsOn)"); add("\(dark)")
         add("\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)")
-        // Hashed, not joined: Set's hashValue is order-independent and does not allocate.
-        add("\(selecting)"); add("\(wasSelecting)"); add("\(selectedIds.count):\(selectedIds.hashValue)")
+        add("\(selecting)"); add("\(wasSelecting)")
         add(chatColorSpec?.stored ?? "-"); add(firstUnreadId ?? "-")
-        add(searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "")
         add("\(isGroup)"); add("\(groupMembers.count)")
         // storiesVersion / didLoad (a story reply's card), hiddenTick (album tiles hidden for me),
         // viewedOnceTick (the view-once pill), expiryTick (the countdown).
@@ -4266,7 +4310,6 @@ struct ThreadView: View {
         add("\(conversation?.repliesOff == true)|\(conversation?.quotesOff == true)")   // the channel's replies switch moves every post's bar (2026-11-06)
         add("\(conversation?.bubbleStylesOff == true)")   // the group's Bubble styles switch (2026-11-07)
         add("\(groupCardTick)")   // a group invite card's live answer (`LiveGroupCard`)
-        add("\(repo.expiryTick)")
         // An edit waiting for the server draws the sending clock; the chat's timer draws its icon.
         add("\(editPendingIds.count):\(editPendingIds.hashValue)")
         add("\(conversation?.disappearSeconds ?? 0)")
@@ -4340,10 +4383,27 @@ struct ThreadView: View {
             otherName: isGroup ? "" : personName(otherUid))
 
         var out: [String: MessageRowModel] = [:]
+        out.reserveCapacity(repo.items.count)
+        // perf audit L4/E3: rows whose own inputs did not move keep their model while the chat-wide
+        // half of the key is the same. The timer's start is chat-wide too (`provisionalExpiry`).
+        let ctxKey = String(key[(key.firstIndex(of: "§") ?? key.startIndex)...])
+            + "|\(timerSince?.timeIntervalSince1970 ?? 0)"
+        let cache = uikitModelCache
+        let reuse = cache.ctxKey == ctxKey
+        var memo: [String: UikitRowMemo] = [:]
+        memo.reserveCapacity(repo.items.count)
+        var changed = !reuse
+        let now = Date()
         // owner audit 2026-10-06 chat #45: one pass for grouping and dates, shared with the signatures.
         let geo = rowGeometry
         for (idx, m) in repo.items.enumerated() {
             let g = idx < geo.count ? geo[idx] : RowGeometry(showDate: true, first: true, last: true, gap: 0, dateLabel: nil)
+            let probe = uikitRowProbe(m, geo: g, ctx: ctx, now: now)
+            if reuse, let probe, let old = cache.rows[m.rowId], old.probe == probe {
+                out[m.rowId] = old.model
+                memo[m.rowId] = old
+                continue
+            }
             guard let model = MessageRowModelBuilder.model(
                 for: m, at: idx, ctx: ctx,
                 isFirstInCluster: g.first,
@@ -4351,11 +4411,58 @@ struct ThreadView: View {
                 dateHeader: g.showDate ? (g.dateLabel ?? dayLabel(m.createdAt)) : nil,
                 topSpacing: g.gap) else { continue }
             out[m.rowId] = model
+            if let probe, Self.uikitMemoable(model) { memo[m.rowId] = UikitRowMemo(probe: probe, model: model) }
+            if !changed, cache.models[m.rowId] != model { changed = true }
         }
-        uikitModelCache.key = key
-        uikitModelCache.models = out
-        uikitModelCache.version &+= 1
+        if out.count != cache.models.count { changed = true }
+        cache.key = key
+        cache.ctxKey = ctxKey
+        cache.rows = memo
+        cache.models = out
+        // Only when a model really differs: the list's repaint pass has nothing to do otherwise.
+        if changed { cache.version &+= 1 }
         return out
+    }
+
+    /// One row's own inputs to its model, or nil when the model also reads something the probe
+    /// cannot see (a call's age, a quoted channel post, a mention's live name, a timer stamp still to
+    /// come from the server, a time in the future), so such a row is built every time, as before.
+    @inline(never) private func uikitRowProbe(_ m: Message, geo g: RowGeometry, ctx: MessageRowContext,
+                                              now: Date) -> UikitRowProbe? {
+        guard !m.isCall, m.quoteId == nil, m.mentions.isEmpty, m.createdAt <= now,
+              !(ctx.timer != nil && m.expiresAt == nil) else { return nil }
+        let sentMs = m.createdAt.timeIntervalSince1970 * 1000
+        let term = ctx.searchTerm.count >= 2
+            ? MessageRowModelBuilder.rowTerm(ctx.searchTerm, in: m.safeText) + "\u{1}"
+                + MessageRowModelBuilder.rowTerm(ctx.searchTerm, in: m.text)
+            : ""
+        var orig: Message?
+        var quoteFlags = 0
+        if let r = m.replyTo, !r.isStatus {
+            orig = loadedMessage(id: r.id)
+            quoteFlags = (repo.quoteOriginalDeleted(r.id) ? 1 : 0) | (repo.isHiddenByBlock(id: r.id) ? 2 : 0)
+                | (repo.isFromBeforeThisDevice(id: r.id) ? 4 : 0)
+        }
+        return UikitRowProbe(
+            msg: m, geo: g,
+            read: !ctx.iBlocked && ctx.otherLastReadMillis >= sentMs,
+            delivered: !ctx.iBlocked && ctx.otherDeliveredMillis >= sentMs,
+            selected: ctx.selectedIds.contains(m.id), highlighted: m.id == ctx.highlightId,
+            term: term, orig: orig, quoteFlags: quoteFlags,
+            name: ctx.isGroup ? personName(m.authorId) : nil,
+            avatar: ctx.isGroup ? conversation?.photos[m.authorId] : nil,
+            verified: ctx.isGroup && VerificationIndex.of(m.authorId)?.showsBadge == true)
+    }
+
+    /// The row kinds whose model reads nothing beyond its probe: a text, an emoji or a single photo,
+    /// video or gif bubble. A voice note (played dot), an album (hidden and cancelled tiles), a poll,
+    /// a file, a pill, a notice or a call is built every time, as before.
+    private static func uikitMemoable(_ model: MessageRowModel) -> Bool {
+        guard case .bubble(let b) = model.content else { return false }
+        switch b.body {
+        case .text, .jumbomoji, .media: return true
+        default: return false
+        }
     }
 
     // Long-press menu for UIKit-routed rows — the SAME native menu (same items, same order, same
