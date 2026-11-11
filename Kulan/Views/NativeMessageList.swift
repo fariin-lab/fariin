@@ -1476,7 +1476,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIResponder.keyboardDidHideNotification, object: nil)
         // 2026-10-21, the composer left HIGH with a gap over the keys — see `keyboardDidShowNote`.
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidShowNote(_:)),
-                                               name: UIResponder.keyboardDidShowNotification, object: nil)        // Returning with the keys up — see `appWillEnterForeground`. Both, deliberately: the first is
+                                               name: UIResponder.keyboardDidShowNotification, object: nil)
+        // 2026-11-11, sticker panel -> keys left the bar behind the keys — see `keyboardDidChangeFrameNote`.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidChangeFrameNote(_:)),
+                                               name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
+        // Returning with the keys up — see `appWillEnterForeground`. Both, deliberately: the first is
         // before the snapshot is replaced, the second catches a restore that lands after it.
         NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground),
                                                name: UIApplication.willEnterForegroundNotification, object: nil)
@@ -4913,6 +4917,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         return top !== root && !view.isDescendant(of: top.view)
     }
 
+    /// This chat's own field holds the responder, so whatever keys or panel are up are ITS keys,
+    /// whatever is still presented or dismissing over the chat (owner 2026-11-11, build 1149: a
+    /// rise refused by `sheetCoversChat` while a menu was still leaving left the bar at rest under
+    /// the keys, `KEYSHEET# refused` then `KB# corrected guide=34` in his log).
+    private var composerHoldsKeys: Bool { (composerBar as? ChatComposerView)?.isEditingText == true }
+
+    /// What the newest will-show / will-change / will-hide said: true = keys arriving or up. A did-hide
+    /// that lands after a newer "up" belongs to keys that have already been replaced (the sticker
+    /// panel swapped for the keyboard, or a quick close and reopen) and must not drop the bar.
+    private var keysAnnouncedUp = false
+
     @objc private func keyboardWillChangeFrame(_ note: Notification) { rideKeyboard(note, hiding: false) }
     @objc private func keyboardWillHideNote(_ note: Notification) { rideKeyboard(note, hiding: true) }
 
@@ -4929,6 +4944,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let local = view.convert(end, from: nil)
         let overlap = max(0, view.bounds.maxY - local.minY)
         let up = !(hiding || overlap <= restSafeBottom + 0.5)
+        keysAnnouncedUp = up
         // ⛔ A KEYBOARD THAT LEAVES BECAUSE THE APP IS LEAVING IS NOT A KEYBOARD BEING DISMISSED —
         // his report, 2026-08-27: switch to another app with the keys up, come back, and the bar is
         // at the bottom of the screen behind them for a second or two before it corrects itself.
@@ -4954,7 +4970,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if !up, bar.holdsKeyboardForGifSearch { return }
         }
         // A sheet's own keys are not this chat's keys (see `sheetCoversChat`).
-        if up, sheetCoversChat {
+        if up, sheetCoversChat, !composerHoldsKeys {
             DiagLog.add("KEYSHEET# refused rise overlap=\(Int(overlap))")
             DiagUpload.flag(after: 6)
             return
@@ -5029,6 +5045,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // field no longer has focus, which is the case when the keys really went away.
         guard UIApplication.shared.applicationState == .active else { return }
         guard (composerBar as? ChatComposerView)?.holdsKeyboardForGifSearch != true else { return }   // GIF search, see above
+        // ⛔ A STALE HIDE (owner 2026-11-11, build 1149: sticker panel up, send one, back to the keys,
+        // and the bar sat at the bottom BEHIND the keyboard). Newer keys were already announced and
+        // our field still holds them: this did-hide is the old keys' (the panel's) and lands late.
+        if keysAnnouncedUp, composerHoldsKeys {
+            DiagLog.add("KB# stale hide ignored guide=\(Int(keyboardOverlap)) docked=\(Int(dockedBand))")
+            return
+        }
         settleKeyboardAtRest()
         // The keys are gone and the list is at rest: one settled pass, so a short chat is put back on
         // the composer even when no later layout pass comes (owner 2026-11-09, VE3 blank after close).
@@ -5043,6 +5066,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// while the view is shifted, and logged as KB# so the source of the wrong value can be read.
     @objc private func keyboardDidShowNote(_ note: Notification) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.logGeometry("kbUp") }
+        correctSettledKeyboard(note)
+    }
+
+    /// ⛔ THE SAME CORRECTION WHEN THE KEYS SETTLE WITHOUT A did-show — owner 2026-11-11, build 1149:
+    /// the sticker panel and the keyboard swap in place in the field (`reloadInputViews`), which can
+    /// post only frame changes, so the did-show net above never ran and a bar dropped by a late hide
+    /// stayed at the bottom behind the keys. Only for our own field's keys, and never under a finger
+    /// (an interactive dismiss moves the guide frame by frame on purpose).
+    @objc private func keyboardDidChangeFrameNote(_ note: Notification) {
+        guard keysAnnouncedUp, composerHoldsKeys, !collectionView.isTracking else { return }
+        correctSettledKeyboard(note)
+    }
+
+    private func correctSettledKeyboard(_ note: Notification) {
         guard isViewLoaded, let win = view.window, !isDisappearing,
               UIApplication.shared.applicationState == .active,
               let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
@@ -5052,7 +5089,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Replies, tap the field, and the channel behind jumped up once the keyboard settled). The
         // will-change feeder and the system feeder already refused them (`sheetCoversChat`); this
         // did-show correction did not, so it "corrected" the guide up to the sheet's keyboard.
-        if sheetCoversChat { return }
+        // Our own field holding the responder makes them ours again (`composerHoldsKeys`).
+        if sheetCoversChat, !composerHoldsKeys { return }
         // Only with this view at rest in the window (the same test `adoptSystemKeyboardGuide` uses).
         guard view.convert(view.bounds, to: nil).maxY <= win.bounds.maxY + 1 else { return }
         let local = view.convert(end, from: nil)
