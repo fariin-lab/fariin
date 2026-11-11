@@ -227,7 +227,12 @@ struct NewGroupView: View {
         List {
             Section {
                 HStack(spacing: 16) {
-                    Button { nameFocused = false; showPhotoOptions = true } label: { groupAvatarThumb }
+                    // No photo yet: straight to the library, no Take/Choose menu (owner 2026-11-11).
+                    // With one set, the menu stays so it can be changed or removed.
+                    Button {
+                        nameFocused = false
+                        if avatarData == nil { showPhotoPicker = true } else { showPhotoOptions = true }
+                    } label: { groupAvatarThumb }
                         .buttonStyle(.plain)
                         .accessibilityLabel(avatarData == nil ? "Set Group Photo" : "Change Group Photo")
                         // On the photo itself, so the choices point at what was tapped (owner 2026-10-29).

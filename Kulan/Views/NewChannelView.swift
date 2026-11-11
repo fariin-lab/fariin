@@ -145,7 +145,12 @@ struct NewChannelView: View {
         List {
             Section {
                 HStack(spacing: 16) {
-                    Button { nameFocused = false; showPhotoOptions = true } label: { avatarThumb }
+                    // No photo yet: straight to the library, no Take/Choose menu (owner 2026-11-11).
+                    // With one set, the menu stays so it can be changed or removed.
+                    Button {
+                        nameFocused = false
+                        if avatarData == nil { showPhotoPicker = true } else { showPhotoOptions = true }
+                    } label: { avatarThumb }
                         .buttonStyle(.plain)
                         .accessibilityLabel(avatarData == nil ? "Set Channel Photo" : "Change Channel Photo")
                         // On the photo itself, so the choices point at what was tapped (owner
