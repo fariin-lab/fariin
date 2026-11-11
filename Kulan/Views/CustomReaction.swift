@@ -173,14 +173,31 @@ enum UploadedEmoji {
     }
 }
 
-/// One custom emoji on screen. It plays only while it is in a window, and its frames are drawn off
-/// the main thread, so a screen full of them never holds up scrolling.
+/// One custom emoji on screen. It plays only while it is in a window AND on screen (a list row says
+/// so from willDisplay / didEndDisplaying), and its frames are drawn off the main thread, so a
+/// screen full of them never holds up scrolling.
 final class CustomReactionView: UIView {
     enum Motion: Equatable {
         case still
         /// `step` 2 is half rate, for a grid of many.
         case loop(step: Int)
+        /// `loops` passes each time it comes on screen (or changes emoji), then it rests. Pills under
+        /// messages: a chat full of them leaves the engine idle once they have played.
+        case limited(loops: Int)
     }
+
+    /// False while the list row holding it is off screen. Views outside lists leave it true.
+    var onScreen = true {
+        didSet {
+            guard onScreen != oldValue else { return }
+            if onScreen { armed = true }
+            load()
+        }
+    }
+    /// A `.limited` emoji plays its passes when this is set and it is visible.
+    private var armed = true
+    private var laidOutSize: CGSize = .zero
+    private var visible: Bool { window != nil && onScreen }
 
     private let player = TGSPlayer()
     private var key = ""
@@ -203,7 +220,7 @@ final class CustomReactionView: UIView {
     deinit { if let landedObserver { NotificationCenter.default.removeObserver(landedObserver) } }
 
     func show(_ key: String, motion: Motion) {
-        if key != self.key { player.clear() }
+        if key != self.key { player.clear(); armed = true }
         self.key = key
         self.motion = motion
         load()
@@ -218,6 +235,7 @@ final class CustomReactionView: UIView {
     func playOnce() {
         guard !key.isEmpty else { return }
         if case .loop = motion { return }   // already moving; a single pass would stop it at the end
+        guard visible else { return }
         player.playOnce()
     }
 
@@ -229,27 +247,47 @@ final class CustomReactionView: UIView {
         player.set(key: "cr:\(key)", source: .file(url), pixelBox: Int(bounds.width * scale), step: step)
         switch motion {
         case .loop:
-            if window != nil { player.play() } else { player.pause() }
-        case .still:
-            guard !player.hasFrame, player.contents == nil else { return }
-            let wanted = key
-            TGSSticker.stillAsync(url: url, side: bounds.width) { [weak self] img in
-                guard let self, self.key == wanted, !self.player.hasFrame else { return }
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                self.player.contents = img?.cgImage
-                CATransaction.commit()
+            if visible { player.play() } else { player.pause(); stillIfBlank(url) }
+        case .limited(let loops):
+            if visible {
+                if armed { armed = false; player.playLoops(loops) }
+            } else {
+                player.pause()
+                stillIfBlank(url)
             }
+        case .still:
+            stillIfBlank(url)
+        }
+    }
+
+    /// Nothing drawn yet and nothing coming: the still, made off main.
+    private func stillIfBlank(_ url: URL) {
+        guard !player.hasFrame, player.contents == nil else { return }
+        let wanted = key
+        TGSSticker.stillAsync(url: url, side: bounds.width) { [weak self] img in
+            guard let self, self.key == wanted, !self.player.hasFrame, self.player.contents == nil else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.player.contents = img?.cgImage
+            CATransaction.commit()
         }
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if case .loop = motion, window == nil { player.pause() } else { load() }
+        if window == nil {
+            if motion != .still { player.pause() }
+        } else {
+            armed = true
+            load()
+        }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // Only a new size needs a new load: this ran `set` + `play` on every layout pass (L7).
+        guard bounds.size != laidOutSize else { return }
+        laidOutSize = bounds.size
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         player.frame = bounds

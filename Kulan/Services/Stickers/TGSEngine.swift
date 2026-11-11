@@ -50,12 +50,14 @@ final class TGSDoc {
         let (w, h) = box(px)
         let bpr = w * 4
         let bytes = bpr * h
-        let buf = UnsafeMutableRawPointer.allocate(byteCount: bytes, alignment: 16)
+        // A buffer from the pool when one of this size came back: fresh pages for every frame were
+        // a real part of the cost of a small sticker.
+        let buf = TGSFrameBuffers.take(bytes)
         buf.initializeMemory(as: UInt8.self, repeating: 0, count: bytes)
         lottie_animation_render(handle, max(0, frame) % frameCount, buf.assumingMemoryBound(to: UInt32.self), w, h, bpr)
-        guard let provider = CGDataProvider(dataInfo: nil, data: buf, size: bytes, releaseData: { _, data, _ in
-            UnsafeMutableRawPointer(mutating: data).deallocate()
-        }) else { buf.deallocate(); return nil }
+        guard let provider = CGDataProvider(dataInfo: nil, data: buf, size: bytes, releaseData: { _, data, size in
+            TGSFrameBuffers.give(UnsafeMutableRawPointer(mutating: data), size)
+        }) else { TGSFrameBuffers.give(buf, bytes); return nil }
         return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bpr,
                        space: Self.space,
                        bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue
@@ -80,6 +82,58 @@ final class TGSDoc {
         var inked = 0
         for i in stride(from: 3, to: px.count, by: 4) where px[i] > 20 { inked += 1 }
         return inked < (side * side * 3) / 100
+    }
+}
+
+/// Frame buffers handed back when their image is released, reused for the next frame of the same
+/// size. A few per size, so the pool itself never holds much.
+enum TGSFrameBuffers {
+    private static let lock = NSLock()
+    private static var free: [Int: [UnsafeMutableRawPointer]] = [:]
+    private static let perSize = 6
+
+    static func take(_ bytes: Int) -> UnsafeMutableRawPointer {
+        if let p = lock.withLock({ free[bytes]?.popLast() }) { return p }
+        return UnsafeMutableRawPointer.allocate(byteCount: bytes, alignment: 16)
+    }
+
+    static func give(_ p: UnsafeMutableRawPointer, _ bytes: Int) {
+        let kept: Bool = lock.withLock {
+            var list = free[bytes] ?? []
+            guard list.count < perSize else { return false }
+            list.append(p)
+            free[bytes] = list
+            return true
+        }
+        if !kept { p.deallocate() }
+    }
+}
+
+/// Drawn frames, shared by every player of one sticker at one size, so a loop is drawn once and
+/// then replayed, and twenty pills of one emoji draw it once between them. Bounded in bytes. A
+/// sticker whose whole loop would not fit in `perStickerBytes` is not kept (it is drawn each time,
+/// as before), so one big sticker cannot push every small one out.
+enum TGSFrameCache {
+    private final class Box { let image: CGImage; init(_ i: CGImage) { image = i } }
+    private static let cache: NSCache<NSString, Box> = {
+        let c = NSCache<NSString, Box>()
+        c.totalCostLimit = 40 * 1024 * 1024
+        return c
+    }()
+    static let perStickerBytes = 6 * 1024 * 1024
+
+    private static func key(_ sticker: String, _ px: Int, _ frame: Int) -> NSString {
+        "\(sticker)#\(px)#\(frame)" as NSString
+    }
+
+    static func frame(_ sticker: String, _ px: Int, _ frame: Int) -> CGImage? {
+        cache.object(forKey: key(sticker, px, frame))?.image
+    }
+
+    static func store(_ image: CGImage, _ sticker: String, _ px: Int, _ frame: Int, frameCount: Int) {
+        let cost = image.bytesPerRow * image.height
+        guard cost * frameCount <= perStickerBytes else { return }
+        cache.setObject(Box(image), forKey: key(sticker, px, frame), cost: cost)
     }
 }
 
@@ -157,15 +211,20 @@ final class TGSEngine {
         guard anyWanting else { link?.invalidate(); link = nil; return }
         guard !jobs.isEmpty else { return }
 
-        let group = DispatchGroup()
-        let lock = NSLock()
-        var done: [(TGSPlayer, Int, Int, CGImage?, Int, Double)] = []
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         for (p, f) in jobs {
+            let key = p.key, px = p.pixelBox
+            // Drawn before, by this player or another of the same sticker at the same size: shown
+            // now, with no queue and no render. Only once the player knows the file's frame count.
+            if p.knownFrameCount > 0, let hit = TGSFrameCache.frame(key, px, f) {
+                p.receive(p.generation, f, hit, frameCount: p.knownFrameCount, frameRate: p.knownFrameRate)
+                continue
+            }
             p.inFlight = true
-            let key = p.key, source = p.source, px = p.pixelBox, gen = p.generation
+            let source = p.source, gen = p.generation
             let lane = p.lane
             let cache = caches[lane]
-            group.enter()
             queues[lane].async {
                 var image: CGImage?
                 var count = 0, fps = 0.0
@@ -173,20 +232,19 @@ final class TGSEngine {
                     count = doc.frameCount
                     fps = doc.frameRate
                     image = doc.render(f, px: px)
+                    if let image { TGSFrameCache.store(image, key, px, f % max(1, count), frameCount: count) }
                 }
-                lock.lock(); done.append((p, gen, f, image, count, fps)); lock.unlock()
-                group.leave()
+                // ⛔ EACH FRAME GOES UP AS SOON AS IT IS DRAWN. One group for the whole tick made
+                // every sticker wait for the slowest one, so one heavy sticker stuttered them all.
+                DispatchQueue.main.async {
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    p.receive(gen, f, image, frameCount: count, frameRate: fps)
+                    CATransaction.commit()
+                }
             }
         }
-        // One main-thread pass for every sticker this tick, not one per sticker.
-        group.notify(queue: .main) {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            for (p, gen, f, image, count, fps) in done {
-                p.receive(gen, f, image, frameCount: count, frameRate: fps)
-            }
-            CATransaction.commit()
-        }
+        CATransaction.commit()
     }
 }
 
@@ -213,7 +271,8 @@ final class TGSPlayer: CALayer {
     private var frameCount = 0
     private var frameRate = 30.0
     private var playing = false
-    private var playsOnce = false
+    /// Passes left before it stops on its last frame; 0 = it loops for as long as it plays.
+    private var loopLimit = 0
     private var startedAt: CFTimeInterval = 0
     private var pausedAt: CFTimeInterval = 0
     /// Which render queue (and so which document cache) this sticker uses: by key, so every player
@@ -249,15 +308,18 @@ final class TGSPlayer: CALayer {
         shownFrame = -1
         frameCount = 0
         inFlight = false
-        playsOnce = false
+        loopLimit = 0
         startedAt = CACurrentMediaTime()
         pausedAt = startedAt
         if playing { TGSEngine.shared.add(self) }
     }
 
     /// From the first frame, once, then it stops and holds its last frame.
-    func playOnce() {
-        playsOnce = true
+    func playOnce() { playLoops(1) }
+
+    /// From the first frame, `n` times through, then it stops and holds its last frame.
+    func playLoops(_ n: Int) {
+        loopLimit = max(1, n)
         let now = CACurrentMediaTime()
         startedAt = now
         pausedAt = now
@@ -267,7 +329,7 @@ final class TGSPlayer: CALayer {
     func clear() {
         generation += 1
         inFlight = false
-        playsOnce = false
+        loopLimit = 0
         source = nil
         key = ""
         shownFrame = -1
@@ -291,13 +353,16 @@ final class TGSPlayer: CALayer {
     }
 
     fileprivate var wantsFrames: Bool { playing && source != nil }
+    /// What the file said, once a first frame has come back; 0 before.
+    fileprivate var knownFrameCount: Int { frameCount }
+    fileprivate var knownFrameRate: Double { frameRate }
 
     fileprivate func frameDue(_ now: CFTimeInterval) -> Int? {
         guard frameCount > 0 else { return 0 }   // not parsed yet: ask for frame 0
         let s = ProcessInfo.processInfo.isLowPowerModeEnabled ? step * 2 : step
         let tick = Int((now - startedAt) * frameRate / Double(s))
-        if playsOnce, tick * s >= frameCount {
-            playsOnce = false
+        if loopLimit > 0, tick * s >= frameCount * loopLimit {
+            loopLimit = 0
             pause()
             return nil
         }

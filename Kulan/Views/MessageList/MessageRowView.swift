@@ -153,6 +153,8 @@ final class ReactionChipView: UIView {
     private var isFreeform = false
     /// Built only for a pill that holds a custom reaction.
     private var customView: CustomReactionView?
+    /// What the row last said about being on screen, for a custom view made after it said so.
+    var onScreenHint = true { didSet { customView?.onScreen = onScreenHint } }
 
     /// The custom emoji plays through once, the moment my reaction lands on it.
     func playCustomOnce(after delay: CFTimeInterval) {
@@ -198,11 +200,15 @@ final class ReactionChipView: UIView {
         if attr.length > 0, let key = attr.attribute(CustomReaction.attribute, at: 0, effectiveRange: nil) as? String {
             if customView == nil {
                 let v = CustomReactionView()
+                v.onScreen = onScreenHint
                 addSubview(v)
                 customView = v
             }
             customView?.isHidden = false
-            customView?.show(key, motion: .loop(step: 1))
+            // ⛔ A FEW PASSES, THEN A STILL (perf audit 2026-11-11 M6/L7): every pill looped
+            // forever at full rate while its cell was merely in the window. Now it plays three
+            // times each time it comes on screen, as the reference's reaction buttons rest.
+            customView?.show(key, motion: .limited(loops: 3))
         } else if let customView, !customView.isHidden {
             customView.isHidden = true
             customView.clear()
@@ -1956,13 +1962,14 @@ final class MessageRowView: UIView {
             for k in keys {
                 if let v = byKey[k] { ordered.append(v); continue }
                 if let v = spare.popLast() { ordered.append(v); continue }
-                let v = ReactionChipView(); bubbleBox.addSubview(v); ordered.append(v)
+                let v = ReactionChipView(); v.onScreenHint = mediaOnScreen; bubbleBox.addSubview(v); ordered.append(v)
             }
             reactionViews = ordered + spare
             chipKeys = keys + Array(repeating: "", count: spare.count)
         }
         while reactionViews.count < b.reactions.count {
             let v = ReactionChipView()
+            v.onScreenHint = mediaOnScreen
             bubbleBox.addSubview(v)
             reactionViews.append(v)
             chipKeys.append("")
@@ -2536,7 +2543,13 @@ final class MessageRowView: UIView {
     func handleMediaDownloadTap() -> Bool { mediaView?.handleDownloadTap() ?? false }
 
     /// 2026-10-17 chat stickers: see `MessageRowCell.setOnScreen`.
-    func setMediaOnScreen(_ on: Bool) { mediaView?.setOnScreen(on) }
+    func setMediaOnScreen(_ on: Bool) {
+        mediaOnScreen = on
+        mediaView?.setOnScreen(on)
+        for v in reactionViews { v.onScreenHint = on }
+    }
+    /// The last on-screen word from the cell, handed to reaction pills made after it.
+    private var mediaOnScreen = true
     var stickerBytes: Data? { mediaView?.isHidden == false ? mediaView?.stickerBytes : nil }
     /// The same for one album tile.
     func handleAlbumDownloadTap(tile i: Int) -> Bool { albumView?.handleDownloadTap(tile: i) ?? false }
