@@ -97,6 +97,40 @@ struct MessageRowContext {
 @MainActor
 enum MessageRowModelBuilder {
 
+    // ── Per-row search term and time text (perf audit T4 / L4) ──
+
+    /// The search term as THIS row draws it: the term where the row has a highlight, "" where it has
+    /// none. Every row used to carry the raw term, so each keystroke in the search field changed every
+    /// row's model and every plan; now only the rows that light up differ. The test is the one
+    /// `BubbleText` highlights with (two characters, `ChatSearch.highlightRanges`), so what is drawn
+    /// cannot change.
+    static func rowTerm(_ term: String, in text: String) -> String {
+        guard term.count >= 2, !text.isEmpty,
+              !ChatSearch.highlightRanges(in: text, query: term).isEmpty else { return "" }
+        return term
+    }
+
+    /// A row's shortened time, formatted once per minute stamp instead of on every rebuild of every
+    /// row. Emptied when the locale, the 12/24-hour setting or the time zone changes, which are the
+    /// only other inputs `formatted` has.
+    private static var timeTexts: [Int: String] = [:]
+    private static var timeWatch: [NSObjectProtocol] = []
+    static func timeText(_ d: Date) -> String {
+        if timeWatch.isEmpty {
+            for name in [NSLocale.currentLocaleDidChangeNotification, .NSSystemTimeZoneDidChange] {
+                timeWatch.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                    MainActor.assumeIsolated { timeTexts.removeAll() }
+                })
+            }
+        }
+        let minute = Int((d.timeIntervalSince1970 / 60).rounded(.down))
+        if let s = timeTexts[minute] { return s }
+        let s = d.formatted(date: .omitted, time: .shortened)
+        if timeTexts.count > 5000 { timeTexts.removeAll() }
+        timeTexts[minute] = s
+        return s
+    }
+
     /// Can this message be drawn by the UIKit row system yet?
     ///
     /// ⛔ THIS IS THE MIGRATION'S ONE ROUTING GATE. Phase 1 owns text, jumbomoji, tombstones,
@@ -288,7 +322,7 @@ enum MessageRowModelBuilder {
         } else {
             body = .text(BubbleBody.TextBody(
                 text: text,
-                searchTerm: ctx.searchTerm,
+                searchTerm: rowTerm(ctx.searchTerm, in: text),
                 mentionTokens: msg.mentions.map { "@\(ctx.nameFor($0))" },
                 // Only what TRAVELLED with the message renders — there is no viewer-side fetch, so
                 // an older message without an embedded preview stays a plain link.
@@ -455,7 +489,7 @@ enum MessageRowModelBuilder {
             //
             // Theirs applies `clampBeforeNow` on every display path for exactly this — a timestamp in
             // the future is never a fact about a message, it is a fact about the clock.
-            meta: MetaChrome(timeText: min(msg.createdAt, Date()).formatted(date: .omitted, time: .shortened),
+            meta: MetaChrome(timeText: timeText(min(msg.createdAt, Date())),
                              edited: msg.edited && !msg.deleted,
                              // ⛔ MY OWN POST SHOWS 1 THE MOMENT IT LANDS (owner 2026-10-30: "it counts
                              // now but a bit behind other apps"). The server counts the author's view
@@ -547,7 +581,7 @@ enum MessageRowModelBuilder {
     private static func mediaBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.MediaBody {
         let kind: BubbleBody.MediaBody.Kind = m.isGif ? .gif : (m.isVideo ? .video : .photo)
         let caption = m.text.isEmpty ? nil : BubbleBody.TextBody(
-            text: m.text, searchTerm: ctx.searchTerm,
+            text: m.text, searchTerm: rowTerm(ctx.searchTerm, in: m.text),
             mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" }, bold: m.boldRanges)
         let duration: String? = {
             guard kind == .video, let d = MediaDuration.clean(m.duration), d > 0 else { return nil }
@@ -675,7 +709,7 @@ enum MessageRowModelBuilder {
                 authorId: m.authorId))
         }
         let caption = m.text.isEmpty ? nil : BubbleBody.TextBody(
-            text: m.text, searchTerm: ctx.searchTerm,
+            text: m.text, searchTerm: rowTerm(ctx.searchTerm, in: m.text),
             mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" }, bold: m.boldRanges)
         return BubbleBody.AlbumBody(
             tiles: tiles, extra: n - shown, caption: caption,
@@ -1139,7 +1173,7 @@ enum MessageRowModelBuilder {
         let silenced = missed && !mine && m.id.hasPrefix("call_")
             && FocusSilencedCalls.contains(String(m.id.dropFirst(5)))
         let incomingMissed = missed && !mine && !silenced
-        let time = m.createdAt.formatted(date: .omitted, time: .shortened)
+        let time = timeText(m.createdAt)
         let status = silenced ? (video ? "Silenced video call" : "Silenced voice call")
             : video ? (incomingMissed ? "Missed video call" : "Video call")
                     : (incomingMissed ? "Missed voice call" : "Voice call")
