@@ -405,7 +405,14 @@ struct ThreadView: View {
     /// The header's "Delete All" — the whole conversation, not the selection. See `navigationBar`.
     @State private var showDeleteAllConfirm = false
     // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
-    @State private var searchQuery = ""
+    /// ⛔ THE SEARCH TERM THE CHAT USES, NOT THE KEYS AS THEY ARE TYPED (perf audit T4). The field
+    /// keeps its own text (`InChatSearchField`) and hands over the trimmed term once typing has
+    /// paused for 250 ms, so a keystroke redraws the field only. The matcher, the row highlights and
+    /// the results list all read this one value.
+    @State private var searchTerm = ""
+    /// Which search run is current; an older one's answer is dropped (the matcher runs off main).
+    private final class SearchRun { var seq = 0 }
+    @State private var searchRun = SearchRun()
     @State private var searchCorpus: [InChatMessage] = []
     @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
     @State private var searchIndex = 0
@@ -866,7 +873,7 @@ struct ThreadView: View {
             .overlay {
                 if searchActive && searchAsList && !searchMatches.isEmpty {
                     InChatSearchList(rows: searchListRows,
-                                     terms: ChatSearch.queryTerms(searchQuery.trimmingCharacters(in: .whitespaces)),
+                                     terms: ChatSearch.queryTerms(searchTerm),
                                      bottomInset: composerLift + 8,
                                      onSelect: openSearchResult)
                         .transition(.opacity)
@@ -3836,7 +3843,7 @@ struct ThreadView: View {
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
                 storyQuoteOpens: true,
                 isHighlighted: msg.id == highlightId,
-                searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
+                searchTerm: searchActive ? searchTerm : "",
                 isFirstInCluster: isFirstInCluster(at: index),
                 isLastInCluster: isLastInCluster(at: index),
                 // A message their block held keeps one tick (`Message.held`).
@@ -3988,7 +3995,7 @@ struct ThreadView: View {
         let pins = repo.pinnedMessageIds
         // Audit M3: the active search term must be a signature input — visible rows never repainted
         // their in-text match highlight as the query changed (only the jumped-to row, via highlightId).
-        let term = searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : ""
+        let term = searchActive ? searchTerm : ""
         // Audit M2: viewedOnceTick keys the cache so consuming a view-once photo repaints its bubble.
         // Chat colour: a live colour change flips a row's route (UIKit default-colour cell ⇄
         // colour-capable SwiftUI cell). It changes no message content, so without it in the
@@ -4295,7 +4302,7 @@ struct ThreadView: View {
         add(highlightId ?? "-")
         // Hashed, not joined: Set's hashValue is order-independent and does not allocate.
         add("\(selectedIds.count):\(selectedIds.hashValue)")
-        add(searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "")
+        add(searchActive ? searchTerm : "")
         add("\(repo.expiryTick)")
         k += "§"
         add("\(repo.iBlocked)"); add("\(readReceiptsOn)"); add("\(dark)")
@@ -4363,7 +4370,7 @@ struct ThreadView: View {
             onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
             otherLastReadMillis: repo.otherLastReadMillis,
             otherDeliveredMillis: repo.otherDeliveredMillis, iBlocked: repo.iBlocked,
-            searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
+            searchTerm: searchActive ? searchTerm : "",
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
             roleFor: { isGroup ? conversation?.roles[$0]?.display : nil },   // owner 2026-10-18 Role
@@ -6587,7 +6594,7 @@ struct ThreadView: View {
 
     private func activateSearch() {
         setUIMode(.search)
-        searchQuery = ""; searchMatches = []; searchIndex = 0; lastSearchText = nil; searchAsList = false
+        searchTerm = ""; searchMatches = []; searchIndex = 0; lastSearchText = nil; searchAsList = false
         inputFocused = false
         Task {
             let corpus = await MessageSearch.loadChat(cid: cid, isGroup: isGroup, me: me)
@@ -6603,7 +6610,8 @@ struct ThreadView: View {
     private func closeSearch() {
         searchFocused = false
         setUIMode(.normal)
-        searchQuery = ""; searchMatches = []; highlightId = nil; lastSearchText = nil; searchAsList = false
+        searchTerm = ""; searchMatches = []; highlightId = nil; lastSearchText = nil; searchAsList = false
+        searchRun.seq &+= 1   // a run still matching drops its answer
         // Leave the conversation where the last result was — no scroll restore on close.
     }
 
@@ -6611,7 +6619,7 @@ struct ThreadView: View {
     /// characters; below that there are no results because nothing was looked up, which is a
     /// different fact from "looked up and found nothing" and must not be reported as one.
     private var searchTermIsSearchable: Bool {
-        searchQuery.trimmingCharacters(in: .whitespaces).count >= 2
+        searchTerm.count >= 2
     }
 
     // Recompute matches as you type — our search semantics:
@@ -6633,31 +6641,59 @@ struct ThreadView: View {
     /// new message, reaction, tick or page pulled a reader who had scrolled away back to the match
     /// and flashed it again. Silent refreshes keep the focus on the same message where it survives.
     private func updateSearchMatches(force: Bool = false, navigate: Bool = true) {
-        let q = searchQuery.trimmingCharacters(in: .whitespaces)
+        let q = searchTerm
         guard q.count >= 2 else {
+            searchRun.seq &+= 1   // a run still matching an older term drops its answer
             searchMatches = []; lastSearchText = nil
             return
         }
         if !force, q == lastSearchText { return }   // identical query → no re-run (dedup)
         lastSearchText = q
         let terms = ChatSearch.queryTerms(q)
-        guard !terms.isEmpty else { searchMatches = []; return }
+        guard !terms.isEmpty else { searchRun.seq &+= 1; searchMatches = []; return }
 
         // How far from the NEWEST match the user currently is (preserved across refinement).
         let distanceFromNewest = searchMatches.isEmpty ? 0 : max(0, (searchMatches.count - 1) - searchIndex)
         let focusedId = searchMatches.indices.contains(searchIndex) ? searchMatches[searchIndex].id : nil
 
+        // ⛔ MATCHED OFF MAIN (perf audit T4): tokenizing the loaded window and filtering up to a
+        // thousand messages ran on main per keystroke. The corpus and the window are value copies;
+        // only the newest run's answer is taken, and only while the same term is still searched.
+        searchRun.seq &+= 1
+        let seq = searchRun.seq
+        let run = searchRun
+        let corpus = searchCorpus
+        let live = repo.items
+        Task.detached(priority: .userInitiated) {
+            let found = Self.searchMatching(corpus: corpus, live: live, terms: terms)
+            await MainActor.run {
+                guard seq == run.seq, searchActive, searchTerm == q else { return }
+                applySearchMatches(found, distanceFromNewest: distanceFromNewest, focusedId: focusedId,
+                                   navigate: navigate)
+            }
+        }
+    }
+
+    /// The matcher itself, unchanged: the corpus and the live window merged (the window wins
+    /// nothing: the first copy of an id is kept), token-prefix AND match, oldest first, newest 500.
+    nonisolated private static func searchMatching(corpus: [InChatMessage], live: [Message],
+                                                   terms: [String]) -> [InChatMessage] {
         var seen = Set<String>()
         var pool: [InChatMessage] = []
-        for m in searchCorpus where seen.insert(m.id).inserted { pool.append(m) }
-        for m in repo.items where !m.text.isEmpty && !m.viewOnce && seen.insert(m.id).inserted {
+        for m in corpus where seen.insert(m.id).inserted { pool.append(m) }
+        for m in live where !m.text.isEmpty && !m.viewOnce && seen.insert(m.id).inserted {
             pool.append(InChatMessage(id: m.id, text: m.text, authorId: m.authorId,
                                       date: m.createdAt, tokens: ChatSearch.tokens(m.text)))
         }
         let matched = pool
             .filter { ChatSearch.matches(tokens: $0.tokens, terms: terms) }
             .sorted { $0.date < $1.date }
-        searchMatches = Array(matched.suffix(500))   // keep the newest 500 (result cap)
+        return Array(matched.suffix(500))   // keep the newest 500 (result cap)
+    }
+
+    private func applySearchMatches(_ found: [InChatMessage], distanceFromNewest: Int, focusedId: String?,
+                                    navigate: Bool) {
+        searchMatches = found
 
         guard !searchMatches.isEmpty else { return }
         searchIndex = max(0, (searchMatches.count - 1) - min(distanceFromNewest, searchMatches.count - 1))
@@ -9935,19 +9971,20 @@ struct ThreadView: View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").font(.system(size: 16)).foregroundStyle(.secondary)
-                TextField("Search", text: $searchQuery)
-                    .font(.system(size: 17))   // native search-field text
-                    .focused($searchFocused)
-                    .submitLabel(.search)
-                    // The blue Search key was decorative: the label was set and nothing handled the
-                    // submit, so it neither stepped through results nor dropped the keyboard — which
-                    // is the one gesture that lets you see the conversation behind them.
-                    .onSubmit {
-                        searchFocused = false
-                        if !searchMatches.isEmpty { stepSearch(1) }
-                    }
-                    .autocorrectionDisabled()
-                    .onChange(of: searchQuery) { _, _ in updateSearchMatches() }
+                // perf audit T4: the field owns its text; the chat gets the term after a pause.
+                InChatSearchField(focus: $searchFocused,
+                                  onTerm: { t in
+                                      guard t != searchTerm else { return }
+                                      searchTerm = t
+                                      updateSearchMatches()
+                                  },
+                                  // The blue Search key was decorative: the label was set and nothing handled
+                                  // the submit, so it neither stepped through results nor dropped the keyboard
+                                  // — which is the one gesture that lets you see the conversation behind them.
+                                  onSubmit: {
+                                      searchFocused = false
+                                      if !searchMatches.isEmpty { stepSearch(1) }
+                                  })
         // ⛔ AND WHENEVER THE CONVERSATION ITSELF CHANGES. Matches used to recompute on keystroke and
         // on nothing else, so a message that arrived, was edited, was deleted for everyone or expired
         // while search was open left the results untouched: the pill still said "3 of 7", and
@@ -9957,16 +9994,6 @@ struct ThreadView: View {
             guard searchActive else { return }
             updateSearchMatches(force: true, navigate: false)   // owner audit 2026-10-06 chat #4
         }
-                if !searchQuery.isEmpty {
-                    Button { searchQuery = "" } label: {
-                        Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.secondary)
-                            // 32pt real target + contentShape: the bare 16pt glyph was nearly impossible
-                            // to hit (only opaque pixels hit-test without a contentShape).
-                            .frame(width: 32, height: 32).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear")   // audit: an icon-only button had nothing for VoiceOver
-                }
             }
             .padding(.horizontal, 12).frame(height: 44)   // substantial native search field (matches the X)
             .liquidGlass(Capsule(), interactive: false)
@@ -14798,6 +14825,53 @@ struct HeapState<Value>: DynamicProperty {
     var projectedValue: Binding<Value> {
         let b = box
         return Binding(get: { b.value }, set: { b.value = $0 })
+    }
+}
+
+/// The in-chat search field with its own text (perf audit T4). Every key used to be a write to the
+/// chat's own state and so a pass over the whole chat screen; now a key redraws this field, and the
+/// chat is told the trimmed term once typing has paused for 250 ms. A term too short to search (and
+/// the empty field after Clear) goes at once, so the results clear without the wait. Submit sends
+/// the term at once too, so the Search key acts on what is in the field.
+struct InChatSearchField: View {
+    var focus: FocusState<Bool>.Binding
+    let onTerm: (String) -> Void
+    let onSubmit: () -> Void
+    @State private var text = ""
+    @State private var pending: Task<Void, Never>?
+
+    var body: some View {
+        TextField("Search", text: $text)
+            .font(.system(size: 17))   // native search-field text
+            .focused(focus)
+            .submitLabel(.search)
+            .onSubmit {
+                pending?.cancel(); pending = nil
+                onTerm(text.trimmingCharacters(in: .whitespaces))
+                onSubmit()
+            }
+            .autocorrectionDisabled()
+            .onChange(of: text) { _, v in
+                pending?.cancel(); pending = nil
+                let t = v.trimmingCharacters(in: .whitespaces)
+                guard t.count >= 2 else { onTerm(t); return }
+                pending = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    guard !Task.isCancelled else { return }
+                    onTerm(t)
+                }
+            }
+            .onDisappear { pending?.cancel(); pending = nil }
+        if !text.isEmpty {
+            Button { text = "" } label: {
+                Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.secondary)
+                    // 32pt real target + contentShape: the bare 16pt glyph was nearly impossible
+                    // to hit (only opaque pixels hit-test without a contentShape).
+                    .frame(width: 32, height: 32).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Clear")   // audit: an icon-only button had nothing for VoiceOver
+        }
     }
 }
 
