@@ -1,4 +1,5 @@
 import SwiftUI
+import CloudKit
 import UIKit
 import Observation
 import UniformTypeIdentifiers
@@ -51,6 +52,12 @@ enum ChatBackupPrefs {
         set { d.set(newValue?.rawValue, forKey: key("frequency")) }
     }
     static var frequency: Frequency { frequencyChoice ?? .off }
+
+    /// What the last backup made on this phone held ("N messages · N photos ...").
+    static var lastCounts: BackupArchive.Counts? {
+        get { d.data(forKey: key("counts")).flatMap { try? JSONDecoder().decode(BackupArchive.Counts.self, from: $0) } }
+        set { d.set(newValue.flatMap { try? JSONEncoder().encode($0) }, forKey: key("counts")) }
+    }
 
     /// Off by default: videos are big. Photos and voice notes always go in.
     static var includeVideos: Bool {
@@ -137,6 +144,8 @@ final class ChatBackupRunner {
     private(set) var running = false
     /// Set while a backup waits for Wi-Fi (or any connection): the words to show.
     private(set) var waiting: String?
+    /// Where the running backup is (the page's progress bar).
+    private(set) var step: ICloudBackup.Step?
     var problem: String?
     /// The backup now in iCloud, as last read or made.
     var latest: ICloudBackup.Info?
@@ -197,16 +206,18 @@ final class ChatBackupRunner {
         running = true
         let password = ChatBackupPrefs.password
         task = Task { [weak self] in
-            defer { self?.running = false; self?.task = nil }
+            defer { self?.running = false; self?.task = nil; self?.step = nil }
             if needsHistory {
                 // safety review 2026-11-12: an automatic backup only from a phone with synced marks.
                 let has = await Task.detached(priority: .utility) { LocalMessageDB.shared.hasSyncedMarks(uid: uid) }.value
                 guard has else { return }
             }
             do {
-                let info = try await ICloudBackup.shared.backupNow(uid: uid, password: password,
-                                                                   videos: ChatBackupPrefs.includeVideos)
+                let info = try await ICloudBackup.shared.backupNow(
+                    uid: uid, password: password, videos: ChatBackupPrefs.includeVideos,
+                    step: { s in Task { @MainActor in self?.step = s } })
                 ChatBackupPrefs.lastMade = info.made
+                if let c = info.counts { ChatBackupPrefs.lastCounts = c }
                 self?.latest = info
                 ChatRestoreOffer.shared.replacedBy(info)
                 if !quiet { Haptics.notify(.success) }
@@ -401,16 +412,31 @@ struct ChatBackupPage: View {
     @State private var frequency = ChatBackupPrefs.frequency
     @State private var mobileData = ChatBackupPrefs.useMobileData
     @State private var videos = ChatBackupPrefs.includeVideos
+    @State private var iCloudStatus = "..."
     @State private var hasPassword = ChatBackupPrefs.password != nil
     @State private var editLock = false
 
     var body: some View {
         List {
-            // Status first, one action under it, settings below (redesign 2026-11-12).
+            // Owner 2026-11-12 ("too basic"): one card with everything about the backup, then
+            // iCloud, Backup Settings and Security, the way mature messengers lay this page out.
             Section {
-                hero
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                card
+                    .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
+            } footer: {
+                Text("Locked so only you can open it. Fariin can't read your backup.")
+            }
+
+            Section("iCloud") {
+                LabeledContent("Account", value: iCloudStatus)
+                Button("Manage iCloud Storage") {
+                    // iOS has no public link to iCloud storage, so the way there is spelled out.
+                    GlassConfirmDoor.show(title: "Manage iCloud Storage",
+                                          message: "Open Settings, tap your name, then iCloud. Your Fariin backup is under Fariin.",
+                                          confirm: "Open Settings", confirmColor: Color.fariinAction) {
+                        if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                    }
+                }
             }
 
             Section {
@@ -422,10 +448,12 @@ struct ChatBackupPage: View {
                     ChatBackupPrefs.frequencyChoice = f
                     ChatBackupScheduler.runIfDue()
                 }
-                Toggle("Include Videos", isOn: $videos).tint(.green)
-                    .onChange(of: videos) { _, on in ChatBackupPrefs.includeVideos = on }
                 Toggle("Use Mobile Data", isOn: $mobileData).tint(.green)
                     .onChange(of: mobileData) { _, on in ChatBackupPrefs.useMobileData = on }
+                Toggle("Include Videos", isOn: $videos).tint(.green)
+                    .onChange(of: videos) { _, on in ChatBackupPrefs.includeVideos = on }
+            } header: {
+                Text("Backup Settings")
             } footer: {
                 Text(mobileData ? "Backups run on Wi-Fi or mobile data." : "Backups wait for Wi-Fi.")
             }
@@ -438,6 +466,8 @@ struct ChatBackupPage: View {
                 if hasPassword {
                     Button("Change Password") { editLock = true }
                 }
+            } header: {
+                Text("Security")
             } footer: {
                 Text(hasPassword
                      ? "You need this password to restore on a new phone."
@@ -457,58 +487,92 @@ struct ChatBackupPage: View {
             }
         }
         .task { await load() }
+        .task { iCloudStatus = await Self.accountWords() }
     }
 
-    private var hero: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "icloud.fill")
-                .font(.system(size: 34, weight: .regular))
-                .foregroundStyle(Color.fariinAction)
-                .frame(width: 76, height: 76)
-                .background(Circle().fill(Color.fariinAction.opacity(0.12)))
-                .padding(.top, 4)
-
-            VStack(spacing: 4) {
-                if loading && runner.latest == nil {
-                    ProgressView().frame(height: 44)
-                } else if let latest = runner.latest {
-                    Text("Last backup")
-                        .font(.title3.weight(.semibold))
-                    Text(ChatBackupText.describe(latest))
-                        .font(.subheadline).foregroundStyle(.secondary)
-                } else {
-                    Text("No backup yet")
-                        .font(.title3.weight(.semibold))
-                    Text("Keep your chats safe if you lose this phone.")
-                        .font(.subheadline).foregroundStyle(.secondary)
+    /// The backup card: when, how big, what it holds, and the button; progress while it runs.
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "icloud.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(Color.fariinAction)
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(Color.fariinAction.opacity(0.1)))
+                VStack(alignment: .leading, spacing: 3) {
+                    if loading && runner.latest == nil {
+                        ProgressView().frame(height: 22)
+                    } else if let latest = runner.latest {
+                        Text("Backed up \(latest.made.formatted(.relative(presentation: .named)))")
+                            .font(.headline)
+                        Text(ChatBackupText.describe(latest))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        if let c = ChatBackupPrefs.lastCounts {
+                            Text(Self.countsLine(c))
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("No backup yet").font(.headline)
+                        Text("Keep your chats safe if you lose this phone.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
                 }
+                Spacer(minLength: 0)
             }
-            .multilineTextAlignment(.center)
 
             if runner.busy {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(runner.waiting ?? "Backing up...")
-                        .font(.footnote).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    if let f = stepFraction {
+                        ProgressView(value: f).tint(Color.fariinAction)
+                    } else {
+                        ProgressView().progressViewStyle(.linear).tint(Color.fariinAction)
+                    }
+                    Text(stepWords).font(.footnote).foregroundStyle(.secondary)
                 }
                 .transition(.opacity)
             } else if let problem = runner.problem {
-                Text(problem)
-                    .font(.footnote).foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .transition(.opacity)
+                Text(problem).font(.footnote).foregroundStyle(.red)
             }
 
-            backUpPill.padding(.top, 4)
-
-            Text("Locked so only you can open it. Fariin can't read your backup. Photos and voice messages saved on this phone are included.")
-                .font(.footnote).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
+            backUpPill
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 4)
         .animation(.easeOut(duration: 0.2), value: runner.busy)
+    }
+
+    private var stepFraction: Double? {
+        if case .uploading(let done, let total)? = runner.step, total > 0 { return Double(done) / Double(total) }
+        return nil
+    }
+
+    private var stepWords: String {
+        if let w = runner.waiting { return w }
+        switch runner.step {
+        case .uploading(let done, let total)? where total > 0:
+            let pct = Int((Double(done) / Double(total) * 100).rounded())
+            return "Uploading \(done) of \(total)  \(pct)%"
+        default:
+            return "Saving messages..."
+        }
+    }
+
+    static func countsLine(_ c: BackupArchive.Counts) -> String {
+        func n(_ v: Int, _ one: String, _ many: String) -> String { "\(v) \(v == 1 ? one : many)" }
+        var parts = [n(c.messages, "message", "messages")]
+        if c.photos > 0 { parts.append(n(c.photos, "photo", "photos")) }
+        if c.voice > 0 { parts.append(n(c.voice, "voice message", "voice messages")) }
+        if c.videos > 0 { parts.append(n(c.videos, "video", "videos")) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// iOS never tells an app the Apple ID's email, so the row says whether iCloud is usable.
+    static func accountWords() async -> String {
+        let status = try? await CKContainer(identifier: ICloudBackup.containerID).accountStatus()
+        switch status {
+        case .available: return "Signed in"
+        case .noAccount: return "Not signed in"
+        case .restricted: return "Restricted"
+        default: return "Unavailable"
+        }
     }
 
     private var backUpPill: some View {
@@ -518,7 +582,7 @@ struct ChatBackupPage: View {
             Text(runner.busy ? "Cancel" : "Back Up Now")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(runner.busy ? Color.primary : Color.onFariinAction)
-                .frame(maxWidth: .infinity).frame(height: 50)
+                .frame(maxWidth: .infinity).frame(height: 48)
                 .background(Capsule().fill(runner.busy ? Color(.tertiarySystemFill) : Color.fariinAction))
                 .contentShape(Capsule())
         }

@@ -52,6 +52,14 @@ actor ICloudBackup {
         let made: Date
         /// Bytes of every file of the backup, as stored in iCloud.
         let size: Int64
+        /// What it holds; only known for a backup made on this phone (nil when read from iCloud).
+        var counts: BackupArchive.Counts? = nil
+    }
+
+    /// Where a running backup is, for the page's progress bar.
+    enum Step: Sendable, Equatable {
+        case saving                    // reading the chats and locking the files
+        case uploading(Int, Int)       // files sent, of
     }
 
     private static let zoneName = "FariinBackup"
@@ -76,7 +84,8 @@ actor ICloudBackup {
     /// Backs up `uid`'s whole local database now. `password` (optional, at least 8 characters, or the
     /// 64-digit key) adds a second lock beside the iCloud Keychain one. Returns the new backup.
     @discardableResult
-    func backupNow(uid: String, password: String? = nil, videos: Bool = false) async throws -> Info {
+    func backupNow(uid: String, password: String? = nil, videos: Bool = false,
+                   step: (@Sendable (Step) -> Void)? = nil) async throws -> Info {
         guard ChatBackup.enabled else { throw Failure.off }
         guard !uid.isEmpty else { throw Failure.damaged }
         guard !busy else { throw Failure.busy }
@@ -103,6 +112,7 @@ actor ICloudBackup {
             BackupArchive.MediaPlan(master: $0, videos: videos,
                                     existing: Set(((old?["names"] as? [String]) ?? []).filter(BackupMedia.isName)))
         }
+        step?(.saving)
         let written = try await Task.detached(priority: .utility) { () throws -> BackupArchive.Written in
             try BackupArchive.writeFiles(uid: uid, archiveKey: archiveKey, made: made, to: dir, media: plan)
         }.value
@@ -131,9 +141,12 @@ actor ICloudBackup {
 
         // 1. Every file of the new set. Remembered first, so a cut-off upload is swept next time.
         Self.setPending(uid: uid, records.map { $0.recordID.recordName })
+        step?(.uploading(0, records.count))
         for start in stride(from: 0, to: records.count, by: Self.batch) {
             try Task.checkCancellation()
-            try await save(Array(records[start..<min(start + Self.batch, records.count)]))
+            let end = min(start + Self.batch, records.count)
+            try await save(Array(records[start..<end]))
+            step?(.uploading(end, records.count))
         }
 
         // 2. The header switches to the new set: from here on, restore reads the new backup.
@@ -154,7 +167,8 @@ actor ICloudBackup {
             let gone = Self.recordNames(old).filter { !fresh.contains($0) }
             await deleteQuietly(gone)
         }
-        return Info(made: Date(timeIntervalSince1970: Double(made) / 1000), size: size)
+        return Info(made: Date(timeIntervalSince1970: Double(made) / 1000), size: size,
+                    counts: written.counts)
     }
 
     /// The backup now in iCloud (when it was made, how big), or nil when there is none.

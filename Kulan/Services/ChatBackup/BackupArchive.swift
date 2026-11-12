@@ -113,6 +113,15 @@ enum BackupArchive {
         var names: [String]
         /// The bytes of those reused records (for the size shown on the page).
         var reusedBytes: Int64 = 0
+        /// What the backup holds, for the page ("N messages · N photos ...").
+        var counts = Counts()
+    }
+
+    struct Counts: Codable, Equatable {
+        var messages = 0
+        var photos = 0
+        var voice = 0
+        var videos = 0
     }
 
     private static let sodium = Sodium()
@@ -307,7 +316,15 @@ enum BackupArchive {
         }
         try writeSealed(Bytes(try json(manifest)), key: archiveKey, to: dir.appendingPathComponent(manifestName))
         names.insert(manifestName, at: 0)
-        return Written(names: names, reusedBytes: reused)
+        var counts = Counts(messages: count)
+        for e in kept {
+            switch e.slot {
+            case .image: counts.photos += 1
+            case .audio: counts.voice += 1
+            case .video: counts.videos += 1
+            }
+        }
+        return Written(names: names, reusedBytes: reused, counts: counts)
     }
 
     // MARK: - Reading
