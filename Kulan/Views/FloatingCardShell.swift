@@ -476,10 +476,14 @@ struct FloatingCardShell<Spot: FloatingCardSpot, Card: View, Picture: View>: Vie
 
     // MARK: Keyboard (the group card's, owner 2026-10-06; moved here 2026-10-28)
 
-    /// The lowest `base.height` whose card still ends 8pt above `top`.
+    /// The lowest `base.height` whose card still ends 8pt above `top`, and above the message bar
+    /// that rides on the keyboard (owner 2026-11-12: the card sat on the composer).
     private func lowestRest(above top: CGFloat) -> CGFloat {
-        max(0, top - 8 - h - (insets.top + 8))
+        max(0, top - Self.composerClear - 8 - h - (insets.top + 8))
     }
+
+    /// A one-line composer with its padding.
+    private static var composerClear: CGFloat { 64 }
 
     /// The reference app's rule: a card the keyboard would cover moves up to sit just above it, and
     /// returns to where it was once the keyboard is out of the way. A card that was never covered
