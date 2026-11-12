@@ -29,7 +29,7 @@ v1 scope: 1-to-1 E2EE messenger. Groups are compiled out (`Flags.groupsEnabled =
 `Private, simple messaging`
 
 **Promotional text** (max 170 chars, changeable without review):
-`Private messaging without a phone number. End-to-end encrypted one to one chats and calls, plus groups, channels and 24-hour stories. Fariin is the Somali word for message.`
+`Private messaging without a phone number. End-to-end encrypted one to one chats and calls, plus groups, channels and stories. Fariin is the Somali word for message.`
 
 **Description** (max 4000 chars):
 

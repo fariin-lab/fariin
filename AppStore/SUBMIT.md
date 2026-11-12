@@ -87,7 +87,7 @@ and privacy pages, which is what Guideline 1.2 asks for.
 ### Promotional text (170 max, changeable later without review)
 
 ```
-Private messaging without a phone number. End-to-end encrypted one to one chats and calls, plus groups, channels and 24-hour stories. Fariin is the Somali word for message.
+Private messaging without a phone number. End-to-end encrypted one to one chats and calls, plus groups, channels and stories. Fariin is the Somali word for message.
 ```
 
 ### Description (4000 max)
