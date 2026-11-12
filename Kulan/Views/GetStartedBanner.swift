@@ -142,6 +142,17 @@ final class GetStartedStore {
     }
 }
 
+/// A circle put at the front of the row by something the app is offering (owner 2026-11-12, chat
+/// backup: Restore after Skip, Back Up 7 days after Not Now). Press and hold offers Hide.
+struct GetStartedLead: Identifiable {
+    let id: String
+    let icon: String
+    let label: String
+    let accessibility: String
+    let action: @MainActor () -> Void
+    let hide: @MainActor () -> Void
+}
+
 /// ⛔ OUR OWN LOOK (owner 2026-10-19: the pastel cards were the reference's exactly; a checklist read
 /// as homework). One glass card, "Things you can do", four glass circles with their names, the
 /// group page's own circle. The X hides the whole card (the shell offers Undo); press and hold a
@@ -155,9 +166,13 @@ struct GetStartedBanner: View {
     /// a Restore circle (filled lock) leads the row; the row keeps at most 4 circles. Nil = none.
     var onRestore: (() -> Void)? = nil
     var onHideRestore: () -> Void = {}
+    /// Chat backup circles (2026-11-12), after Restore and before the regular cards.
+    var leads: [GetStartedLead] = []
 
-    /// What the row shows: the regular cards, one fewer while Restore leads it.
-    private var shown: [GetStartedCard] { Array(cards.prefix(onRestore == nil ? 4 : 3)) }
+    /// What the row shows: the regular cards, fewer while Restore or other circles lead it (4 in all).
+    private var shown: [GetStartedCard] {
+        Array(cards.prefix(max(0, 4 - (onRestore == nil ? 0 : 1) - leads.count)))
+    }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -193,6 +208,20 @@ struct GetStartedBanner: View {
                     }
                     .accessibilityLabel("Restore older messages")
                     .accessibilityAction(named: "Hide", onHideRestore)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+                ForEach(leads) { lead in
+                    Button { lead.action() } label: {
+                        PosterActionIcon(icon: lead.icon, diameter: 54, onPhoto: false, label: lead.label)
+                    }
+                    .tint(.primary)
+                    .contextMenu {
+                        Button(role: .destructive) { lead.hide() } label: {
+                            Label("Hide", systemImage: "eye.slash")
+                        }
+                    }
+                    .accessibilityLabel(lead.accessibility)
+                    .accessibilityAction(named: "Hide") { lead.hide() }
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
                 ForEach(shown) { card in
