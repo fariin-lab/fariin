@@ -26,7 +26,8 @@ enum ChatBackup {
 ///   cid, id, created_at, sender, type, deleted, edited_at, expires_at, body, updated_at; a null
 ///   column is JSON null), every line ending in "\n", rows ordered by created_at, at most 2000 rows
 ///   and at most 2 MiB (2,097,152 bytes of plain text) per chunk. A single row bigger than that
-///   goes alone in its chunk.
+///   goes alone in its chunk. `body` is the shared WIRE body (WireBody), not this app's own JSON;
+///   a deleted or opened view-once row keeps "{}".
 /// - `chats.bin` (encrypted): JSON lines of the chats table rows, same rules.
 /// - Media are not in v1.
 enum BackupArchive {
@@ -217,7 +218,10 @@ enum BackupArchive {
         }
 
         try db.allRows(uid: uid) { page in
-            for row in page {
+            for var row in page {
+                // A body that will not convert is left out rather than written in this app's own shape.
+                guard let wire = wireBody(row) else { continue }
+                row["body"] = wire
                 let line = try jsonLine(row, columns: LocalMessageDB.messageColumns)
                 if rowsInBuffer >= maxRowsPerChunk || (rowsInBuffer > 0 && buffer.count + line.count > maxBytesPerChunk) {
                     try flush()
@@ -267,12 +271,54 @@ enum BackupArchive {
         return rows
     }
 
+    /// The rows of one message chunk, each `body` turned from the wire body back into this app's own
+    /// Message JSON (what LocalMessageDB files). Rows whose body will not convert are skipped.
+    static func readMessageRows(_ file: Data, key: Bytes) throws -> [LocalMessageDB.RawRow] {
+        try readRows(file, key: key).compactMap { row -> LocalMessageDB.RawRow? in
+            var row = row
+            guard let own = ownBody(row) else { return nil }
+            row["body"] = own
+            return row
+        }
+    }
+
     static func isChunkName(_ s: String) -> Bool {
         guard s.count == 10, s.hasPrefix("m-"), s.hasSuffix(".bin") else { return false }
         return s.dropFirst(2).prefix(4).allSatisfy { $0.isASCII && $0.isNumber }
     }
 
     // MARK: - Private
+
+    /// The same JSON shape LocalMessageDB reads and writes.
+    private static let messageEncoder: JSONEncoder = {
+        let e = JSONEncoder(); e.dateEncodingStrategy = .millisecondsSince1970; return e
+    }()
+    private static let messageDecoder: JSONDecoder = {
+        let d = JSONDecoder(); d.dateDecodingStrategy = .millisecondsSince1970; return d
+    }()
+
+    /// Database body -> wire body. "{}" (and an empty or missing body) is kept as it is.
+    private static func wireBody(_ row: LocalMessageDB.RawRow) -> Any? {
+        guard let body = row["body"] as? String else { return row["body"] ?? NSNull() }
+        if body == "{}" || body.isEmpty { return body }
+        guard let cid = row["cid"] as? String, let data = body.data(using: .utf8),
+              let m = try? messageDecoder.decode(Message.self, from: data),
+              let wire = try? json(WireBody.encode(m, cid: cid)),
+              let s = String(data: wire, encoding: .utf8) else { return nil }
+        return s
+    }
+
+    /// Wire body -> database body. "{}" (and an empty or missing body) is kept as it is.
+    private static func ownBody(_ row: LocalMessageDB.RawRow) -> Any? {
+        guard let body = row["body"] as? String else { return row["body"] ?? NSNull() }
+        if body == "{}" || body.isEmpty { return body }
+        guard let cid = row["cid"] as? String, let data = body.data(using: .utf8),
+              let wire = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let m = WireBody.decode(wire, cid: cid),
+              let own = try? messageEncoder.encode(m),
+              let s = String(data: own, encoding: .utf8) else { return nil }
+        return s
+    }
 
     private static func writeSealed(_ plain: Bytes, key: Bytes, to url: URL) throws {
         guard let sealed = seal(plain, key: key) else { throw Failure.crypto }
