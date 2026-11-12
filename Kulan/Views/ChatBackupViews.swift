@@ -415,6 +415,8 @@ struct ChatBackupPage: View {
     @State private var mobileData = ChatBackupPrefs.useMobileData
     @State private var videos = ChatBackupPrefs.includeVideos
     @State private var iCloudStatus = "..."
+    /// Videos already on this phone: what Include Videos would add (owner 2026-11-12).
+    @State private var videoBytes = 0
     @State private var hasPassword = ChatBackupPrefs.password != nil
     @State private var editLock = false
 
@@ -429,7 +431,7 @@ struct ChatBackupPage: View {
                 Text("Locked so only you can open it. Fariin can't read your backup.")
             }
 
-            Section("iCloud") {
+            Section {
                 LabeledContent("Account", value: iCloudStatus)
                 Button("Manage iCloud Storage") {
                     // iOS has no public link to iCloud storage, so the way there is spelled out.
@@ -439,6 +441,10 @@ struct ChatBackupPage: View {
                         if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
                     }
                 }
+            } header: {
+                Text("iCloud")
+            } footer: {
+                Text("Saved in the iCloud of the Apple account on this iPhone (Settings > your name).")
             }
 
             Section {
@@ -452,7 +458,8 @@ struct ChatBackupPage: View {
                 }
                 Toggle("Use Mobile Data", isOn: $mobileData).tint(.green)
                     .onChange(of: mobileData) { _, on in ChatBackupPrefs.useMobileData = on }
-                Toggle("Include Videos", isOn: $videos).tint(.green)
+                Toggle(videoBytes > 0 ? "Include Videos (\(ChatBackupText.size(Int64(videoBytes))))" : "Include Videos",
+                       isOn: $videos).tint(.green)
                     .onChange(of: videos) { _, on in ChatBackupPrefs.includeVideos = on }
             } header: {
                 Text("Backup Settings")
@@ -490,6 +497,7 @@ struct ChatBackupPage: View {
         }
         .task { await load() }
         .task { iCloudStatus = await Self.accountWords() }
+        .task { videoBytes = await Task.detached(priority: .utility) { VideoCache.diskBytes() }.value }
     }
 
     /// The backup card: when, how big, what it holds, and the button; progress while it runs.
@@ -553,7 +561,7 @@ struct ChatBackupPage: View {
         switch runner.step {
         case .uploading(let done, let total)? where total > 0:
             let pct = Int((Double(done) / Double(total) * 100).rounded())
-            return "Uploading \(done) of \(total)  \(pct)%"
+            return "Uploading \(ChatBackupText.size(done)) of \(ChatBackupText.size(total))  \(pct)%"
         default:
             return "Saving messages..."
         }

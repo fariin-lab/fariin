@@ -59,7 +59,7 @@ actor ICloudBackup {
     /// Where a running backup is, for the page's progress bar.
     enum Step: Sendable, Equatable {
         case saving                    // reading the chats and locking the files
-        case uploading(Int, Int)       // files sent, of
+        case uploading(Int64, Int64)   // bytes of the new files sent, of
     }
 
     private static let zoneName = "FariinBackup"
@@ -125,6 +125,7 @@ actor ICloudBackup {
         let set = UUID().uuidString.lowercased()
         var size = Int64(headerJSON.count) + written.reusedBytes
         var records: [CKRecord] = []
+        var recordBytes: [Int64] = []
         for name in names {
             let url = dir.appendingPathComponent(name)
             // An md- name with no file here is a record already in iCloud.
@@ -137,16 +138,20 @@ actor ICloudBackup {
             r["set"] = set
             r["file"] = CKAsset(fileURL: url)
             records.append(r)
+            recordBytes.append(bytes)
         }
 
         // 1. Every file of the new set. Remembered first, so a cut-off upload is swept next time.
         Self.setPending(uid: uid, records.map { $0.recordID.recordName })
-        step?(.uploading(0, records.count))
+        let totalBytes = recordBytes.reduce(0, +)
+        var sentBytes: Int64 = 0
+        step?(.uploading(0, totalBytes))
         for start in stride(from: 0, to: records.count, by: Self.batch) {
             try Task.checkCancellation()
             let end = min(start + Self.batch, records.count)
             try await save(Array(records[start..<end]))
-            step?(.uploading(end, records.count))
+            sentBytes += recordBytes[start..<end].reduce(0, +)
+            step?(.uploading(sentBytes, totalBytes))
         }
 
         // 2. The header switches to the new set: from here on, restore reads the new backup.
