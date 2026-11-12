@@ -284,6 +284,12 @@ struct RootView: View {
                 // ⛔ CHAT BACKUP AFTER SIGN-IN (2026-11-12, flow agreed with Android): restore when
                 // this phone has no history and iCloud holds a backup, then the setup card.
                 .task { await ChatBackupFlow.atSignIn() }
+                // Siri calls (owner 2026-11-12): ask the one-time Siri question on the main screen,
+                // so "call Adnan on Fariin" works before the first call too.
+                .task {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    SiriCalls.askOnce()
+                }
                 .fullScreenCover(isPresented: Binding(get: { chatOffer.screen != nil },
                                                       set: { if !$0 { chatOffer.screen = nil } })) {
                     if let info = chatOffer.screen {
