@@ -16,9 +16,14 @@ enum R2Media {
 
     static func isRef(_ s: String?) -> Bool { s?.hasPrefix("r2:") == true }
 
-    /// Storage path → whether a new upload to it goes to R2 now.
+    /// Storage path → whether a new upload to it goes to R2 now. GROUPS AND CHANNELS ONLY (owner
+    /// 2026-11-12): a 1:1 chat's media is end-to-end encrypted and only held until it is delivered
+    /// (30 days at most), so it stays on Storage. A 1:1 cid is "<uidA>_<uidB>"; a group or channel
+    /// id has no "_".
     static func takes(path: String) -> Bool {
-        uploadsOn && path.hasPrefix("chat/") && !path.hasSuffix("-lp.enc")
+        guard uploadsOn, path.hasPrefix("chat/"), !path.hasSuffix("-lp.enc") else { return false }
+        let cid = path.split(separator: "/").dropFirst().first.map(String.init) ?? ""
+        return !cid.isEmpty && !cid.contains("_")
     }
 
     enum Failure: LocalizedError {
