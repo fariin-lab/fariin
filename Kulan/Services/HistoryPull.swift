@@ -83,6 +83,7 @@ final class HistoryPull {
             // Newest activity first. A chat open on screen waits: its own listener is filing it.
             let next = ConversationsRepository.shared.conversations.filter { c in
                 !c.isChannel && !Conversation.Right.isChannel(c.id) && !c.isPublic
+                    && !DeliveryCursor.staysOnServer(c.id)   // owner 2026-11-12: groups stay on the server
                     && !DemoMode.isDemoConversation(c.id) && marks[c.id] == nil
                     && (restUntil[c.id].map { now >= $0 } ?? true)
                     && !ThreadRepository.isListening(c.id)

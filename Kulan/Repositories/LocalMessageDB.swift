@@ -188,6 +188,8 @@ final class LocalMessageDB {
             DispatchQueue.main.async { done(ok) }
         }
         guard !cid.isEmpty, !uid.isEmpty, ms >= 0 else { finish(false); return }
+        // owner 2026-11-12: a group (or channel) never gets a mark; its history stays on the server.
+        guard !DeliveryCursor.staysOnServer(cid) else { finish(false); return }
         queue.async {
             guard let db = self.handle(uid) else { finish(false); return }
             let sql = """

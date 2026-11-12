@@ -2155,6 +2155,8 @@ final class ThreadRepository {
         }.sorted { $0.ms < $1.ms }
         guard let low = timed.first?.ms, let newest = timed.last?.ms else { return }
         let chat = cid
+        // owner 2026-11-12: groups (and channels) stay on the server: no mark, no cursor.
+        guard !DeliveryCursor.staysOnServer(chat) else { return }
         // ⛔ NO GAP, EVER. The cursor tells the server "every message up to here is on this phone",
         // and the server may delete on it. An open chat holds only its newest window, so it moves the
         // mark (and the cursor) only when that window reaches back to the mark already held. No mark

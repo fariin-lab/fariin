@@ -6,7 +6,7 @@ import FirebaseFirestore
 /// ⛔ INBOX SYNC (owner 2026-11-12, Documents/fariin-plans/2026-11-12-device-storage-plan.md, phase 2,
 /// D1). A chat's messages reached the phone's database only while its ThreadRepository ran, so a
 /// chat nobody opened was never stored and its delivery cursor never moved. This pulls the new
-/// messages of every PRIVATE chat (1:1 and private groups) without opening it, files them in
+/// messages of every 1:1 chat (groups stay on the server, owner 2026-11-12) without opening it, files them in
 /// `LocalMessageDB`, moves `chats.synced_up_to`, and writes the delivery cursor the same way an open
 /// chat does. Channels and public groups are left out: their history stays on the server (D11).
 ///
@@ -80,6 +80,7 @@ final class InboxSync {
         guard Auth.auth().currentUser?.uid == me else { return }
         queue = ConversationsRepository.shared.conversations.compactMap { c -> (conv: Conversation, from: Int64?)? in
             guard !c.isChannel, !Conversation.Right.isChannel(c.id), !c.isPublic,
+                  !DeliveryCursor.staysOnServer(c.id),   // owner 2026-11-12: groups stay on the server
                   !DemoMode.isDemoConversation(c.id), c.updatedAtMillis > 0,
                   c.updatedAtMillis > (pulledAt[c.id] ?? 0),
                   (restUntil[c.id].map { Date() >= $0 } ?? true),
@@ -236,6 +237,14 @@ enum DeliveryCursor {
     /// cursor write goes through `write`, which applies this one helper.
     static func line(forMark mark: Int64) -> Int64 { mark - 1 }
 
+    /// ⛔ GROUPS STAY ON THE SERVER (owner 2026-11-12, reversal of the groups part of the device
+    /// storage plan). Every group, private or public, keeps its history on the server like before, so
+    /// new members and guests can read it: no delivery cursor, no `synced_up_to` mark, never picked by
+    /// InboxSync or HistoryPull. Filing group rows into the local database as a cache is still fine.
+    /// A channel id has no "_" either, so channels are covered too. Only 1:1 chats ("a_b") are kept
+    /// on the phone. The full phone-only groups version is on branch device-storage-full-groups-on-phone.
+    static func staysOnServer(_ cid: String) -> Bool { Crypto.isGroupCid(cid) }
+
     /// ⛔ A MESSAGE THIS PHONE CANNOT KEEP YET (safety review 2026-11-12). No mark may pass it: a
     /// mark one millisecond below it at most, and InboxSync / HistoryPull stop filing there and read
     /// it again later. Not deleted, and either
@@ -339,7 +348,8 @@ enum DeliveryCursor {
 
     /// `ms` is the MARK (newest millisecond filed); what is sent is `line(forMark:)`.
     static func write(cid: String, me: String, ms: Int64) {
-        guard !cid.isEmpty, !me.isEmpty, line(forMark: ms) > 0, !Conversation.Right.isChannel(cid) else { return }
+        guard !cid.isEmpty, !me.isEmpty, line(forMark: ms) > 0, !staysOnServer(cid),
+              !Conversation.Right.isChannel(cid) else { return }
         let key = me + "|" + cid
         lock.lock()
         guard ms > (sent[key] ?? 0) else { lock.unlock(); return }
