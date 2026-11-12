@@ -358,6 +358,9 @@ final class ThreadRepository {
     // saw, so we only rebuild a message when its one mutable field actually changes.
     private var byId: [String: Message] = [:]
     private var rawReactions: [String: String] = [:]   // id -> change signature (reactions + text cipher + edited)
+    /// What this chat last wrote to the phone's database (`LocalMessageDB`, owner 2026-11-12 phase 1),
+    /// so each update files only the messages that are new or changed.
+    @ObservationIgnored private var filedToDB: [String: Message] = [:]
     // Ids the user has just deleted for everyone, whose server write has not come back yet. Applied as
     // an overlay in rebuild() so the bubble reads as deleted immediately; cleared the moment the real
     // tombstone (or the message's removal) arrives. See markDeletedLocally.
@@ -2073,9 +2076,23 @@ final class ThreadRepository {
         }
     }
 
+    /// ⛔ PHASE 1, THE PHONE KEEPS THE HISTORY (owner 2026-11-12, both apps): every message this chat
+    /// shows is filed in the phone's own database. Only new or changed ones are written.
+    private func fileToLocalDB(_ list: [Message]) {
+        guard let me = Auth.auth().currentUser?.uid else { return }
+        // On the chat's first update: what ran out while it was closed leaves the database first.
+        if filedToDB.isEmpty { LocalMessageDB.shared.purgeExpired(uid: me) }
+        let changed = list.filter { filedToDB[$0.id] != $0 }
+        guard !changed.isEmpty else { return }
+        for m in changed { filedToDB[m.id] = m }
+        LocalMessageDB.shared.upsert(cid: cid, uid: me, changed)
+    }
+
     /// Everything due right now: off the screen first, then gone for both people.
     private func burnDue() {
         let now = Date()
+        // A disappearing message leaves the phone's database at the same moment (agreed with Android).
+        if let me = Auth.auth().currentUser?.uid { LocalMessageDB.shared.purgeExpired(uid: me) }
         let due = byId.values.filter { m in m.expiresAt.map { now >= $0 } ?? false }.map(\.id)
         // The redraw happens whether or not the call lands. Hiding is ours and cannot fail; the
         // deleting is the server's and might have to wait for a network.
@@ -2224,6 +2241,7 @@ final class ThreadRepository {
         // read that cache, and showed deleted or stale posts while it froze (audit C9).
         if chMode == .synced, let box = chBox { box.scheduleSave() }
         ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
+        fileToLocalDB(messages)
         refreshItems(reason: reason)
         // The message set just changed, so the next expiry may have too. Cheap: one timer.
         scheduleNextBurn()
@@ -2433,7 +2451,20 @@ final class ThreadRepository {
                     // Not tied to the list landing anything: a page of deleted posts lands nothing.
                     self.topUpIfThin(lastPageAddedRows: addedRows)
                 }
-                guard !needBuild.isEmpty else { finish(); return }
+                // ⛔ PHASE 1 (owner 2026-11-12): when the server could not answer (offline, failed),
+                // the phone's own database fills the older page. Online, the server's copy stays the
+                // authority, so a message deleted there can never come back from an old local copy.
+                // Channels keep reading the server (their history lives there for good).
+                let finishLocal = {
+                    guard !fromServer, !Conversation.Right.isChannel(self.cid),
+                          let me = Auth.auth().currentUser?.uid,
+                          let oldest = self.byId.values.map(\.createdAt).min() else { finish(); return }
+                    LocalMessageDB.shared.older(cid: self.cid, uid: me, before: oldest, limit: self.pageSize) { page in
+                        for m in page where self.byId[m.id] == nil { self.byId[m.id] = m; self.filedToDB[m.id] = m }
+                        finish()
+                    }
+                }
+                guard !needBuild.isEmpty else { finishLocal(); return }
                 // Owner audit 2026-10-06 chat #70: what each entry looked like when this page was
                 // read. The decrypt below is off the main thread, and a live snapshot can land in
                 // between; writing the page's older copy over it reverted a reaction or a delete.
@@ -2452,7 +2483,7 @@ final class ThreadRepository {
                         for (id, m) in built where !liveIds.contains(id) && self.rawReactions[id] == sigsBefore[id] {
                             self.byId[id] = m; self.rawReactions[id] = sigs[id] ?? ""
                         }
-                        finish()
+                        finishLocal()
                     }
                 }
             }

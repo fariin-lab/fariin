@@ -406,6 +406,7 @@ final class Crypto {
         Keychain.delete(Self.legacySkKey)
         Keychain.delete(Self.legacyPkKey)
         Keychain.delete(Self.sinceKeychainKey(uid))
+        LocalMessageDB.shared.wipe(uid: uid)   // the phone's message history goes with the account (2026-11-12)
         wipeIdentity()
     }
 
