@@ -19,6 +19,10 @@ struct KulanApp: App {
                 .progressViewStyle(FariinSpinnerStyle())   // one spinner everywhere (owner 2026-10-31)
                 .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
                 .onOpenURL { url in handleDeepLink(url) }
+                // "Hey Siri, call Eric on Fariin", and Fariin calls tapped in Recents (SiriCalls).
+                .onContinueUserActivity(SiriCalls.activityTypes[0]) { SiriCalls.handle($0) }
+                .onContinueUserActivity(SiriCalls.activityTypes[1]) { SiriCalls.handle($0) }
+                .onContinueUserActivity(SiriCalls.activityTypes[2]) { SiriCalls.handle($0) }
                 // Someone still on one of the removed tri-arrow icons has a name iOS can no longer
                 // resolve — put them back on the default rather than leave them with a broken icon.
                 .task { RetiredAppIcons.resetIfInUse() }

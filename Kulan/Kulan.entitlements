@@ -105,5 +105,10 @@
 	     note at the top of fastlane/Fastfile). force: true then picks it up on the next build. -->
 	<key>com.apple.developer.usernotifications.communication</key>
 	<true/>
+	<!-- SIRI CALLS, owner 2026-11-12 ("Hey Siri, call Eric on Fariin"). The Siri capability was
+	     ticked on the App ID com.kulan.messenger.native in the developer portal the same day, so
+	     fastlane's fresh profile carries it. -->
+	<key>com.apple.developer.siri</key>
+	<true/>
 </dict>
 </plist>

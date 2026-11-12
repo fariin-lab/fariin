@@ -4753,6 +4753,7 @@ final class CallService: NSObject {
     func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false,
                    fromProfile: Bool = false) {
         guard !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
+        SiriCalls.donate(uid: uid, name: name, video: video)   // Siri learns this name (owner 2026-11-12)
         // Owner audit 2026-10-06 #31: the 1-2s `.ended` tail is cosmetic (see observeIncoming), so a
         // call placed inside it takes over instead of being dropped; and a call placed while another
         // is live says so, with the same notice the group-call side already shows, instead of a

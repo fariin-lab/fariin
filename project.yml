@@ -177,7 +177,11 @@ targets:
         # into Communication Notifications (sender photo + app badge) with an INSendMessageIntent.
         # iOS only accepts that intent from an app that declares it here AND carries the
         # com.apple.developer.usernotifications.communication entitlement (Kulan.entitlements).
-        NSUserActivityTypes: [INSendMessageIntent]
+        # SIRI CALLS (owner 2026-11-12): "Hey Siri, call Eric on Fariin" and calls from Recents.
+        # In-app intent handling (AppDelegate handlerFor + SiriCalls); the App ID has Siri on.
+        NSUserActivityTypes: [INSendMessageIntent, INStartCallIntent, INStartAudioCallIntent, INStartVideoCallIntent]
+        INIntentsSupported: [INStartCallIntent]
+        NSSiriUsageDescription: "Siri can start Fariin voice and video calls with the people you call."
         BGTaskSchedulerPermittedIdentifiers: [com.kulan.messenger.native.refresh]
     settings:
       base:

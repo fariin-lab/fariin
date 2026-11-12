@@ -7,6 +7,7 @@ import FirebaseMessaging
 import FirebaseStorage
 import UserNotifications
 import PushKit
+import Intents
 
 // App delegate: configures Firebase, owns the APNs/FCM token handshake, and saves
 // the device's FCM token to users/{uid}/push/tokens so the Cloud Function can push
@@ -22,6 +23,11 @@ import PushKit
 final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNotificationCenterDelegate, PKPushRegistryDelegate {
 
     private var voipRegistry: PKPushRegistry?
+
+    /// Siri asks the app itself to find the person and start a call (SiriCalls).
+    func application(_ application: UIApplication, handlerFor intent: INIntent) -> Any? {
+        intent is INStartCallIntent ? StartCallIntentHandler() : nil
+    }
 
     // Portrait everywhere, except the call screen showing the other person's shared screen
     // (see OrientationLock). Per window: only the call screen's window may turn (1:1 audit #39).
