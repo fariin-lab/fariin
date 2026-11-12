@@ -194,9 +194,9 @@ actor ICloudBackup {
                 let got = try await Task.detached(priority: .utility) { () throws -> (Int, LocalMessageDB.RowLoss) in
                     let read = try BackupArchive.readMessageRows(file, key: archiveKey)
                     let put = LocalMessageDB.shared.insertRows(uid: uid, rows: read.rows)
-                    var lost = read.lost
-                    lost.merge(put.lost)
-                    return (put.written, lost)
+                    var loss = read.lost
+                    loss.merge(put.lost)
+                    return (put.written, loss)
                 }.value
                 filed += got.0
                 lost.merge(got.1)
