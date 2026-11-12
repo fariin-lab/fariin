@@ -16,7 +16,7 @@ permissions:
 jobs:
   testflight:
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 100   # 60 cut three builds off mid-upload on 2026-11-12 (slow runners)
     env:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
