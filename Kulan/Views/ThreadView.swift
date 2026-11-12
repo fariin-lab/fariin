@@ -169,6 +169,8 @@ struct ThreadView: View {
         static func == (a: Self, b: Self) -> Bool { true }
     }
     @HeapState private var quoting: QuoteDraft? = nil
+    /// One send of a channel post's link as a plain link: its post could not be quoted (2026-11-08).
+    @State private var postLinkPlainOnce = false
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
@@ -2302,10 +2304,7 @@ struct ThreadView: View {
                                  onSent: { exitSelection(); showJumpToast($0) })
             }
         }
-        .sheet(item: $sharePost) { m in
-            SendContactSheet(contactText: channelShareLink, forwardMessages: [m], sourceCid: cid,
-                             onSent: { showJumpToast($0) })
-        }
+        .sheet(item: $sharePost) { m in postShareSheet(m) }
         .sheet(isPresented: $showPinnedSheet) {
             PinnedMessagesSheet(
                 // items, not messages — same hidden-filter reason as the pin bar above, and the same
@@ -4611,6 +4610,11 @@ struct ThreadView: View {
                 })
             }
         }
+        if let link = postLink(m) {   // a channel post's own link (owner 2026-11-08)
+            items.append(UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
+                copyPostLink(link)
+            })
+        }
         if savingAllowed, let fav = StickerSend.favoriteTitle(m) {   // 2026-10-17 chat stickers
             items.append(UIAction(title: fav, image: UIImage(systemName: fav.hasPrefix("Remove") ? "star.slash" : "star")) { _ in
                 Task { @MainActor in showJumpToast(await StickerSend.toggleFavorite(m, cid: cid)) }
@@ -4778,6 +4782,16 @@ struct ThreadView: View {
                     setPostReplies(m.id, off: !off)
                 })
             }
+        }
+        // A channel post's own link (owner 2026-11-08): sent to someone, it shows the post.
+        if let link = postLink(m) {
+            out.append(CMAction(title: "Copy Link", icon: "link") {
+                guard let live = repo.items.first(where: { $0.id == m.id }), !live.deleted else {
+                    showJumpToast("That message is no longer available")
+                    return
+                }
+                copyPostLink(link)
+            })
         }
         if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce && savingAllowed {
             out.append(CMAction(title: "Copy", icon: "doc.on.doc", badge: "chatMenu.copy") {
@@ -5171,6 +5185,67 @@ struct ThreadView: View {
         }
     }
 
+    /// A channel post's own link (owner 2026-11-08, `ChannelPostLink`): a delivered post, not a
+    /// service line, not deleted. Nil anywhere else.
+    private func postLink(_ m: Message) -> String? {
+        guard let conv = conversation, conv.isChannel, m.sendState == nil, !m.deleted, !m.isSystem,
+              m.pinNotice == nil, !DemoMode.isDemoConversation(cid) else { return nil }
+        return ChannelPostLink.link(conv, post: m)
+    }
+
+    /// ⛔ THE SHARE ARROW BESIDE A CHANNEL POST SHARES THAT POST (owner 2026-11-12: it shared the
+    /// channel). The same Share with sheet; its Copy Link is the post's own link, and a chat picked
+    /// gets the link with the post's card (the post quoted once, the quote sent to each chat), as
+    /// the reference app does. A post with no link (a demo chat) still forwards as before.
+    @ViewBuilder private func postShareSheet(_ m: Message) -> some View {
+        if let link = postLink(m) {
+            SendContactSheet(contactText: link, sourceCid: cid, postQuote: postQuoteMaker(m),
+                             onSent: { showJumpToast($0) })
+        } else {
+            SendContactSheet(contactText: channelShareLink, forwardMessages: [m], sourceCid: cid,
+                             onSent: { showJumpToast($0) })
+        }
+    }
+
+    /// Starts the quote of a post in this channel and returns its token (`QuoteStore.start`), with
+    /// the picture rule `startQuote` uses: only an older sealed post, only from its author or an admin.
+    private func postQuoteMaker(_ m: Message) -> () -> String {
+        let sealed = [m.enc, m.thumbEnc].compactMap { $0 }.contains { !$0.isPlain } || m.album.contains { !$0.enc.isPlain }
+        let mayPicture = m.authorId == me || conversation.map { $0.isOwner(me) || $0.admins.contains(me) } == true
+        let sendsPicture = sealed && mayPicture
+        let c = cid
+        return { QuoteStore.shared.start(cid: c, mid: m.id) { sendsPicture ? await Self.quotePicture(m) : nil } }
+    }
+
+    private func copyPostLink(_ link: String) {
+        UIPasteboard.general.string = link
+        showJumpToast("Link copied")
+    }
+
+    /// A channel post's link tapped in this chat: the post in its channel. In THIS channel it scrolls
+    /// to the post and flashes it, as a quote of it does.
+    private func openPostLink(_ t: ChannelPostLink.Target) {
+        Task { @MainActor in
+            let here = t.cid == cid
+                || (t.cid == nil && t.name != nil && conversation?.publicName.lowercased() == t.name?.lowercased())
+            if here {
+                // A post number (owner 2026-11-12) is turned into the post's id first.
+                guard let mid = await ChannelPostLink.mid(for: t, cid: cid, local: repo.items) else {
+                    showJumpToast("That post isn't available")
+                    return
+                }
+                if !repo.items.contains(where: { $0.id == mid }) { await repo.ensureLoaded(mid) }
+                guard repo.items.contains(where: { $0.id == mid }) else {
+                    showJumpToast("That post is too far back to show")
+                    return
+                }
+                flashAndScroll(mid)
+                return
+            }
+            if !(await ChannelPostLink.open(t, push: true)) { showJumpToast("Content unavailable") }
+        }
+    }
+
     private func openQuote(_ qid: String) {
         guard let c = QuoteStore.shared.card(qid) else { return }
         // A private channel's post I see only through this chat: no way into the channel.
@@ -5367,6 +5442,15 @@ struct ThreadView: View {
         // exceeded"): resigning the composer here made SwiftUI redraw the whole thread on top of the
         // cell's tap handler (handleTap > openGroupLink > ComposerTextView.resignFirstResponder >
         // nativeList), and the stack ran out. One run-loop turn later the tap has unwound.
+        // A CHANNEL POST'S LINK (owner 2026-11-08): that post in its channel, not the web page.
+        if Flags.groupsEnabled, let post = ChannelPostLink.target(in: url) {
+            DispatchQueue.main.async { [self] in
+                inputFocused = false
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                openPostLink(post)
+            }
+            return true
+        }
         if Flags.groupsEnabled, case .name(let name)? = KulanApp.route(from: url) {
             DispatchQueue.main.async { [self] in
                 inputFocused = false
@@ -8051,6 +8135,14 @@ struct ThreadView: View {
         if LinkPreviewService.firstURL(in: text) != nil || text.range(of: "www.", options: .caseInsensitive) != nil,
            sendHeldBack(.sendLinks, .links) { return }
         if slowModeHeldBack() { return }
+        // A CHANNEL POST'S LINK SHOWS THE POST (owner 2026-11-08): the post is quoted on the way out,
+        // so the bubble carries the quote card (the channel's photo and name, the post's words and
+        // picture), checked by the server for each reader. Not with a reply open (a quote send has none).
+        if !postLinkPlainOnce, replyingTo == nil, editingMessage == nil, Flags.groupsEnabled,
+           !DemoMode.isDemoConversation(cid), let post = ChannelPostLink.first(in: text) {
+            sendPostLink(post, text: text)
+            return
+        }
         // owner 2026-10-27: no vibration when a text message is sent.
         // ⛔ BEFORE THE COMPOSER IS TOUCHED. Everything below shrinks the bar — the input clears,
         // the reply banner animates away — and the list is pinned to the bottom, so it follows the
@@ -8242,6 +8334,36 @@ struct ThreadView: View {
                 quoting = nil
                 showJumpToast("Couldn't quote this post. Try again.")
             }
+        }
+    }
+
+    /// A channel post's link on its way out (owner 2026-11-08): the post is quoted (the server checks
+    /// I may see it and keeps a snapshot), then my words go with the quote, as Quote does. When it
+    /// cannot be quoted (a private channel I am not in, a deleted post, Quotes off, no network) the
+    /// words go as they are, with the channel's own card.
+    private func sendPostLink(_ post: ChannelPostLink.Target, text: String) {
+        input = ""
+        linkDetectTask?.cancel()
+        linkDraft = nil
+        linkLoadingUrl = nil
+        suppressedLinkUrl = nil
+        Task { @MainActor in
+            var quoted: QuoteStore.Made?
+            if let pcid = await ChannelPostLink.cid(for: post),
+               let pmid = await ChannelPostLink.mid(for: post, cid: pcid, local: pcid == cid ? repo.items : []) {
+                let token = QuoteStore.shared.start(cid: pcid, mid: pmid) { nil }
+                quoted = try? await QuoteStore.shared.made(token)
+            }
+            guard let made = quoted else {
+                let typed = input
+                input = text
+                postLinkPlainOnce = true
+                send()
+                postLinkPlainOnce = false
+                input = input.isEmpty ? typed : input + typed
+                return
+            }
+            sendQuote(QuoteDraft(qid: made.qid, card: made.card), text: text, composerCleared: true)
         }
     }
 
