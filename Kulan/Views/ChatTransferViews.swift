@@ -82,21 +82,24 @@ struct ChatTransferPage: View {
 
     private var uid: String { Auth.auth().currentUser?.uid ?? "" }
 
+    /// Which phone the chats go to: only the instructions differ (the code works for both).
+    enum Target: String { case android, iphone }
+    @State private var target = Target.iphone
+    @State private var begun = false
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 18) {
-                header
-                content
+            VStack(spacing: 22) {
+                if begun { steps } else { start }
                 if let problem {
                     Text(problem).font(.subheadline).foregroundStyle(.red).multilineTextAlignment(.center)
                 }
-                Divider().padding(.vertical, 8)
-                receiveRow
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 20)
             .padding(.vertical, 24)
             .frame(maxWidth: .infinity)
         }
+        .safeAreaInset(edge: .bottom) { bottomBar }
         .navigationTitle("Transfer Chats")
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear { stopAll() }
@@ -105,47 +108,183 @@ struct ChatTransferPage: View {
         }
     }
 
-    // MARK: Parts
+    // MARK: Start (owner 2026-11-12: a guided start, not a bare QR button)
 
-    private var header: some View {
-        VStack(spacing: 12) {
-            Image(systemName: stage == .done ? "checkmark" : "iphone.and.arrow.forward")
-                .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(Color.fariinAction)
-                .frame(width: 84, height: 84)
-                .liquidGlass(Circle())
-            Text(stage == .done ? "Done on your new phone" : "Move your chats to a new phone")
-                .font(.title3.weight(.bold)).multilineTextAlignment(.center)
-            Text(stage == .done
-                 ? "Your chats are on your new phone now."
-                 : "Open Fariin on your new phone, sign in, and scan this code. Your chats move directly; the code works for one hour.")
-                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+    private var start: some View {
+        VStack(spacing: 22) {
+            phonesDrawing
+            VStack(spacing: 8) {
+                Text("Move chats to a new phone").font(.title2.weight(.bold)).multilineTextAlignment(.center)
+                Text("Which phone are you moving to?").font(.body).foregroundStyle(.secondary)
+            }
+            VStack(spacing: 12) {
+                choice(.android, title: "Android", detail: "Samsung, Pixel and others", icon: "smartphone")
+                choice(.iphone, title: "iPhone", detail: "Any iPhone", icon: "iphone")
+            }
         }
     }
 
-    @ViewBuilder private var content: some View {
-        switch stage {
-        case .idle, .expired:
+    private var phonesDrawing: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "iphone").font(.system(size: 54, weight: .light))
+            Image(systemName: "arrow.right").font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Color.fariinAction)
+            Image(systemName: "iphone").font(.system(size: 54, weight: .light))
+        }
+        .foregroundStyle(.secondary)
+        .frame(height: 110)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color(.secondarySystemBackground)))
+    }
+
+    private func choice(_ t: Target, title: String, detail: String, icon: String) -> some View {
+        Button { target = t } label: {
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 22)).frame(width: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.body.weight(.semibold))
+                    Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: target == t ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(target == t ? Color.fariinAction : Color.secondary)
+            }
+            .foregroundStyle(.primary)
+            .padding(16)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color(.secondarySystemBackground)))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(target == t ? Color.fariinAction : .clear, lineWidth: 1.5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: The three steps (old phone)
+
+    private enum Mark { case waiting, working, done }
+
+    private var steps: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            step(1, "Getting your chats ready", mark: readyMark, detail: readyDetail)
+            step(2, "Connect your new phone", mark: connectMark, detail: connectDetail)
+            if case .showing(let code, let made) = stage {
+                VStack(spacing: 10) {
+                    qrCard(code)
+                    Text("Works until \(made.addingTimeInterval(ChatTransfer.lifetime).formatted(date: .omitted, time: .shortened))")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.leading, 44).padding(.bottom, 16)
+            }
+            step(3, "Moving chats", mark: movingMark,
+                 detail: stage == .done ? "Your chats are on your new phone." : nil)
             if stage == .expired {
                 Text(ChatTransfer.Failure.expired.errorDescription ?? "")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .padding(.top, 8)
             }
-            pill(stage == .expired ? "Show New QR" : "Show QR") { showQR() }
-        case .preparing:
-            busyRow("Getting your chats ready...")
-        case .uploading(let n, let total):
-            busyRow("Preparing \(n) of \(total)")
-        case .showing(let code, let made):
-            qrCard(code)
-            HStack(spacing: 10) {
-                ProgressView()
-                Text("Waiting for your new phone...").font(.subheadline).foregroundStyle(.secondary)
-            }
-            Text("Works until \(made.addingTimeInterval(ChatTransfer.lifetime).formatted(date: .omitted, time: .shortened))")
-                .font(.footnote).foregroundStyle(.secondary)
-        case .done:
-            EmptyView()
         }
+    }
+
+    private var readyMark: Mark {
+        switch stage {
+        case .preparing, .uploading: return .working
+        case .idle: return .waiting
+        default: return .done
+        }
+    }
+
+    private var readyDetail: String? {
+        if case .uploading(let n, let total) = stage, total > 0 {
+            return "\(Int((Double(n) / Double(total) * 100).rounded()))%"
+        }
+        return nil
+    }
+
+    private var connectMark: Mark {
+        switch stage {
+        case .showing: return .working
+        case .done: return .done
+        default: return .waiting
+        }
+    }
+
+    private var connectDetail: String? {
+        guard case .showing = stage else { return nil }
+        return target == .android
+            ? "On your Android phone, install Fariin from Google Play and sign in. Then open Settings > Chats > Transfer Chats, tap This is my new phone and scan this code."
+            : "On your new iPhone, install Fariin and sign in. Then open Settings > Chats > Transfer Chats, tap This is my new phone and scan this code."
+    }
+
+    private var movingMark: Mark {
+        switch stage {
+        case .done: return .done
+        case .showing: return .working
+        default: return .waiting
+        }
+    }
+
+    private func step(_ n: Int, _ title: String, mark: Mark, detail: String?) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                Circle().fill(mark == .done ? Color.fariinAction : Color(.tertiarySystemFill))
+                switch mark {
+                case .done:
+                    Image(systemName: "checkmark").font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.onFariinAction)
+                case .working:
+                    ProgressView().controlSize(.small)
+                case .waiting:
+                    Text("\(n)").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 30, height: 30)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.body.weight(.semibold))
+                    .foregroundStyle(mark == .waiting ? Color.secondary : Color.primary)
+                if let detail {
+                    Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 12)
+    }
+
+    // MARK: Bottom
+
+    @ViewBuilder private var bottomBar: some View {
+        VStack(spacing: 10) {
+            if !begun {
+                pill("Continue") { begun = true; showQR() }
+                Button("This is my new phone") { receiving = true }
+                    .font(.body.weight(.semibold)).foregroundStyle(Color.fariinAction)
+                    .padding(.vertical, 6)
+            } else if stage == .done {
+                pill("Done") { begun = false; stage = .idle }
+            } else if stage == .expired {
+                pill("Show New Code") { showQR() }
+                outlined("Cancel") { stopAll(); begun = false; stage = .idle }
+            } else {
+                outlined("Cancel") { stopAll(); begun = false; stage = .idle }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
+        .background(Color(.systemBackground).opacity(0.001))
+    }
+
+    private func outlined(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.body.weight(.semibold)).foregroundStyle(.primary)
+                .frame(maxWidth: .infinity).frame(height: 50)
+                .overlay(Capsule().stroke(Color.primary.opacity(0.25), lineWidth: 1))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private func qrCard(_ code: ChatTransfer.Code) -> some View {
@@ -160,19 +299,11 @@ struct ChatTransferPage: View {
                 Color.white
             }
         }
-        .padding(20)
-        .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color.white))
-        .frame(maxWidth: 340)
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.white))
+        .frame(maxWidth: 260)
         .aspectRatio(1, contentMode: .fit)
         .environment(\.colorScheme, .light)
-    }
-
-    private func busyRow(_ text: String) -> some View {
-        HStack(spacing: 10) {
-            ProgressView()
-            Text(text).font(.subheadline).foregroundStyle(.secondary)
-        }
-        .frame(height: 50)
     }
 
     private func pill(_ title: String, action: @escaping () -> Void) -> some View {
@@ -184,20 +315,6 @@ struct ChatTransferPage: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-    }
-
-    private var receiveRow: some View {
-        VStack(spacing: 8) {
-            Button { receiving = true } label: {
-                Label("Receive Chats", systemImage: "qrcode.viewfinder")
-                    .font(.body.weight(.semibold)).foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity).frame(height: 50)
-                    .liquidGlass(Capsule(), interactive: true)
-            }
-            .buttonStyle(.plain)
-            Text("On this phone, scan the code shown on your other phone.")
-                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-        }
     }
 
     // MARK: Work
@@ -323,7 +440,9 @@ struct ChatReceiveView: View {
     private var title: String {
         switch stage {
         case .done: return "Your chats are here"
-        case .working: return "Moving your chats"
+        case .working(let n, let total):
+            if n == 0 { return "Connected to your old phone" }
+            return n >= total ? "Opening chats on this phone" : "Receiving chats"
         default: return startScanning ? "Receive your chats" : "Moving from another phone?"
         }
     }
@@ -331,9 +450,11 @@ struct ChatReceiveView: View {
     private var subtitle: String {
         switch stage {
         case .done(let n): return n == 1 ? "1 message moved." : "\(n.formatted()) messages moved."
-        case .working(let n, let total): return "Receiving \(n) of \(total)"
+        case .working(let n, let total):
+            if n == 0 { return "Getting ready to receive your chats." }
+            return n >= total ? "Almost done." : "\(n) of \(total) parts"
         default:
-            return "On your old phone, open Fariin, go to Settings > Chats > Transfer Chats and tap Show QR. Then scan the code here."
+            return "On your old phone, open Fariin, go to Settings > Chats > Transfer Chats, choose this phone and tap Continue. Then scan the code here."
         }
     }
 
@@ -342,7 +463,7 @@ struct ChatReceiveView: View {
         case .working:
             ProgressView().frame(height: 52)
         case .done:
-            primary("Continue") { onDone() }
+            primary("Done") { onDone() }
         case .ask, .failed:
             primary(stage == .ask ? "Scan QR" : "Scan Again") { scanning = true }
             Button(startScanning ? "Close" : "Not Now") { onDone() }
