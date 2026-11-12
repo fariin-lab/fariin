@@ -163,10 +163,11 @@ final class InboxSync {
         }
         // ⛔ MEDIA FIRST (safety review 2026-11-12, `DeliveryCursor.mediaMissing`): every row is filed,
         // but the mark stops below the oldest filed message whose file is not on this phone yet, and
-        // that file is asked for. The chat rests and is read again from the mark later.
+        // that file is asked for. The chat rests and is read again from the mark later. Only for a
+        // chat with a mark: a first pull vouches for nothing anyway.
         let filedIds = Set(file.map(\.id))
         var heldOnMedia = false
-        if let h = kept.first(where: { filedIds.contains($0.m.id) && DeliveryCursor.mediaMissing($0.m, cid: cid) }) {
+        if from != nil, let h = kept.first(where: { filedIds.contains($0.m.id) && DeliveryCursor.mediaMissing($0.m, cid: cid) }) {
             cap = min(cap, h.ms - 1)
             heldOnMedia = true
             restUntil[cid] = Date().addingTimeInterval(Self.rest)
