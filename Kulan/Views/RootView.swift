@@ -254,6 +254,7 @@ struct RootView: View {
                 // chats are up (launch never waits on the network), and only while this phone's key
                 // has not been checked; the full screen comes only when the backup is another key.
                 .task {
+                    guard KeyBackup.enabled else { return }   // switched off (owner 2026-11-12)
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     if let o = await KeyBackup.backupToOffer() { keyOffer.offer(o.status, asBar: o.asBar); return }
                     // "Keep your messages" (owner 2026-11-12, as Android): 20 s after start, once per

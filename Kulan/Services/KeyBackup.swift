@@ -54,6 +54,10 @@ final class KeyBackupOffer {
 }
 
 enum KeyBackup {
+    /// ⛔ SWITCHED OFF (owner 2026-11-12): Fariin moves to messages kept on the phone, not our server,
+    /// with backups in the person's own iCloud / Google Drive, so the server-held key backup goes.
+    /// Hidden, not deleted (his standing rule): no Settings row, no reminder, no restore offer.
+    static let enabled = false
     static let opsLimit = 3
     static let memLimit = 67_108_864   // 64 MiB
     static let minDigits = 6
