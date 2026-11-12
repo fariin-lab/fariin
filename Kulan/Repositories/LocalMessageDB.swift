@@ -77,6 +77,9 @@ final class LocalMessageDB {
                 sqlite3_step(stmt)
             }
             sqlite3_exec(db, "COMMIT", nil, nil, nil)
+            // D5 (owner 2026-11-12): the chat list's row for this chat follows what was just filed.
+            self.refreshSummary(db, cid: cid, uid: uid)
+            Self.announceSummaries()
         }
     }
 
@@ -90,12 +93,18 @@ final class LocalMessageDB {
     func purgeExpired(uid: String) {
         queue.async {
             guard let db = self.handle(uid) else { return }
+            let now = Self.ms(Date())
+            // D5 (owner 2026-11-12): the chats losing a message get their list row worked out again.
+            let touched = self.cids(db, "SELECT DISTINCT cid FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?", now)
+            guard !touched.isEmpty else { return }
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, "DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?",
                                      -1, &stmt, nil) == SQLITE_OK else { return }
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_int64(stmt, 1, Self.ms(Date()))
+            sqlite3_bind_int64(stmt, 1, now)
             sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+            for cid in touched { self.refreshSummary(db, cid: cid, uid: uid) }
+            Self.announceSummaries()
         }
     }
 
@@ -105,9 +114,12 @@ final class LocalMessageDB {
             guard let db = self.handle(uid) else { return }
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, "DELETE FROM messages WHERE cid = ?", -1, &stmt, nil) == SQLITE_OK else { return }
-            defer { sqlite3_finalize(stmt) }
             Self.bind(stmt, 1, cid)
             sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+            // D5 (owner 2026-11-12): nothing left, so no local preview; the read mark stays.
+            self.refreshSummary(db, cid: cid, uid: uid)
+            Self.announceSummaries()
         }
     }
 
@@ -428,8 +440,13 @@ extension LocalMessageDB {
     /// Restore: the chats rows (INSERT OR REPLACE). Rows without cid are skipped.
     @discardableResult
     func insertChatRows(uid: String, rows: [RawRow]) -> Int {
-        insertRaw(uid: uid, table: "chats", columns: Self.chatColumns,
-                  required: ["cid": .text], defaults: [:], rows: rows)
+        let written = insertRaw(uid: uid, table: "chats", columns: Self.chatColumns,
+                                required: ["cid": .text], defaults: [:], rows: rows)
+        // D5 (owner 2026-11-12): the chats rows are the last thing a restore files; every chat's list
+        // row is worked out again from the messages now here (a row written by the other app or an
+        // older backup does not have to agree with this one).
+        rebuildAllSummaries(uid: uid)
+        return written
     }
 
     private enum RawKind { case text, integer }
@@ -503,4 +520,333 @@ extension LocalMessageDB {
             sqlite3_bind_null(stmt, i)
         }
     }
+}
+
+// MARK: - The chat list's rows from the phone (plan D5)
+
+/// ⛔ D5, THE CHAT LIST FROM THE PHONE (owner 2026-11-12, plan decision D5): a private chat's preview
+/// line, its time and its unread number come from this database, so the server can later stop
+/// keeping previews. The `chats` row of each chat follows its messages:
+/// - `last_id`, `last_at`: the newest message still here (a group skips deleted ones, as the server's
+///   own summary does; a disappearing one that ran out is not counted).
+/// - `unread`: messages from others after my read mark (not notices, calls or pin lines, the same
+///   ones the server leaves out of its count). NULL while this phone has no read mark yet.
+/// - `body`: JSON {text (preview, already decrypted), type, authorId, deleted, readAt}. `readAt` is my
+///   read mark (server ms): reading the chat moves it (`markRead`), never back. Other keys in the body
+///   are kept as they are.
+/// Worked out again after every write that can change it (upsert, purge, clear, read, restore), on
+/// the database queue. Only the overlay in ConversationsRepository reads it; the server's fields
+/// stay the fallback.
+extension LocalMessageDB {
+    /// One chat's list row as this phone sees it.
+    struct Summary: Equatable {
+        let lastId: String
+        /// Server time of the newest message, ms.
+        let lastAt: Double
+        /// nil = no read mark on this phone yet (the server's number is used).
+        let unread: Int?
+        /// The preview line, already decrypted; media in the same words the send path writes.
+        let text: String
+        let type: String
+        let authorId: String
+        let deleted: Bool
+        /// When the newest message runs out (ms), nil = never.
+        let expiresAt: Double?
+        var imageUrl: String? = nil
+        var imageEnc: EncMeta? = nil
+        var images: [Conversation.ListThumb] = []
+
+        /// The line can stand in for the server's: real words, never a sealed or half-open one.
+        var usable: Bool {
+            guard !text.isEmpty, text != "…", text != "🔒", text != "[old message]" else { return false }
+            return !text.hasPrefix("enc:") && !text.hasPrefix("enc1:") && !text.hasPrefix("encg1:")
+        }
+        /// A member's own words in a group (the list puts their name in front), not a notice or a call.
+        var isMemberWords: Bool { !deleted && type != "system" && type != "call" }
+    }
+
+    /// Posted on the main thread after the summaries changed (ConversationsRepository reloads them).
+    static let summariesChanged = Notification.Name("LocalMessageDB.summariesChanged")
+
+    /// Every chat's summary in one read, cid -> Summary. Chats with no message here are left out.
+    /// `done` runs on the main thread.
+    func chatSummaries(uid: String, done: @escaping ([String: Summary]) -> Void) {
+        queue.async {
+            let out = self.readSummaries(uid)
+            DispatchQueue.main.async { done(out) }
+        }
+    }
+
+    /// ⛔ I READ THIS CHAT (owner 2026-11-12): my read mark moves up to the newest message here, or to
+    /// `upTo` (the server's newest time for the chat, ms) when that is later. Never backwards.
+    func markRead(cid: String, uid: String, upTo serverMillis: Double) {
+        guard LocalSummaries.enabled, !cid.isEmpty, !uid.isEmpty else { return }
+        let floor = serverMillis > 0 && serverMillis.isFinite ? Int64(serverMillis.rounded(.up)) : 0
+        queue.async {
+            guard let db = self.handle(uid) else { return }
+            let row = self.chatRow(db, cid: cid)
+            let old = (row.body["readAt"] as? NSNumber)?.int64Value
+            let mark = max(old ?? 0, floor, row.lastAt ?? 0)
+            if let old, old >= mark { return }   // already read that far: no write
+            var body = row.body
+            body["readAt"] = NSNumber(value: mark)
+            self.writeChatBody(db, cid: cid, body: body)
+            self.refreshSummary(db, cid: cid, uid: uid)
+            Self.announceSummaries()
+        }
+    }
+
+    // MARK: Inside (on `queue` only)
+
+    /// Works out `cid`'s chats row again from its messages (see the note on this extension).
+    func refreshSummary(_ db: OpaquePointer, cid: String, uid: String) {
+        guard LocalSummaries.enabled else { return }
+        let group = !cid.contains("_")   // the server's own test (ChatService.summaryOfNewest)
+        let now = Self.ms(Date())
+        let existing = chatRow(db, cid: cid)
+        var body = existing.body
+        let readAt = (body["readAt"] as? NSNumber)?.int64Value
+        for k in ["text", "type", "authorId", "deleted"] { body[k] = nil }
+        var lastId: String?
+        var lastAt: Int64?
+        var stmt: OpaquePointer?
+        let sql = "SELECT id, created_at, sender, type, deleted, body FROM messages WHERE cid = ?1"
+            + " AND (expires_at IS NULL OR expires_at > ?2)" + (group ? " AND deleted = 0" : "")
+            + " ORDER BY created_at DESC LIMIT 1"
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            Self.bind(stmt, 1, cid)
+            sqlite3_bind_int64(stmt, 2, now)
+            if sqlite3_step(stmt) == SQLITE_ROW, let id = Self.column(stmt, 0) {
+                lastId = id
+                lastAt = sqlite3_column_int64(stmt, 1)
+                let type = Self.column(stmt, 3) ?? "text"
+                let deleted = sqlite3_column_int64(stmt, 4) != 0
+                let raw = Self.column(stmt, 5) ?? "{}"
+                let m: Message? = raw == "{}" ? nil
+                    : raw.data(using: .utf8).flatMap { try? Self.decoder.decode(Message.self, from: $0) }
+                body["text"] = Self.previewText(m, type: type, deleted: deleted)
+                body["type"] = type
+                body["authorId"] = Self.column(stmt, 2) ?? ""
+                body["deleted"] = deleted
+            }
+        }
+        sqlite3_finalize(stmt)
+        guard existing.exists || lastId != nil else { return }   // nothing to say about this chat
+        let unread: Int64? = readAt.map { countUnread(db, cid: cid, uid: uid, after: $0, now: now) }
+        let up = """
+            INSERT INTO chats (cid, last_id, last_at, unread, body) VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(cid) DO UPDATE SET last_id = excluded.last_id, last_at = excluded.last_at,
+              unread = excluded.unread, body = excluded.body
+            """
+        var w: OpaquePointer?
+        guard sqlite3_prepare_v2(db, up, -1, &w, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(w) }
+        Self.bind(w, 1, cid)
+        if let lastId { Self.bind(w, 2, lastId) } else { sqlite3_bind_null(w, 2) }
+        if let lastAt { sqlite3_bind_int64(w, 3, lastAt) } else { sqlite3_bind_null(w, 3) }
+        if let unread { sqlite3_bind_int64(w, 4, unread) } else { sqlite3_bind_null(w, 4) }
+        if let s = Self.jsonString(body) { Self.bind(w, 5, s) } else { sqlite3_bind_null(w, 5) }
+        sqlite3_step(w)
+    }
+
+    /// Messages from others after `after` that count as unread (as the server counts: not a notice,
+    /// a call or a pin line). Capped at 1000 rows; the badge never shows more.
+    private func countUnread(_ db: OpaquePointer, cid: String, uid: String, after: Int64, now: Int64) -> Int64 {
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT body FROM messages WHERE cid = ?1 AND created_at > ?2 AND sender IS NOT ?3 AND deleted = 0
+              AND (expires_at IS NULL OR expires_at > ?4) AND (type IS NULL OR type NOT IN ('system', 'call'))
+            LIMIT 1000
+            """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        Self.bind(stmt, 1, cid)
+        sqlite3_bind_int64(stmt, 2, after)
+        Self.bind(stmt, 3, uid)
+        sqlite3_bind_int64(stmt, 4, now)
+        // A pin line is sent without raising the count (ThreadView, countsAsUnread: false).
+        let pin = "\"text\":\"" + Message.pinMarker
+        var n: Int64 = 0
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let b = Self.column(stmt, 0), b.contains(pin) { continue }
+            n += 1
+        }
+        return n
+    }
+
+    /// The chats row of `cid`: whether it exists, its last_at and its body as a dictionary.
+    private func chatRow(_ db: OpaquePointer, cid: String) -> (exists: Bool, lastAt: Int64?, body: [String: Any]) {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT last_at, body FROM chats WHERE cid = ?", -1, &stmt, nil) == SQLITE_OK else {
+            return (false, nil, [:])
+        }
+        defer { sqlite3_finalize(stmt) }
+        Self.bind(stmt, 1, cid)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return (false, nil, [:]) }
+        let lastAt: Int64? = sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 0)
+        return (true, lastAt, Self.jsonObject(Self.column(stmt, 1)))
+    }
+
+    private func writeChatBody(_ db: OpaquePointer, cid: String, body: [String: Any]) {
+        guard let s = Self.jsonString(body) else { return }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "INSERT INTO chats (cid, body) VALUES (?, ?) ON CONFLICT(cid) DO UPDATE SET body = excluded.body",
+                                 -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        Self.bind(stmt, 1, cid)
+        Self.bind(stmt, 2, s)
+        sqlite3_step(stmt)
+    }
+
+    /// The cids one query returns (its one parameter, ?1, is an integer).
+    func cids(_ db: OpaquePointer, _ sql: String, _ value: Int64) -> [String] {
+        var out: [String] = []
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return out }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, value)
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let c = Self.column(stmt, 0) { out.append(c) }
+        }
+        return out
+    }
+
+    /// Every chat with messages here, worked out again (after a restore). Waits for the queue, so
+    /// never call it ON the queue.
+    func rebuildAllSummaries(uid: String) {
+        guard LocalSummaries.enabled, !uid.isEmpty else { return }
+        queue.sync {
+            guard let db = self.handle(uid) else { return }
+            let all = self.cids(db, "SELECT DISTINCT cid FROM messages WHERE ?1 = ?1", 0)
+                + self.cids(db, "SELECT cid FROM chats WHERE last_id IS NOT NULL AND ?1 = ?1", 0)
+            sqlite3_exec(db, "BEGIN", nil, nil, nil)
+            for cid in Set(all) { self.refreshSummary(db, cid: cid, uid: uid) }
+            sqlite3_exec(db, "COMMIT", nil, nil, nil)
+        }
+        Self.announceSummaries()
+    }
+
+    private func readSummaries(_ uid: String) -> [String: Summary] {
+        var out: [String: Summary] = [:]
+        guard LocalSummaries.enabled, let db = handle(uid) else { return out }
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT c.cid, c.last_id, c.last_at, c.unread, c.body, m.body, m.expires_at
+            FROM chats c LEFT JOIN messages m ON m.cid = c.cid AND m.id = c.last_id
+            WHERE c.last_id IS NOT NULL AND c.last_at IS NOT NULL
+            """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return out }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let cid = Self.column(stmt, 0), let lastId = Self.column(stmt, 1) else { continue }
+            let body = Self.jsonObject(Self.column(stmt, 4))
+            // A row this build did not work out (the other app's, a restore not yet rebuilt) is skipped.
+            guard let text = body["text"] as? String else { continue }
+            let type = body["type"] as? String ?? "text"
+            let deleted = (body["deleted"] as? NSNumber)?.boolValue ?? false
+            var s = Summary(
+                lastId: lastId,
+                lastAt: Double(sqlite3_column_int64(stmt, 2)),
+                unread: sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 3)),
+                text: text, type: type,
+                authorId: body["authorId"] as? String ?? "",
+                deleted: deleted,
+                expiresAt: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : Double(sqlite3_column_int64(stmt, 6)))
+            // The list's thumbnail: the same picture the send path puts on the conversation.
+            if !deleted, ["image", "video", "album"].contains(type), let raw = Self.column(stmt, 5), raw != "{}",
+               let data = raw.data(using: .utf8), let m = try? Self.decoder.decode(Message.self, from: data) {
+                Self.fillThumbnail(&s, from: m)
+            }
+            out[cid] = s
+        }
+        return out
+    }
+
+    private static func fillThumbnail(_ s: inout Summary, from m: Message) {
+        switch s.type {
+        case "image":
+            guard !m.viewOnce, let u = m.imageUrl, !u.isEmpty, let e = m.enc else { return }
+            s.imageUrl = u; s.imageEnc = e
+        case "video":
+            guard let u = m.thumbUrl, !u.isEmpty, let e = m.thumbEnc else { return }
+            s.imageUrl = u; s.imageEnc = e
+        case "album":
+            let tiles = m.album.filter { !$0.imageUrl.isEmpty }
+            guard let first = tiles.first(where: { $0.kind == "image" }) ?? tiles.first else { return }
+            s.imageUrl = first.imageUrl; s.imageEnc = first.enc
+            guard tiles.count > 1 else { return }
+            let rest = tiles.filter { $0.imageUrl != first.imageUrl }
+            s.images = ([first] + rest).prefix(3).map { Conversation.ListThumb(url: $0.imageUrl, enc: $0.enc) }
+        default:
+            return
+        }
+    }
+
+    /// The preview line for a message, in the words the send paths write on the conversation
+    /// (ChatService: "📷 Photo", "🎤 Voice message · 0:53", "📞 Missed call", ...). `m` nil = the body
+    /// was emptied (an opened view-once).
+    static func previewText(_ m: Message?, type: String, deleted: Bool) -> String {
+        if deleted { return "This message was deleted" }
+        guard let m else {
+            switch type {
+            case "image": return "View-once photo"
+            case "audio": return "🎤 One-time voice message"
+            default: return ""
+            }
+        }
+        switch type {
+        case "sticker": return StickerSend.label(emoji: m.stickerEmoji)
+        case "image": return m.viewOnce ? "View-once photo" : "📷 Photo"
+        case "album":
+            let videos = m.album.filter { $0.kind == "video" }.count
+            let photos = m.album.count - videos
+            if videos > 0 && photos > 0 { return "🎬 \(m.album.count) Media" }
+            if videos > 0 { return "🎥 \(videos) Video\(videos > 1 ? "s" : "")" }
+            return photos > 1 ? "📷 \(photos) Photos" : "📷 Photo"
+        case "video":
+            guard let d = m.duration, d > 0 else { return "🎥 Video" }
+            return "🎥 Video · " + ChatService.voiceDurationLabel(d)
+        case "audio":
+            if m.viewOnce { return "🎤 One-time voice message" }
+            guard let d = m.duration, d > 0 else { return "🎤 Voice message" }
+            return "🎤 Voice message · " + ChatService.voiceDurationLabel(d)
+        case "file": return "📄 File"
+        case "gif": return "GIF"
+        case "call":
+            // A declined call reads as missed everywhere (owner 2026-08-12).
+            let missed = m.callOutcome == "missed" || m.callOutcome == "declined"
+            if missed { return m.callVideo ? "📹 Missed video call" : "📞 Missed call" }
+            return m.callVideo ? "📹 Video call" : "📞 Call"
+        default:
+            if m.text.isEmpty, m.quoteId != nil { return "Quoted post" }
+            return m.text
+        }
+    }
+
+    static func announceSummaries() {
+        DispatchQueue.main.async { NotificationCenter.default.post(name: summariesChanged, object: nil) }
+    }
+
+    private static func column(_ stmt: OpaquePointer?, _ i: Int32) -> String? {
+        guard let c = sqlite3_column_text(stmt, i) else { return nil }
+        return String(cString: c)
+    }
+
+    private static func jsonObject(_ s: String?) -> [String: Any] {
+        guard let s, let data = s.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return obj
+    }
+
+    private static func jsonString(_ obj: [String: Any]) -> String? {
+        guard JSONSerialization.isValidJSONObject(obj),
+              let data = try? JSONSerialization.data(withJSONObject: obj) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
+/// ⛔ THE D5 SWITCH (owner 2026-11-12): false turns the phone-side chat list rows off at once; every
+/// row, count and badge goes back to the server's fields, and the database stops working them out.
+enum LocalSummaries {
+    static let enabled = true
 }

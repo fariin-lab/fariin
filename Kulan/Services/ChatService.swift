@@ -4356,9 +4356,12 @@ enum ChatService {
         // 2026-09-24 decision D13: opening the chat also clears my Mark as Unread flag. Only when the
         // list shows it set, so the many resets a chat does while open stay the one-field write
         // they were. Writing the count to 0 also retires an old -1 flag.
-        let marked = await MainActor.run {
-            ConversationsRepository.shared.conversations.first { $0.id == cid }?.markedUnread[me] ?? false
+        let (marked, serverAt) = await MainActor.run { () -> (Bool, Double) in
+            let c = ConversationsRepository.shared.conversations.first { $0.id == cid }
+            return (c?.markedUnread[me] ?? false, c?.updatedAtMillis ?? 0)
         }
+        // D5 (owner 2026-11-12): my read mark on this phone, up to everything the server had.
+        LocalMessageDB.shared.markRead(cid: cid, uid: me, upTo: serverAt)
         if marked { update["markedUnread.\(me)"] = FieldValue.delete() }
         try? await db.collection("conversations").document(cid).updateData(update)
     }

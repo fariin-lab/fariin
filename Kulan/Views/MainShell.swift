@@ -112,7 +112,9 @@ struct MainShell: View {
         // muting stops the noise, it does not hide that something arrived, and a row showing an
         // unread badge while the tab above it shows none is the kind of disagreement that reads as
         // a bug (the same rule the blocked-chat audit landed on).
-        return (chatsRepo.conversations + [OfficialChannelStore.shared.listEntry].compactMap { $0 }).filter {
+        // D5 (owner 2026-11-12): a private chat's unread as its row shows it (`shown`).
+        let rows = chatsRepo.conversations.map { chatsRepo.shown($0, me: me) }
+        return (rows + [OfficialChannelStore.shared.listEntry].compactMap { $0 }).filter {
             !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
                 && (Flags.groupsEnabled || !$0.isGroup)   // audit: a hidden legacy group badged a list that refused to show it
                 // A pending request is not in this list any more (see `visible`), so it does not
@@ -2602,6 +2604,9 @@ struct ChatsView: View {
 
     private var chatListTable: some View {
         let split = chatSections
+        // D5 (owner 2026-11-12): read so the table's in-place refresh runs when the phone's own
+        // summaries change (the rows lay them over in `ChatListTable.content(for:)`).
+        _ = repo.localSummaries.isEmpty
         return ChatListTable(
             pinned: split.pinned,
             unpinned: split.rest,
@@ -3807,6 +3812,8 @@ struct ArchivedChatsView: View {
     @FocusState private var archiveSearchFocused: Bool
 
     private var me: String { AuthService.shared.uid ?? "" }
+    /// D5 (owner 2026-11-12): a private chat's row with the phone's own preview, time and unread.
+    private func shownRow(_ c: Conversation) -> Conversation { repo.shown(c, me: me) }
     private var dark: Bool { scheme == .dark }
     /// ⛔ EMPTY ON PURPOSE (owner, 2026-10-11: "archive page never add hidden stories"). Hidden
     /// people's stories live in the Stories tab's Hidden Stories list now, which is also where they
@@ -4242,7 +4249,7 @@ struct ArchivedChatsView: View {
                                                        photo: conv.displayPhoto(me))
                                     if let onOpenChat { onOpenChat(t) } else { path.append(t) }
                                 } label: {
-                                    ChatRow(conv: conv, me: me, dark: dark,
+                                    ChatRow(conv: shownRow(conv), me: me, dark: dark,
                                             draft: Drafts.shared.text(conv.id),
                                             voiceDraftSecs: AudioRecorder.draftIndex[conv.id] ?? 0,
                                             voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
