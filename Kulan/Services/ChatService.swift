@@ -3821,6 +3821,7 @@ enum ChatService {
             // Tombstone path: the marker is there now. Hard-delete path: sweep first, then delete.
             // Best-effort either way: a file that will not go never fails the delete.
             for u in blobs {
+                if R2Media.isRef(u) { try? await R2Media.delete(u); continue }
                 try? await Storage.storage().safeReference(forURL: u)?.delete()
             }
             if !markedDeleted { try await ref.delete() }
@@ -3906,12 +3907,12 @@ enum ChatService {
         guard let d = data else { return [] }
         var out: [String] = []
         for key in ["imageUrl", "videoUrl", "thumbUrl", "audioUrl", "fileUrl"] {
-            if let s = d[key] as? String, s.hasPrefix("http") { out.append(s) }
+            if let s = d[key] as? String, s.hasPrefix("http") || R2Media.isRef(s) { out.append(s) }
         }
         if let album = d["album"] as? [[String: Any]] {
             for it in album {
                 for key in ["imageUrl", "videoUrl"] {
-                    if let s = it[key] as? String, s.hasPrefix("http") { out.append(s) }
+                    if let s = it[key] as? String, s.hasPrefix("http") || R2Media.isRef(s) { out.append(s) }
                 }
             }
         }
@@ -4173,7 +4174,9 @@ enum ChatService {
             // The removed item's own objects (photo, or a video plus its poster) are now orphaned —
             // nothing else would ever delete them. Best effort, after the write lands.
             for key in ["imageUrl", "videoUrl"] {
-                if let s = removed[key] as? String, s.hasPrefix("http") {
+                if let s = removed[key] as? String, R2Media.isRef(s) {
+                    try? await R2Media.delete(s)
+                } else if let s = removed[key] as? String, s.hasPrefix("http") {
                     try? await Storage.storage().safeReference(forURL: s)?.delete()
                 }
             }

@@ -9,8 +9,8 @@ import FirebaseFunctions
 /// everything stays on Firebase Storage, and r2: links (from the other app) are still read.
 ///
 /// Link previews and wallpapers stay on Storage (their rules want https links).
-/// TODO: delete-for-everyone and the cursor delete do not remove R2 objects yet (only Storage);
-/// a `delete` op on mediaSign comes before r2Media is switched on.
+/// Deleting: the author's own delete-for-everyone removes R2 files through `delete` (server checks
+/// the author). TODO: the server's cursor delete and sweeps do not remove R2 objects yet.
 enum R2Media {
     static var uploadsOn: Bool { RemoteFeatures.value("r2Media", default: false) }
 
@@ -69,6 +69,11 @@ enum R2Media {
         if isRef(s) { return try await downloadURL(s) }
         guard let u = URL(string: s) else { throw Failure.badReply }
         return u
+    }
+
+    /// Removes one "r2:" file; the server allows only the message's author.
+    static func delete(_ ref: String) async throws {
+        _ = try await callable.call(["op": "delete", "key": String(ref.dropFirst(3))])
     }
 
     /// Uploads the (already encrypted) bytes to `path` and returns the "r2:" reference to store.
