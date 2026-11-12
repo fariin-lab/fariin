@@ -130,7 +130,8 @@ actor ICloudBackup {
         // 2. The header switches to the new set: from here on, restore reads the new backup.
         try Task.checkCancellation()
         let h = CKRecord(recordType: Self.headerType, recordID: headerID)
-        h["json"] = headerJSON
+        // The live CloudKit schema has `json` as STRING (bytes are refused), so save the text.
+        h["json"] = String(decoding: headerJSON, as: UTF8.self)
         h["set"] = set
         h["names"] = names
         h["made"] = made
@@ -173,7 +174,8 @@ actor ICloudBackup {
 
         try await checkAccount()
         guard let h = try await headerRecord() else { throw Failure.noBackup }
-        guard let json = h["json"] as? Data, let set = h["set"] as? String else { throw Failure.damaged }
+        let json = (h["json"] as? String).map { Data($0.utf8) } ?? (h["json"] as? Data)
+        guard let json, let set = h["set"] as? String else { throw Failure.damaged }
         let header = try BackupArchive.parseHeader(json)
         let archiveKey = try await BackupArchive.unwrap(header, storeKey: BackupStoreKey.get(uid: uid),
                                                         password: password)

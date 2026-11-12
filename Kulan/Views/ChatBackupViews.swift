@@ -317,9 +317,8 @@ final class ChatRestoreOffer {
         // safety review 2026-11-12: InboxSync / HistoryPull start once the restore check is over,
         // however it ends.
         defer { SignInRestoreGate.open() }
-        // Phase 4: "Moving from another phone?" comes first (only with no history here); a finished
-        // transfer sets meta "restored", so the iCloud check below then offers nothing.
-        await ChatTransferFlow.atSignIn()
+        // Owner 2026-11-12: no "Moving from another phone?" screen at launch (it showed to an
+        // existing account right after an update). Transfer lives in Settings > Chats only.
         guard ChatBackup.enabled, let uid = Auth.auth().currentUser?.uid else { return }
         let offer = ChatRestoreOffer.shared
         try? await Task.sleep(nanoseconds: 1_000_000_000)
