@@ -1,6 +1,7 @@
 import Foundation
 import CloudKit
 import Sodium
+import FirebaseAuth
 
 /// CHAT BACKUP TO THE PERSON'S OWN iCLOUD (phase 3, D6 / D13 of the device-storage plan). The archive
 /// (BackupArchive, format v1, same bytes as Android's Google Drive copy) goes to the PRIVATE CloudKit
@@ -65,7 +66,10 @@ actor ICloudBackup {
     private static let zoneName = "FariinBackup"
     private static let fileType = "BackupFile"
     private static let headerType = "BackupHeader"
-    private static let headerRecordName = "header"
+    /// One header PER ACCOUNT (2026-11-12): several Fariin accounts on one iPhone share this iCloud
+    /// zone, and a single "header" let account B's backup replace and delete account A's. The old
+    /// shared "header" (test backups made before this) is never read or deleted again.
+    private static func headerRecordName(_ uid: String) -> String { "header-\(uid)" }
     /// Files per CloudKit request (each at most ~2 MiB).
     private static let batch = 10
 
@@ -77,7 +81,7 @@ actor ICloudBackup {
     private static var container: CKContainer { CKContainer(identifier: containerID) }
     private var database: CKDatabase { Self.container.privateCloudDatabase }
     private var zoneID: CKRecordZone.ID { CKRecordZone.ID(zoneName: Self.zoneName, ownerName: CKCurrentUserDefaultName) }
-    private var headerID: CKRecord.ID { CKRecord.ID(recordName: Self.headerRecordName, zoneID: zoneID) }
+    private func headerID(_ uid: String) -> CKRecord.ID { CKRecord.ID(recordName: Self.headerRecordName(uid), zoneID: zoneID) }
 
     // MARK: - Public
 
@@ -97,7 +101,7 @@ actor ICloudBackup {
         guard let storeKey = BackupStoreKey.getOrCreate(uid: uid),
               let archiveKey = BackupArchive.newKey() else { throw BackupArchive.Failure.crypto }
 
-        let old = try await headerRecord()
+        let old = try await headerRecord(uid: uid)
         try await sweepPending(uid: uid, keep: old.map(Self.recordNames) ?? [])
 
         let made = Int64((Date().timeIntervalSince1970 * 1000).rounded())
@@ -156,7 +160,7 @@ actor ICloudBackup {
 
         // 2. The header switches to the new set: from here on, restore reads the new backup.
         try Task.checkCancellation()
-        let h = CKRecord(recordType: Self.headerType, recordID: headerID)
+        let h = CKRecord(recordType: Self.headerType, recordID: headerID(uid))
         // The live CloudKit schema has `json` as STRING (bytes are refused), so save the text.
         h["json"] = String(decoding: headerJSON, as: UTF8.self)
         h["set"] = set
@@ -180,7 +184,8 @@ actor ICloudBackup {
     func latestBackup() async throws -> Info? {
         guard ChatBackup.enabled else { throw Failure.off }
         try await checkAccount()
-        guard let h = try await headerRecord() else { return nil }
+        guard let uid = Auth.auth().currentUser?.uid,
+              let h = try await headerRecord(uid: uid) else { return nil }
         let made = (h["made"] as? NSNumber)?.int64Value ?? 0
         let size = (h["size"] as? NSNumber)?.int64Value ?? 0
         return Info(made: Date(timeIntervalSince1970: Double(made) / 1000), size: size)
@@ -201,7 +206,7 @@ actor ICloudBackup {
         defer { busy = false }
 
         try await checkAccount()
-        guard let h = try await headerRecord() else { throw Failure.noBackup }
+        guard let h = try await headerRecord(uid: uid) else { throw Failure.noBackup }
         let json = (h["json"] as? String).map { Data($0.utf8) } ?? (h["json"] as? Data)
         guard let json, let set = h["set"] as? String else { throw Failure.damaged }
         let header = try BackupArchive.parseHeader(json)
@@ -284,9 +289,11 @@ actor ICloudBackup {
     }
 
     /// The "header" record, or nil when there is no backup (or no zone yet).
-    private func headerRecord() async throws -> CKRecord? {
+    private func headerRecord(uid: String) async throws -> CKRecord? {
+        guard !uid.isEmpty else { return nil }
+        let id = headerID(uid)
         do {
-            return try await retrying { try await self.database.record(for: self.headerID) }
+            return try await retrying { try await self.database.record(for: id) }
         } catch let e as CKError where e.code == .unknownItem || e.code == .zoneNotFound {
             return nil
         }
