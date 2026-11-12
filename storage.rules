@@ -9,6 +9,13 @@ rules_version = '2';
 // and NEVER a bare `firebase deploy` (see the functions note in the backend memory).
 service firebase.storage {
   match /b/{bucket}/o {
+    // Phone-to-phone chat transfer (device-storage plan phase 4, 2026-11-12): only the account's own
+    // phones, files under 20 MB, swept after an hour by the server. LIVE 2026-11-12 (deployed on top
+    // of the live 2026-10-27 storage ruleset, not this file).
+    match /transfer/{uid}/{tid}/{file} {
+      allow read, write, delete: if request.auth != null && request.auth.uid == uid
+        && (request.resource == null || request.resource.size < 20 * 1024 * 1024);
+    }
 
     // Profile photos: profiles/{uid}.jpg
     match /profiles/{file} {
