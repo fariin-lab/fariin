@@ -41,7 +41,7 @@ struct BackupPinPage: View {
                     HStack { Spacer(); ProgressView(); Spacer() }
                 } else if on == true {
                     if otherKey != nil { Button("Restore Messages") { showRestore = true } }
-                    Button("Change PIN") { makePin = true }
+                    Button("Change PIN") { changePin() }
                     Button("Turn Off", role: .destructive) { confirmOff() }
                         .disabled(working)
                 } else {
@@ -87,6 +87,16 @@ struct BackupPinPage: View {
     private func set(_ value: Bool) {
         on = value
         onChange(value)
+    }
+
+    /// ⛔ WARN BEFORE THE OLDER KEY IS REPLACED (owner 2026-11-12, both apps): while the backup holds
+    /// another key than this phone's, a new PIN saves this phone's key over it, for good.
+    private func changePin() {
+        guard otherKey != nil else { makePin = true; return }
+        GlassConfirmDoor.show(
+            title: "Replace your backup?",
+            message: "Your backup still holds the key to your older messages. A new PIN saves this phone's key instead, and those messages can never be restored. Restore them first if you can.",
+            confirm: "Replace") { makePin = true }
     }
 
     private func confirmOff() {
