@@ -400,6 +400,22 @@ extension LocalMessageDB {
         }
     }
 
+    /// Restore at sign-in (agreed with Android 2026-11-12): does this phone already hold history for
+    /// `uid`? Yes when meta "restored" or "migrated" is set, or any message row is filed. Blocking:
+    /// call it off the main thread.
+    func hasHistory(uid: String) -> Bool {
+        guard !uid.isEmpty else { return false }
+        return queue.sync {
+            guard let db = self.handle(uid) else { return false }
+            var stmt: OpaquePointer?
+            let sql = "SELECT (SELECT COUNT(*) FROM meta WHERE key IN ('restored', 'migrated')) + (SELECT COUNT(*) FROM (SELECT 1 FROM messages LIMIT 1))"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return false }
+            return sqlite3_column_int64(stmt, 0) > 0
+        }
+    }
+
     /// Restore: files backup rows as they are (INSERT OR REPLACE). Rows without cid / id /
     /// created_at are skipped. Returns how many were written.
     @discardableResult
