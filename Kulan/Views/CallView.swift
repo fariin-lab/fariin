@@ -1369,7 +1369,10 @@ struct CallView: View {
     /// The control bar's height: the circle + 12 above and below. Everything that clears the bar
     /// reads this (it was a bare 76, the old 52 pt row + 2 x 12).
     static let barHeight: CGFloat = 80
-    private var controlCount: Int { (call.cameraOn && !myScreenOnCamera) ? 6 : 5 }
+    // ⛔ ALWAYS FIVE (owner 2026-11-12, "why in a video call do the buttons become smaller than in
+    // a voice call"): Flip left this bar on 2026-11-01 (c191d76d3) but the count still said 6 while
+    // my camera was on, so the same five circles shrank to 46 pt in every video call.
+    private var controlCount: Int { 5 }
     private var circleSize: CGFloat { controlCount >= 6 ? 46 : 56 }
 
     private var controlBar: some View {

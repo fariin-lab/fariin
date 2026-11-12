@@ -1017,6 +1017,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var activeMenu: (overlay: CMOverlay, sourceView: UIView, keyboardWasUp: Bool)?
     private weak var activeMenuCell: UICollectionViewCell?   // its touches are cut while the menu is up
     private var squeezeToken = 0
+    /// The pressed row's name, mark, role chip and forwarded line, hidden with its bubble while
+    /// the menu is up (see `setSqueeze`).
+    private var menuRiders: [UIView] = []
     // Route each id was last CONFIGURED with (uikit vs SwiftUI cell). A content change that flips the
     // route needs reloadItems (re-dequeue the other cell class) â€” reconfigureItems reuses the same cell
     // instance, which can't switch renderers.
@@ -6883,21 +6886,47 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         squeezeToken &+= 1
         let token = squeezeToken
         UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
-            src.source.transform = CGAffineTransform(scaleX: 0.95, y: 0.95)
+            self.setSqueeze(src.source, 0.95)
         } completion: { _ in
             let pressStillDown = self.customPress.state == .began || self.customPress.state == .changed
             guard token == self.squeezeToken, pressStillDown, self.activeMenu == nil else {
-                UIView.animate(withDuration: 0.2) { src.source.transform = .identity }
+                UIView.animate(withDuration: 0.2) { self.setSqueeze(src.source, 1) }
                 return
             }
             self.presentCustomMenu(id: id, actions: actions, src: src)
         }
     }
 
+    /// The row's parts drawn over the bubble from outside it (sender name, mark, role chip, forwarded
+    /// line), when `source` is a native row's bubble. Empty for anything else.
+    private func squeezeRiders(of source: UIView) -> [UIView] {
+        var v: UIView? = source.superview
+        while let s = v, !(s is MessageRowCell) { v = s.superview }
+        guard let cell = v as? MessageRowCell, cell.previewBubble === source else { return [] }
+        return cell.liftOverlays
+    }
+
+    /// ⛔ THE NAME SQUEEZES WITH THE POST (owner 2026-11-12, channel quote post: on long-press the
+    /// bubble zoomed out but the channel name above its words stayed full size where it was, hanging
+    /// off the shrunk bubble's corner). The name, mark, role chip and forwarded line are the row's
+    /// own views, not the bubble's children, so the bubble's transform never reached them. Each one
+    /// now scales about the BUBBLE's centre (not its own), so it stays at its place in the bubble.
+    private func setSqueeze(_ source: UIView, _ scale: CGFloat) {
+        source.transform = scale == 1 ? .identity : CGAffineTransform(scaleX: scale, y: scale)
+        guard let parent = source.superview else { return }
+        let c = source.center
+        for v in squeezeRiders(of: source) {
+            guard scale != 1, let vp = v.superview else { v.transform = .identity; continue }
+            let vc = vp.convert(v.center, to: parent)
+            let move = CGPoint(x: (1 - scale) * (c.x - vc.x), y: (1 - scale) * (c.y - vc.y))
+            v.transform = CGAffineTransform(translationX: move.x, y: move.y).scaledBy(x: scale, y: scale)
+        }
+    }
+
     private func presentCustomMenu(id: String, actions: [CMAction],
                                    src: (source: UIView, snapshot: UIView, frame: CGRect)) {
         guard let window = view.window else {
-            UIView.animate(withDuration: 0.2) { src.source.transform = .identity }
+            UIView.animate(withDuration: 0.2) { self.setSqueeze(src.source, 1) }
             return
         }
         // Shadow-friendly wrapper: the overlay shadows the container, the snapshot keeps its alpha.
@@ -6958,8 +6987,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                 alignRight: alignRight, actions: actions, react: react) { [weak self] in
             self?.customMenuDidEnd()
         }
+        // The lifted copy carries the name (addLiftOverlays), so the row's own name goes with the
+        // bubble while the menu is up, and both come back at customMenuDidEnd.
+        menuRiders = squeezeRiders(of: src.source)
         src.source.isHidden = true
-        src.source.transform = .identity
+        setSqueeze(src.source, 1)
+        menuRiders.forEach { $0.isHidden = true }
         activeMenu = (overlay, src.source, keyboardWasUp)
         contextMenuVisible = true
         contextMenuSourceId = id
@@ -7024,6 +7057,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         RxTrace.begin("menu ended y=\(collectionView.contentOffset.y) keyboardWasUp=\(menu.keyboardWasUp)")
         menu.sourceView.isHidden = false
         menu.sourceView.transform = .identity
+        menuRiders.forEach { $0.isHidden = false; $0.transform = .identity }
+        menuRiders = []
         activeMenuCell?.isUserInteractionEnabled = true
         activeMenuCell = nil
         collectionView.panGestureRecognizer.isEnabled = true
