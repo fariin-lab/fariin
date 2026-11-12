@@ -263,7 +263,34 @@ final class MessageRowCell: UICollectionViewCell {
         accessibilityValue = nil
     }
 
+    /// REACT# (owner 2026-11-12: "sometimes the reaction badge comes fast, sometimes late"). From
+    /// the tap to the first redraw of that row with a different number of chips, plus each time the
+    /// list held that row back and why. Test builds only (DiagLog); 15 s window per tap.
+    @MainActor enum ReactDiag {
+        private static var taps: [String: (at: CFTimeInterval, chips: Int?)] = [:]
+        private static func ms(_ t: CFTimeInterval) -> Int { Int((CACurrentMediaTime() - t) * 1000) }
+        static func tap(_ id: String, _ what: String) {
+            taps[id] = (CACurrentMediaTime(), nil)
+            DiagLog.add("REACT# tap \(id.prefix(8)) \(what)")
+        }
+        /// Every redraw of the row in the window whose chip count differs from the last one logged
+        /// (the first one always), so the line where the new chip appears carries its delay.
+        static func drawn(_ id: String, chips: Int) {
+            guard let t = taps[id] else { return }
+            if ms(t.at) > 15_000 { taps[id] = nil; return }
+            guard t.chips != chips else { return }
+            DiagLog.add("REACT# drawn \(id.prefix(8)) +\(ms(t.at))ms chips=\(chips)")
+            taps[id] = (t.at, chips)
+        }
+        static func note(_ id: String, _ what: String) {
+            guard let t = taps[id], ms(t.at) < 15_000 else { return }
+            DiagLog.add("REACT# \(what) \(id.prefix(8)) +\(ms(t.at))ms")
+        }
+        static func watching(_ ids: [String]) -> [String] { ids.filter { taps[$0] != nil } }
+    }
+
     func configure(_ m: MessageRowModel, plan: RowPlan, cid: String) {
+        if case .bubble(let b) = plan.body { ReactDiag.drawn(m.id, chips: b.reactions.count) }
         rowId = m.id
         model = m
         rowView.isHidden = false   // undo `blank()`
