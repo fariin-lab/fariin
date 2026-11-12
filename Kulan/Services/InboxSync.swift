@@ -109,7 +109,11 @@ final class InboxSync {
         let base = FirestoreHub.db.collection("conversations").document(cid).collection("messages")
         let query: Query
         if let from {
-            query = base.whereField("createdAt", isGreaterThan: Self.timestamp(from))
+            // safety review 2026-11-12, the same-millisecond boundary on the read side: from the
+            // mark's own millisecond (`>=`), not past it. A message committed later in that same
+            // millisecond, or cut off by a full page that ended inside it, is read again rather than
+            // skipped for good (filing twice is harmless).
+            query = base.whereField("createdAt", isGreaterThanOrEqualTo: Self.timestamp(from))
                 .order(by: "createdAt").limit(to: Self.pageSize)
         } else {
             query = base.order(by: "createdAt", descending: true).limit(to: Self.firstPull)
@@ -175,7 +179,7 @@ final class InboxSync {
             DeliveryCursor.write(cid: cid, me: me, ms: upTo)
         }
         if stoppedOnKeys { return }
-        if from != nil, docs.count == Self.pageSize {
+        if let from, docs.count == Self.pageSize, upTo > from {
             queue.append((conv: conv, from: upTo))   // more behind this page
         } else {
             pulledAt[cid] = stamp
@@ -206,8 +210,17 @@ enum DeliveryCursor {
     nonisolated(unsafe) private static var waiting: [String: Int64] = [:]
     private static let gap: TimeInterval = 20
 
+    /// ⛔ THE SAME-MILLISECOND LINE (safety review 2026-11-12). The server deletes every message with
+    /// `createdAt < deliveredUpTo + 1 ms`, i.e. up to and including that millisecond. Two messages
+    /// can share our newest millisecond and only one of them be on this phone, so the cursor always
+    /// goes out one millisecond BELOW the mark: whatever shares the mark's millisecond stays on the
+    /// server. The stored mark (`chats.synced_up_to`) stays at the newest millisecond filed. Every
+    /// cursor write goes through `write`, which applies this one helper.
+    static func line(forMark mark: Int64) -> Int64 { mark - 1 }
+
+    /// `ms` is the MARK (newest millisecond filed); what is sent is `line(forMark:)`.
     static func write(cid: String, me: String, ms: Int64) {
-        guard !cid.isEmpty, !me.isEmpty, ms > 0, !Conversation.Right.isChannel(cid) else { return }
+        guard !cid.isEmpty, !me.isEmpty, line(forMark: ms) > 0, !Conversation.Right.isChannel(cid) else { return }
         let key = me + "|" + cid
         lock.lock()
         guard ms > (sent[key] ?? 0) else { lock.unlock(); return }
@@ -230,7 +243,7 @@ enum DeliveryCursor {
         sentAt[key] = Date()
         lock.unlock()
         FirestoreHub.db.collection("conversations").document(cid).collection("cursors").document(me)
-            .setData(["deliveredUpTo": ms, "at": FieldValue.serverTimestamp()]) { err in
+            .setData(["deliveredUpTo": line(forMark: ms), "at": FieldValue.serverTimestamp()]) { err in
                 if let err { debugLog("[cursor] write refused:", err.localizedDescription) }
             }
     }
