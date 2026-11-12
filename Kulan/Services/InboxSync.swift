@@ -64,7 +64,9 @@ final class InboxSync {
     }
 
     private func run() async {
-        guard Self.enabled, UIApplication.shared.applicationState == .active,
+        // safety review 2026-11-12: nothing is filed before the sign-in restore check has decided
+        // (`SignInRestoreGate.open` kicks again).
+        guard Self.enabled, SignInRestoreGate.done, UIApplication.shared.applicationState == .active,
               let me = Auth.auth().currentUser?.uid else { return }
         running = true
         defer {

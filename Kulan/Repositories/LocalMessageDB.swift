@@ -516,18 +516,42 @@ extension LocalMessageDB {
     }
 
     /// Restore at sign-in (agreed with Android 2026-11-12): does this phone already hold history for
-    /// `uid`? Yes when meta "restored" or "migrated" is set, or any message row is filed. Blocking:
-    /// call it off the main thread.
-    func hasHistory(uid: String) -> Bool {
+    /// `uid`? Blocking: call it off the main thread.
+    ///
+    /// ⛔ safety review 2026-11-12: decided on META only, never on message rows: meta "restored" or
+    /// "migrated", "restore.checked" (a backup was already offered here; `includingChecked`), or any
+    /// chat with a synced mark. Message rows arrive on their own minutes after sign-in (InboxSync's
+    /// newest 60, an open chat), and counting them hid the restore offer from a new phone. Asked
+    /// before anything is filed (`SignInRestoreGate`).
+    func hasHistory(uid: String, includingChecked: Bool = true) -> Bool {
         guard !uid.isEmpty else { return false }
         return queue.sync {
             guard let db = self.handle(uid) else { return false }
             var stmt: OpaquePointer?
-            let sql = "SELECT (SELECT COUNT(*) FROM meta WHERE key IN ('restored', 'migrated')) + (SELECT COUNT(*) FROM (SELECT 1 FROM messages LIMIT 1))"
+            let keys = includingChecked ? "'restored', 'migrated', 'restore.checked'" : "'restored', 'migrated'"
+            let sql = "SELECT (SELECT COUNT(*) FROM meta WHERE key IN (\(keys))) + (SELECT COUNT(*) FROM (SELECT 1 FROM chats WHERE synced_up_to IS NOT NULL LIMIT 1))"
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
             guard sqlite3_step(stmt) == SQLITE_ROW else { return false }
             return sqlite3_column_int64(stmt, 0) > 0
+        }
+    }
+
+    /// Does any chat of `uid` have a synced mark (safety review 2026-11-12)? An automatic backup runs
+    /// only then: a phone with no marks holds nothing a backup could vouch for, and its empty or
+    /// partial backup would replace a better one in iCloud. Blocking: call it off the main thread.
+    func hasSyncedMarks(uid: String) -> Bool {
+        guard !uid.isEmpty else { return false }
+        return queue.sync {
+            guard let db = self.handle(uid) else { return false }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT 1 FROM chats WHERE synced_up_to IS NOT NULL LIMIT 1",
+                                     -1, &stmt, nil) == SQLITE_OK else {
+                sqlite3_finalize(stmt)
+                return false
+            }
+            defer { sqlite3_finalize(stmt) }
+            return sqlite3_step(stmt) == SQLITE_ROW
         }
     }
 

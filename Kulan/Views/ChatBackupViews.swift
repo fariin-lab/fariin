@@ -193,7 +193,8 @@ final class ChatBackupRunner {
         task = Task { [weak self] in
             defer { self?.running = false; self?.task = nil }
             if needsHistory {
-                let has = await Task.detached(priority: .utility) { LocalMessageDB.shared.hasHistory(uid: uid) }.value
+                // safety review 2026-11-12: an automatic backup only from a phone with synced marks.
+                let has = await Task.detached(priority: .utility) { LocalMessageDB.shared.hasSyncedMarks(uid: uid) }.value
                 guard has else { return }
             }
             do {
@@ -294,10 +295,27 @@ final class ChatRestoreOffer {
     }
 }
 
+/// ⛔ NOTHING IS FILED BEFORE THE RESTORE QUESTION (safety review 2026-11-12). InboxSync and
+/// HistoryPull wait until the sign-in restore check (transfer, then iCloud) has decided; what they
+/// file would otherwise change the answer. Opened once per launch by `ChatBackupFlow.atSignIn`,
+/// which then kicks InboxSync.
+@MainActor enum SignInRestoreGate {
+    static var done = false
+
+    static func open() {
+        guard !done else { return }
+        done = true
+        InboxSync.shared.kick()
+    }
+}
+
 @MainActor enum ChatBackupFlow {
     /// After sign-in (RootView, once per launch on the main screen). Restore first, then the setup
     /// card, never both on screen. All quiet: an iCloud problem here just asks nothing.
     static func atSignIn() async {
+        // safety review 2026-11-12: InboxSync / HistoryPull start once the restore check is over,
+        // however it ends.
+        defer { SignInRestoreGate.open() }
         // Phase 4: "Moving from another phone?" comes first (only with no history here); a finished
         // transfer sets meta "restored", so the iCloud check below then offers nothing.
         await ChatTransferFlow.atSignIn()
@@ -308,7 +326,10 @@ final class ChatRestoreOffer {
         // C. Rule agreed with Android 2026-11-12: look for a backup only when this phone holds no
         // history for the account; a backup is offered once (meta "restore.checked" = its made),
         // a newer one once more.
-        let hasHistory = await Task.detached(priority: .utility) { LocalMessageDB.shared.hasHistory(uid: uid) }.value
+        // "restore.checked" is compared below (a newer backup is offered once more), so not here.
+        let hasHistory = await Task.detached(priority: .utility) {
+            LocalMessageDB.shared.hasHistory(uid: uid, includingChecked: false)
+        }.value
         let latest: ICloudBackup.Info?
         do { latest = try await ICloudBackup.shared.latestBackup() } catch { return }
         ChatBackupRunner.shared.latest = latest
@@ -331,6 +352,7 @@ final class ChatRestoreOffer {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             if Task.isCancelled { return }
         }
+        SignInRestoreGate.open()   // decided: the setup card below does not hold the filing back
 
         // A. The setup card: once per account, only when nothing was chosen and no backup exists.
         guard ChatBackupPrefs.frequencyChoice == nil, latest == nil else { return }

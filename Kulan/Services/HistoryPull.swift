@@ -51,7 +51,9 @@ final class HistoryPull {
     func start() {
         // One server switch starts both apps' pulls together (config/features.historyPull, agreed with
         // Android 2026-11-12); off until we decide when. Read as of the last launch.
-        guard Self.enabled, RemoteFeatures.value("historyPull", default: false), task == nil else { return }
+        // safety review 2026-11-12: and never before the sign-in restore check has decided.
+        guard Self.enabled, SignInRestoreGate.done, RemoteFeatures.value("historyPull", default: false),
+              task == nil else { return }
         let wait = launched ? Self.againDelay : Self.firstDelay
         launched = true
         task = Task { [weak self] in
