@@ -171,6 +171,21 @@ enum KeyBackup {
         return s
     }
 
+    /// "Keep your messages" (owner 2026-11-12, both apps): once per account on this phone, when it
+    /// has no backup. A backup already there counts as shown; offline asks again next launch.
+    static func shouldNudge() async -> Bool {
+        guard let uid = Auth.auth().currentUser?.uid else { return false }
+        let key = "keyBackup.nudged.\(uid)"
+        guard !UserDefaults.standard.bool(forKey: key), let s = try? await status() else { return false }
+        if s.exists { UserDefaults.standard.set(true, forKey: key); return false }
+        return true
+    }
+
+    static func markNudged() {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        UserDefaults.standard.set(true, forKey: "keyBackup.nudged.\(uid)")
+    }
+
     static func skip(_ s: Status) {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         UserDefaults.standard.set(s.updatedAt, forKey: "keyBackup.skipped.\(uid)")

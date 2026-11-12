@@ -21,6 +21,15 @@ struct RootView: View {
     @State private var routeSeq = 0
     /// The account's Backup PIN holds another key than this phone's (owner 2026-11-12): offered once.
     @State private var restoreOffer: KeyBackup.Status?
+    /// "Set Up" on the Keep your messages alert: the Backup PIN page in a sheet.
+    @State private var showBackupPin = false
+
+    /// Any sheet, cover, alert or system prompt up on the app's window right now.
+    private static var somethingPresented: Bool {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).contains { $0.isKeyWindow && $0.rootViewController?.presentedViewController != nil }
+            || !UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
+    }
     /// When "Agree and continue" was tapped on this install (seconds since 1970), 0 = not yet.
     @AppStorage(FirstRun.termsAgreedAtKey) private var termsAgreedAt: Double = 0
     /// A new account's age question waits until the notifications screen is answered, so two
@@ -242,12 +251,33 @@ struct RootView: View {
                 // has not been checked; the full screen comes only when the backup is another key.
                 .task {
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    if let offer = await KeyBackup.backupToOffer() { restoreOffer = offer }
+                    if let offer = await KeyBackup.backupToOffer() { restoreOffer = offer; return }
+                    // "Keep your messages" (owner 2026-11-12, as Android): 20 s after start, once per
+                    // account, never over another question or screen that is up.
+                    try? await Task.sleep(nanoseconds: 18_500_000_000)
+                    guard restoreOffer == nil, !Self.somethingPresented, await KeyBackup.shouldNudge(),
+                          !Self.somethingPresented else { return }
+                    KeyBackup.markNudged()
+                    GlassConfirmDoor.show(
+                        title: "Keep your messages",
+                        message: "Set a Backup PIN so your older messages come back if you delete Fariin or change phones.",
+                        confirm: "Set Up", cancel: "Not Now", confirmColor: .primary) { showBackupPin = true }
                 }
                 .fullScreenCover(isPresented: Binding(get: { restoreOffer != nil },
                                                       set: { if !$0 { restoreOffer = nil } })) {
                     if let offer = restoreOffer {
                         RestoreMessagesView(status: offer) { restoreOffer = nil }
+                    }
+                }
+                .sheet(isPresented: $showBackupPin) {
+                    NavigationStack {
+                        BackupPinPage()
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) {
+                                    Button { showBackupPin = false } label: { Image(systemName: "xmark") }
+                                        .accessibilityLabel("Close")
+                                }
+                            }
                     }
                 }
             }

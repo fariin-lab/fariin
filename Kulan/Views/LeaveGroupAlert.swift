@@ -156,6 +156,7 @@ struct LeaveGroupAlert: View {
     private static var window: UIWindow?
 
     static func show(title: String, message: String, confirm: String,
+                     cancel: String = "Cancel", confirmColor: Color = .red,
                      onConfirm: @escaping @MainActor () -> Void) {
         guard window == nil, let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
@@ -165,7 +166,8 @@ struct LeaveGroupAlert: View {
         w.backgroundColor = .clear
         let host = UIHostingController(rootView: GlassConfirmAlert(title: title, message: message,
                                                                    confirm: confirm, onConfirm: onConfirm,
-                                                                   onClose: { close() }))
+                                                                   onClose: { close() },
+                                                                   cancel: cancel, confirmColor: confirmColor))
         host.view.backgroundColor = .clear
         w.rootViewController = host
         w.isHidden = false
@@ -184,6 +186,9 @@ struct GlassConfirmAlert: View {
     let confirm: String
     let onConfirm: @MainActor () -> Void
     let onClose: () -> Void
+    /// "Cancel" and a red action by default; a plain question (Backup PIN nudge) passes its own.
+    var cancel: String = "Cancel"
+    var confirmColor: Color = .red
 
     @State private var shown = false
 
@@ -212,11 +217,11 @@ struct GlassConfirmAlert: View {
                 .multilineTextAlignment(.center)
                 .padding(.top, 6).padding(.horizontal, 20)
             VStack(spacing: 8) {
-                button(confirm, color: .red, weight: .semibold) {
+                button(confirm, color: confirmColor, weight: .semibold) {
                     onConfirm()
                     close()
                 }
-                button("Cancel", color: .primary, weight: .regular) { close() }
+                button(cancel, color: .primary, weight: .regular) { close() }
             }
             .padding(.horizontal, 14).padding(.top, 18).padding(.bottom, 14)
         }
