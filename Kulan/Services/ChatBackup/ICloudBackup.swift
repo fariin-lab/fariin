@@ -179,7 +179,7 @@ actor ICloudBackup {
             for name in names {
                 guard let file = files[name] else { throw Failure.damaged }
                 filed += try await Task.detached(priority: .utility) { () throws -> Int in
-                    let rows = try BackupArchive.readRows(file, key: archiveKey)
+                    let rows = try BackupArchive.readMessageRows(file, key: archiveKey)
                     return LocalMessageDB.shared.insertRows(uid: uid, rows: rows)
                 }.value
             }
