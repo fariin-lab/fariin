@@ -43,6 +43,11 @@ final class ConversationsRepository {
         NotificationCenter.default.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { ConversationsRepository.shared.reattachAfterSwap() }
         }
+        // D5 (owner 2026-11-12): the phone's database filed or read something; its rows follow.
+        localSummaryObserver = NotificationCenter.default.addObserver(
+            forName: LocalMessageDB.summariesChanged, object: nil, queue: .main) { _ in
+                ConversationsRepository.shared.scheduleLocalSummaries()
+            }
     }
 
     /// 2026-10-20 (owner): after `FirestoreHub.swapped`. Old handles go to `FirestoreHub.drop` (removed
@@ -96,9 +101,20 @@ final class ConversationsRepository {
                 let cid = c.id
                 Task { await ChatService.repairGroupDeletedPreview(cid: cid) }
             }
+            noteReadsFromServer()   // D5, owner 2026-11-12
         }
     }
     @ObservationIgnored private var repairedPreviews = Set<String>()
+
+    /// ⛔ D5, THE CHAT LIST FROM THE PHONE (owner 2026-11-12): cid -> the phone database's own
+    /// summary of that chat (preview, time, unread). Read by `shown(_:me:)`, which lays it over a
+    /// PRIVATE chat's row; the server's fields stay the fallback. Reloaded 0.5 s after the database
+    /// says it changed, and on `start()`. Observed, so the list and the badges redraw with it.
+    private(set) var localSummaries: [String: LocalMessageDB.Summary] = [:]
+    @ObservationIgnored private var localSummaryPending = false
+    @ObservationIgnored private var localSummaryObserver: NSObjectProtocol?
+    /// cid -> the server time a read seen on the server was mirrored at (so it is asked once).
+    @ObservationIgnored private var mirroredReads: [String: Double] = [:]
     /// Moves on every assignment of `conversations` (perf audit 2026-11-11, S2): the chat list keys
     /// its one filter-and-sort per change on it instead of re-running it on every read. Not observed:
     /// readers read `conversations` itself to subscribe.
@@ -242,6 +258,7 @@ final class ConversationsRepository {
         // to listen to. This is NOT the "Demo chats" switch, which leaves the real listener running
         // and has its rows added in `publish`.
         if DemoMode.active { hasLoaded = true; return }
+        loadLocalSummaries()   // D5 (owner 2026-11-12): the phone's own rows, from the first frames
         // 2026-10-07: coming back to the front re-checks every chat's newest expiry at once, instead
         // of waiting on a timer that could not fire while the app was asleep. One observer for the life
         // of the app; this method runs again on every re-attach.
@@ -1107,11 +1124,107 @@ final class ConversationsRepository {
         lastRaw = []   // 2026-09-24 decision D8
         lastPublished = []; listBurnAsked = [:]   // the old account's expiry timer must not re-publish into the new one
         conversations = []
+        localSummaries = [:]   // D5: the old account's rows
+        mirroredReads = [:]
         hasLoaded = false
         freshAccount = false
         loadFailed = false   // 2026-09-24 audit: belongs to the account that just went away
         // The warm-up listeners belong to an account that just went away.
         Task { @MainActor in ChatHistoryPreloader.shared.stopAll() }
 
+    }
+}
+
+// MARK: - The chat list from the phone (plan D5, owner 2026-11-12)
+//
+// A PRIVATE chat (1:1, private group) shows the phone database's own preview, time and unread count
+// when the phone has that chat's newest message (its time is at or past the server's). Otherwise, and
+// for channels, public groups, the official chat and demo chats, the row is the server's as before.
+// The overlay is applied where a row or a badge is drawn (`shown`), never to `conversations` itself:
+// that array also feeds the disk cache, the widget and the notification names, which must not carry
+// decrypted words.
+extension ConversationsRepository {
+    /// Reload `localSummaries` in 0.5 s (bursts of filing collapse into one read).
+    func scheduleLocalSummaries() {
+        guard LocalSummaries.enabled, !localSummaryPending else { return }
+        localSummaryPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            self.localSummaryPending = false
+            self.loadLocalSummaries()
+        }
+    }
+
+    /// One read of every chat's summary; published only when something changed.
+    func loadLocalSummaries() {
+        guard LocalSummaries.enabled, !DemoMode.active,
+              let uid = Auth.auth().currentUser?.uid, !uid.isEmpty else { return }
+        LocalMessageDB.shared.chatSummaries(uid: uid) { [weak self] all in
+            guard let self, Auth.auth().currentUser?.uid == uid, all != self.localSummaries else { return }
+            self.localSummaries = all
+            self.noteReadsFromServer()
+            // The app icon follows the rows (the Chats tab badge reads `shown` and redraws by itself).
+            MainActor.assumeIsolated { NotificationCleaner.syncBadgeFromList() }
+        }
+    }
+
+    /// The chats D5 covers: private ones. Channels and public groups keep the server's rows.
+    static func takesLocalSummary(_ c: Conversation, me: String) -> Bool {
+        !c.isChannel && !c.isPublic && !c.isFollower(me) && !c.fariinLocked
+            && !OfficialChannel.isOfficial(c.id) && !DemoMode.isDemoConversation(c.id)
+    }
+
+    /// ⛔ THE ROW AS DRAWN (owner 2026-11-12, D5): `c` with the phone's preview, time and unread laid
+    /// over it when they may be. Every filter the row already runs (blocked, cleared, hidden history,
+    /// a message that ran out) still decides: the overlay steps aside for each of them, so the
+    /// server's row and its existing filters handle that chat exactly as before.
+    func shown(_ c: Conversation, me: String) -> Conversation {
+        guard LocalSummaries.enabled, !me.isEmpty, let s = localSummaries[c.id], s.usable,
+              Self.takesLocalSummary(c, me: me), !c.isBlockedByMe(me) else { return c }
+        // 1 ms of slack: the server's time keeps microseconds, the phone's row whole milliseconds.
+        guard s.lastAt + 1 >= c.updatedAtMillis else { return c }   // the server has a newer message
+        guard s.lastAt > (c.clearedAt[me] ?? 0) else { return c }   // cleared for me
+        if let start = c.historyStart(for: me), s.lastAt < start.timeIntervalSince1970 * 1000 { return c }
+        if let e = s.expiresAt, e <= Date().timeIntervalSince1970 * 1000 { return c }   // ran out
+        var o = c
+        o.lastMessageCipher = s.text   // plain words: the row's decrypt passes them through untouched
+        o.lastSender = s.authorId
+        o.updatedAtMillis = max(c.updatedAtMillis, s.lastAt)
+        // A member's words carry their name in a group row (the server's `lastPlainTag` rule).
+        if c.isGroup { o.lastPlainTag = s.isMemberWords ? Conversation.plainTag(s.text) : nil }
+        if let u = s.imageUrl {
+            o.lastImageUrl = u
+            o.lastImageEnc = s.imageEnc
+            o.lastImages = s.images
+        } else if s.lastAt > c.updatedAtMillis + 1 {
+            // The server's picture belongs to an older message.
+            o.lastImageUrl = nil
+            o.lastImageEnc = nil
+            o.lastImages = []
+        }
+        if let n = s.unread, !Self.readOnServer(c, s, me: me), (c.unreadCount[me] ?? 0) >= 0 {
+            o.unreadCount[me] = n   // an old -1 "marked unread" stays as it was
+        }
+        return o
+    }
+
+    /// While the server still counts: it says 0 for a chat whose newest message the phone has, and
+    /// nothing is marked unread by hand. Read on another device, or before this phone kept a read
+    /// mark; `noteReadsFromServer` copies it into the database.
+    private static func readOnServer(_ c: Conversation, _ s: LocalMessageDB.Summary, me: String) -> Bool {
+        c.unreadCount[me] == 0 && !c.manuallyUnread(me) && c.updatedAtMillis + 1 >= s.lastAt
+    }
+
+    /// Copies reads the server knows about into the phone's read marks (once per chat per server
+    /// time). This also gives every chat already read its first read mark.
+    func noteReadsFromServer() {
+        guard LocalSummaries.enabled, !localSummaries.isEmpty,
+              let me = Auth.auth().currentUser?.uid, !me.isEmpty else { return }
+        for c in conversations {
+            guard let s = localSummaries[c.id], s.unread != 0, Self.takesLocalSummary(c, me: me),
+                  Self.readOnServer(c, s, me: me), mirroredReads[c.id] != c.updatedAtMillis else { continue }
+            mirroredReads[c.id] = c.updatedAtMillis
+            LocalMessageDB.shared.markRead(cid: c.id, uid: me, upTo: c.updatedAtMillis)
+        }
     }
 }
