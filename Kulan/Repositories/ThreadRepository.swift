@@ -2104,6 +2104,27 @@ final class ThreadRepository {
         guard !changed.isEmpty else { return }
         for m in changed { filedToDB[m.id] = m }
         LocalMessageDB.shared.upsert(cid: cid, uid: me, changed)
+        writeDeliveryCursor(me: me, filed: list)
+    }
+
+    /// ⛔ PHASE 2 DELIVERY CURSOR (owner 2026-11-12, shared plan D1): "this phone has every message of
+    /// this chat up to here". conversations/{cid}/cursors/{me} = { deliveredUpTo: ms, at: server time };
+    /// the rules only let it move forward. The server deletes what every member has (behind its own
+    /// switch, OFF until both apps ship). At most one write per chat every 20 s, and only forward.
+    /// Channels have no cursor (their history stays on the server for good).
+    @ObservationIgnored private var cursorSent: Int64 = 0
+    @ObservationIgnored private var cursorSentAt = Date.distantPast
+    private func writeDeliveryCursor(me: String, filed: [Message]) {
+        guard !Conversation.Right.isChannel(cid) else { return }
+        guard let newest = filed.filter({ $0.hasServerTime }).map(\.createdAt).max() else { return }
+        let ms = Int64((newest.timeIntervalSince1970 * 1000).rounded(.down))
+        guard ms > cursorSent, Date().timeIntervalSince(cursorSentAt) > 20 else { return }
+        cursorSent = ms
+        cursorSentAt = Date()
+        db.collection("conversations").document(cid).collection("cursors").document(me)
+            .setData(["deliveredUpTo": ms, "at": FieldValue.serverTimestamp()]) { err in
+                if let err { debugLog("[cursor] write refused:", err.localizedDescription) }
+            }
     }
 
     /// Everything due right now: off the screen first, then gone for both people.
