@@ -44,7 +44,9 @@ final class HistoryPull {
     /// Called with every InboxSync kick (list change, app back in front). One run at a time; a run
     /// with nothing left to pull costs two local reads and no server read.
     func start() {
-        guard Self.enabled, task == nil else { return }
+        // One server switch starts both apps' pulls together (config/features.historyPull, agreed with
+        // Android 2026-11-12); off until we decide when. Read as of the last launch.
+        guard Self.enabled, RemoteFeatures.value("historyPull", default: false), task == nil else { return }
         let wait = launched ? Self.againDelay : Self.firstDelay
         launched = true
         task = Task { [weak self] in
