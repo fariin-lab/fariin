@@ -3169,16 +3169,19 @@ struct ChatsView: View {
         // even one whose card was closed before, with Restore leading the row.
         let keyOffer = KeyBackupOffer.shared
         let restore = keyOffer.bar != nil
+        let backupLeads = ChatRestoreOffer.shared.leads   // chat backup circles (2026-11-12)
         ZStack(alignment: .bottom) {
-            if !cards.isEmpty || restore {
+            if !cards.isEmpty || restore || !backupLeads.isEmpty {
                 GetStartedBanner(cards: cards, onTap: openGetStarted, onRemove: { card in
                     withAnimation(.smooth(duration: 0.3)) { getStarted.remove(card, me) }
                 }, onHideAll: {
                     if restore { withAnimation(.smooth(duration: 0.3)) { keyOffer.hideBar() } }
+                    if !backupLeads.isEmpty { withAnimation(.smooth(duration: 0.3)) { ChatRestoreOffer.shared.hideAll() } }
                     if !cards.isEmpty { hideGetStarted() }
                 },
                 onRestore: restore ? { keyOffer.reopen() } : nil,
-                onHideRestore: { withAnimation(.smooth(duration: 0.3)) { keyOffer.hideBar() } })
+                onHideRestore: { withAnimation(.smooth(duration: 0.3)) { keyOffer.hideBar() } },
+                leads: backupLeads)
                 .transition(.opacity.animation(.easeInOut(duration: 0.5)))
             }
             // A stray tap on the X must not lose the card for good (owner 2026-10-19).

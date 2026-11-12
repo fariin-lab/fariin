@@ -21,11 +21,12 @@ struct RootView: View {
     @State private var routeSeq = 0
     /// The account's Backup PIN holds another key than this phone's (owner 2026-11-12): offered once.
     @State private var keyOffer = KeyBackupOffer.shared
+    @State private var chatOffer = ChatRestoreOffer.shared
     /// "Set Up" on the Keep your messages alert: the Backup PIN page in a sheet.
     @State private var showBackupPin = false
 
     /// Any sheet, cover, alert or system prompt up on the app's window right now.
-    private static var somethingPresented: Bool {
+    static var somethingPresented: Bool {
         // ⛔ A CALL IS UP (owner 2026-11-12: "Keep your messages" covered his call screen). The call
         // screen is drawn by CallContainer over the app, not presented, so it is asked for here.
         CallService.shared.state != .idle
@@ -277,6 +278,15 @@ struct RootView: View {
                                                       set: { if !$0 { keyOffer.screen = nil } })) {
                     if let offer = keyOffer.screen {
                         RestoreMessagesView(status: offer) { keyOffer.finished($0, offer) }
+                    }
+                }
+                // ⛔ CHAT BACKUP AFTER SIGN-IN (2026-11-12, flow agreed with Android): restore when
+                // this phone has no history and iCloud holds a backup, then the setup card.
+                .task { await ChatBackupFlow.atSignIn() }
+                .fullScreenCover(isPresented: Binding(get: { chatOffer.screen != nil },
+                                                      set: { if !$0 { chatOffer.screen = nil } })) {
+                    if let info = chatOffer.screen {
+                        ChatRestoreView(info: info) { chatOffer.screen = nil }
                     }
                 }
                 .sheet(isPresented: $showBackupPin) {
