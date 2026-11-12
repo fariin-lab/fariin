@@ -638,13 +638,31 @@ final class ThreadRepository {
             NSLog("[REOPEN] repo seed MISS, reading the disk file")
             #endif
             ThreadMessageCache.shared.loadAsync(cid) { [weak self] cold in
+                guard let self else { return }
+                // ⛔ No warm copy: the phone's own database (owner 2026-11-12, phase 1: a chat opens
+                // from the phone first). Same seed, same rule: the live listener stays the truth.
+                // Never for a channel, which opens from its own store above.
+                guard let cold else { self.seedFromLocalDB(); return }
                 // The live snapshot got here first: it is the truth, the file is only a head start.
-                guard let self, let cold, !self.didInitialLoad, self.messages.isEmpty else { return }
+                guard !self.didInitialLoad, self.messages.isEmpty else { return }
                 #if DEBUG
                 NSLog("[REOPEN] repo seed from DISK rows=%ld", cold.count)
                 #endif
                 self.seed(cold)
             }
+        }
+    }
+
+    /// The newest page from `LocalMessageDB` when neither memory nor the cache file had this chat.
+    private func seedFromLocalDB() {
+        guard !Conversation.Right.isChannel(cid), !didInitialLoad, messages.isEmpty,
+              let me = Auth.auth().currentUser?.uid else { return }
+        LocalMessageDB.shared.newest(cid: cid, uid: me, limit: pageSize) { [weak self] rows in
+            guard let self, !rows.isEmpty, !self.didInitialLoad, self.messages.isEmpty else { return }
+            #if DEBUG
+            NSLog("[REOPEN] repo seed from LOCAL DB rows=%ld", rows.count)
+            #endif
+            self.seed(rows)
         }
     }
 

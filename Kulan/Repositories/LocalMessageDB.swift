@@ -112,29 +112,47 @@ final class LocalMessageDB {
     /// the server's own copy still draws those in phase 1. `done` runs on the main thread.
     func older(cid: String, uid: String, before: Date, limit: Int, done: @escaping ([Message]) -> Void) {
         queue.async {
-            var out: [Message] = []
-            if let db = self.handle(uid) {
-                var stmt: OpaquePointer?
-                let sql = "SELECT body FROM messages WHERE cid = ? AND created_at < ? AND deleted = 0 ORDER BY created_at DESC LIMIT ?"
-                if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
-                    Self.bind(stmt, 1, cid)
-                    sqlite3_bind_int64(stmt, 2, Self.ms(before))
-                    sqlite3_bind_int64(stmt, 3, Int64(limit))
-                    let now = Date()
-                    while sqlite3_step(stmt) == SQLITE_ROW {
-                        guard let c = sqlite3_column_text(stmt, 0) else { continue }
-                        let s = String(cString: c)
-                        guard s != "{}", let data = s.data(using: .utf8),
-                              let m = try? Self.decoder.decode(Message.self, from: data) else { continue }
-                        if let e = m.expiresAt, e <= now { continue }
-                        out.append(m)
-                    }
-                    sqlite3_finalize(stmt)
-                }
-            }
-            let page = Array(out.reversed())
+            let page = self.page(cid: cid, uid: uid, before: before, limit: limit)
             DispatchQueue.main.async { done(page) }
         }
+    }
+
+    /// ⛔ The newest `limit` messages of `cid` (owner 2026-11-12: a chat opens from the phone first,
+    /// then the live listener takes over). Same rules as `older`; `done` runs on the main thread.
+    func newest(cid: String, uid: String, limit: Int, done: @escaping ([Message]) -> Void) {
+        queue.async {
+            let page = self.page(cid: cid, uid: uid, before: nil, limit: limit)
+            DispatchQueue.main.async { done(page) }
+        }
+    }
+
+    /// One page of `cid`, oldest first; `before` nil = the newest rows (on `queue` only).
+    private func page(cid: String, uid: String, before: Date?, limit: Int) -> [Message] {
+        var out: [Message] = []
+        guard let db = handle(uid) else { return out }
+        var stmt: OpaquePointer?
+        let sql = before == nil
+            ? "SELECT body FROM messages WHERE cid = ? AND deleted = 0 ORDER BY created_at DESC LIMIT ?"
+            : "SELECT body FROM messages WHERE cid = ? AND created_at < ? AND deleted = 0 ORDER BY created_at DESC LIMIT ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return out }
+        defer { sqlite3_finalize(stmt) }
+        Self.bind(stmt, 1, cid)
+        if let before {
+            sqlite3_bind_int64(stmt, 2, Self.ms(before))
+            sqlite3_bind_int64(stmt, 3, Int64(limit))
+        } else {
+            sqlite3_bind_int64(stmt, 2, Int64(limit))
+        }
+        let now = Date()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let c = sqlite3_column_text(stmt, 0) else { continue }
+            let s = String(cString: c)
+            guard s != "{}", let data = s.data(using: .utf8),
+                  let m = try? Self.decoder.decode(Message.self, from: data) else { continue }
+            if let e = m.expiresAt, e <= now { continue }
+            out.append(m)
+        }
+        return Array(out.reversed())
     }
 
     // MARK: - The file
