@@ -816,8 +816,8 @@ struct AccountSettingsView: View {
             LogOutSheet(name: profile.me?.name ?? "",
                         handle: profile.me?.handle ?? "",
                         photoUrl: profile.me?.photoUrl,
-                        unsent: SessionWipe.unsentSummary()) {
-                await signOutNow()
+                        unsent: SessionWipe.unsentSummary()) { deleteMessages in
+                await signOutNow(deleteMessages: deleteMessages)
             }
         }
         // Deletion is a PAGE, not a one-tap alert: it names the account, spells out what's lost,
@@ -1088,7 +1088,7 @@ struct AccountSettingsView: View {
     /// No `dismiss()` at the end: popping this page first showed Settings for a moment before the
     /// root swapped to the login screen (owner 2026-11-07). The root's route replaces the whole tab
     /// shell, page and sheet included, so the next thing on screen is the login / account picker.
-    private func signOutNow() async {
+    private func signOutNow(deleteMessages: Bool) async {
         working = true
         await SessionWipe.cleanUpBeforeSignOut()
         // Captured before signOut clears it: whose received media stays on this phone for their
@@ -1096,6 +1096,9 @@ struct AccountSettingsView: View {
         let leaving = Auth.auth().currentUser?.uid
         try? Auth.auth().signOut()
         SessionWipe.wipeAccountData(keepingMediaFor: leaving)   // this account's on-device state must not leak into the next sign-up
+        // ⛔ The phone's message database stays for the account's return (owner 2026-11-12, phase 1),
+        // unless the sheet's "Delete messages from this phone" was switched on.
+        if deleteMessages, let leaving { LocalMessageDB.shared.wipe(uid: leaving) }
         onSignOut()
     }
 }
@@ -1108,12 +1111,15 @@ private struct LogOutSheet: View {
     let photoUrl: String?
     /// Queued messages and drafts on this phone that the log-out wipes, if any.
     let unsent: String?
-    let onConfirm: () async -> Void
+    /// Runs the log-out; true = the phone's message database goes too.
+    let onConfirm: (Bool) async -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var signingOut = false
+    /// "Delete messages from this phone" (owner 2026-11-12): off, the history waits for the return.
+    @State private var deleteMessages = false
     /// First value is a close estimate so the sheet does not open at one height and move.
-    @State private var contentHeight: CGFloat = 330
+    @State private var contentHeight: CGFloat = 400
 
     private var title: String { handle.isEmpty ? "Log out?" : "Log out of @\(handle)?" }
 
@@ -1148,6 +1154,19 @@ private struct LogOutSheet: View {
                     .padding(.top, 6)
             }
 
+            // ⛔ PHASE 1 (owner 2026-11-12): messages live on the phone and stay after a log-out;
+            // the switch below takes them off it as part of this log-out.
+            Text("Your messages stay on this phone after you log out.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 10)
+
+            Toggle("Delete messages from this phone", isOn: $deleteMessages)
+                .font(.subheadline)
+                .tint(.red)
+                .disabled(signingOut)
+                .padding(.top, 14)
+
             Button {
                 guard !signingOut else { return }
                 signingOut = true
@@ -1157,7 +1176,7 @@ private struct LogOutSheet: View {
                 dismiss()
                 Task {
                     try? await Task.sleep(nanoseconds: 350_000_000)   // the sheet's slide down
-                    await onConfirm()
+                    await onConfirm(deleteMessages)
                 }
             } label: {
                 ZStack {

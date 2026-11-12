@@ -157,7 +157,7 @@ final class LocalMessageDB {
 
     // MARK: - The file
 
-    /// Account deletion: this account's history goes with it.
+    /// Account deletion, or Log Out with "Delete messages from this phone": this account's history goes.
     func wipe(uid: String) {
         queue.async {
             if self.openUid == uid { self.close() }
