@@ -37,8 +37,8 @@ actor ICloudBackup {
         var errorDescription: String? {
             switch self {
             case .off: return "Chat backup is not available yet."
-            case .noICloud: return "Fariin can't reach your iCloud"
-            case .full: return "Your iCloud is full"
+            case .noICloud: return "Sign in to iCloud in Settings to back up your chats."
+            case .full: return "Your iCloud storage is full."
             case .noBackup: return "There is no chat backup in your iCloud."
             case .busy: return "A backup is already running."
             case .damaged: return "The backup in your iCloud could not be opened."
@@ -307,7 +307,7 @@ actor ICloudBackup {
     private static func failure(_ e: CKError) -> Failure {
         switch e.code {
         case .quotaExceeded: return .full
-        case .notAuthenticated, .accountTemporarilyUnavailable, .managedAccountRestricted: return .noICloud
+        case .notAuthenticated, .accountTemporarilyUnavailable, .managedAccountRestricted, .permissionFailure: return .noICloud
         default: return .cloud(e.localizedDescription)
         }
     }
