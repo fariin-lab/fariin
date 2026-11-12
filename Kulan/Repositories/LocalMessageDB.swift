@@ -105,7 +105,62 @@ final class LocalMessageDB {
         }
     }
 
+    /// ⛔ INBOX SYNC MARK (owner 2026-11-12, plan phase 2): `chats.synced_up_to` = the server time (ms)
+    /// up to which `InboxSync` has pulled every message of `cid` to this phone. Only that column is
+    /// written (a new chats row gets nothing else), and it never moves backwards.
+    func setSyncedUpTo(cid: String, uid: String, ms: Int64) {
+        guard !cid.isEmpty, !uid.isEmpty, ms > 0 else { return }
+        queue.async {
+            guard let db = self.handle(uid) else { return }
+            let sql = """
+                INSERT INTO chats (cid, synced_up_to) VALUES (?, ?)
+                ON CONFLICT(cid) DO UPDATE SET synced_up_to = excluded.synced_up_to
+                WHERE chats.synced_up_to IS NULL OR chats.synced_up_to < excluded.synced_up_to
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            Self.bind(stmt, 1, cid)
+            sqlite3_bind_int64(stmt, 2, ms)
+            sqlite3_step(stmt)
+        }
+    }
+
     // MARK: - Reading
+
+    /// `chats.synced_up_to` of `cid` (nil = never pulled by InboxSync). `done` runs on the main thread.
+    func syncedUpTo(cid: String, uid: String, done: @escaping (Int64?) -> Void) {
+        queue.async {
+            let value = self.syncedMarks(uid: uid, cid: cid)[cid]
+            DispatchQueue.main.async { done(value) }
+        }
+    }
+
+    /// Every chat's `synced_up_to` in one read (InboxSync picks its chats from this). Main thread.
+    func syncedUpTo(uid: String, done: @escaping ([String: Int64]) -> Void) {
+        queue.async {
+            let marks = self.syncedMarks(uid: uid, cid: nil)
+            DispatchQueue.main.async { done(marks) }
+        }
+    }
+
+    /// cid -> synced_up_to, for one chat or all (on `queue` only). Rows with no mark are left out.
+    private func syncedMarks(uid: String, cid: String?) -> [String: Int64] {
+        var out: [String: Int64] = [:]
+        guard let db = handle(uid) else { return out }
+        var stmt: OpaquePointer?
+        let sql = cid == nil
+            ? "SELECT cid, synced_up_to FROM chats WHERE synced_up_to IS NOT NULL"
+            : "SELECT cid, synced_up_to FROM chats WHERE cid = ? AND synced_up_to IS NOT NULL"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return out }
+        defer { sqlite3_finalize(stmt) }
+        if let cid { Self.bind(stmt, 1, cid) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let c = sqlite3_column_text(stmt, 0) else { continue }
+            out[String(cString: c)] = sqlite3_column_int64(stmt, 1)
+        }
+        return out
+    }
 
     /// Up to `limit` messages of `cid` older than `before` (newest first from the database, handed
     /// back oldest first). Rows whose body no longer opens (deleted, burned view-once) are skipped:
