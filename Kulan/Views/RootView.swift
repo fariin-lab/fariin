@@ -26,7 +26,11 @@ struct RootView: View {
 
     /// Any sheet, cover, alert or system prompt up on the app's window right now.
     private static var somethingPresented: Bool {
-        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        // ⛔ A CALL IS UP (owner 2026-11-12: "Keep your messages" covered his call screen). The call
+        // screen is drawn by CallContainer over the app, not presented, so it is asked for here.
+        CallService.shared.state != .idle
+            || GroupCallService.shared.isActive || GroupCallService.shared.connecting
+            || UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows).contains { $0.isKeyWindow && $0.rootViewController?.presentedViewController != nil }
             || !UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
     }
