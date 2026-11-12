@@ -213,6 +213,12 @@ struct SettingsView: View {
                         // settings row wants the outline.
                         SettingsRowLabel("Chats", "ic_settings_chats")
                     }
+                    // Owner 2026-11-12: Chat Backup is its own row here, not inside Chats.
+                    if ChatBackup.enabled {
+                        NavigationLink { ChatBackupPage().toolbar(.hidden, for: .tabBar) } label: {
+                            SettingsRowLabel("Chat Backup", system: "icloud")
+                        }
+                    }
                     NavigationLink { StorySettingsView().toolbar(.hidden, for: .tabBar) } label: {
                         // ⛔ HIS NEW MARK, OUTLINE WEIGHT — owner, 2026-09-11, with the SVG. It is
                         // the same drawing the tab bar now fills, and the pair is the app's usual

@@ -112,20 +112,13 @@ struct ChatsSettingsView: View {
                 Text("When someone uses your Chat Key to message you, the chat goes to Archived, muted.")
             }
 
-            // Chat Backup (owner 2026-11-12, device-storage plan phase 3) and Transfer Chats (phase 4).
-            // Each hidden until it is ready.
-            if ChatBackup.enabled || ChatTransfer.enabled {
+            // Transfer Chats (device-storage plan phase 4). Chat Backup moved to its own row in
+            // Settings (owner 2026-11-12).
+            if ChatTransfer.enabled {
                 Section {
-                    if ChatBackup.enabled {
-                        NavigationLink { ChatBackupPage() } label: { Text("Chat Backup") }
-                    }
-                    if ChatTransfer.enabled {
-                        NavigationLink { ChatTransferPage() } label: { Text("Transfer Chats") }
-                    }
+                    NavigationLink { ChatTransferPage() } label: { Text("Transfer Chats") }
                 } footer: {
-                    Text(ChatBackup.enabled
-                         ? "Back up your chats to your own iCloud, locked so only you can open them."
-                         : "Move your chats to a new phone with a QR code.")
+                    Text("Move your chats to a new phone with a QR code.")
                 }
             }
 

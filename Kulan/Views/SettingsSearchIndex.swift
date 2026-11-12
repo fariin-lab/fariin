@@ -94,6 +94,9 @@ enum SettingsIndex {
             AppearanceSettingsView()
         }
         card(chats, "ic_settings_chats", "chats messages save to photos camera roll history") { ChatsSettingsView() }
+        if ChatBackup.enabled {
+            card("Chat Backup", "icloud", system: true, "chat backup icloud restore password videos") { ChatBackupPage() }
+        }
         card(stories, "ic_stories_stack", "stories status story audience who can see") { StorySettingsView() }
         card(privacy, "ic_privacy", "privacy security who can see last seen blocked app lock") { PrivacySettingsView() }
         card(storage, "externaldrive", system: true, "storage data cache download network usage media") { StorageDataView() }
