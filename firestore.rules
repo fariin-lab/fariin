@@ -1431,6 +1431,18 @@ service cloud.firestore {
 
     // A conversation belongs to exactly two users.
     match /conversations/{cid} {
+      // Delivery cursors (device-storage plan phase 2): one per member, only moving forward.
+      match /cursors/{uid} {
+        allow read: if request.auth != null && request.auth.uid in convData().users;
+        allow create, update: if request.auth != null && request.auth.uid == uid
+          && request.auth.uid in convData().users
+          && request.resource.data.keys().hasOnly(['deliveredUpTo', 'at'])
+          && request.resource.data.deliveredUpTo is int
+          && request.resource.data.deliveredUpTo <= request.time.toMillis() + 60000
+          && request.resource.data.at == request.time
+          && (resource == null || request.resource.data.deliveredUpTo >= resource.data.deliveredUpTo);
+        allow delete: if false;
+      }
       // 2026-09-24 fix-all: GUARDED BY exists(), the file's own idiom. A bare `get` of a conversation
       // deleted mid-flight (a declined request while a queued send or an open listener is still on
       // its messages) ERRORED instead of answering. A missing conversation now reads as one with no
