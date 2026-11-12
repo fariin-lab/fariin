@@ -193,6 +193,11 @@ targets:
             INAlternativeAppNamePronunciationHint: fa ree in
           - INAlternativeAppName: Fereen
             INAlternativeAppNamePronunciationHint: feh reen
+          # Arabic and Spanish (owner 2026-11-12): how Fariin is written / said there.
+          - INAlternativeAppName: فرين
+            INAlternativeAppNamePronunciationHint: فرين
+          - INAlternativeAppName: Farín
+            INAlternativeAppNamePronunciationHint: fa rín
         BGTaskSchedulerPermittedIdentifiers: [com.kulan.messenger.native.refresh]
     settings:
       base:
