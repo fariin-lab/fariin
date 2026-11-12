@@ -165,6 +165,17 @@ struct KulanApp: App {
                 guard AuthService.shared.uid != nil else { return }
                 _ = await StoryDoor.openLink(storyId: id, handle: handle)
             }
+        case .post(let name, let cid, let mid):
+            // A channel post's link (owner 2026-11-08): the channel, at that post. Waits for a
+            // session like a story link.
+            guard Flags.groupsEnabled else { return }
+            Task { @MainActor in
+                for _ in 0..<40 where AuthService.shared.uid == nil {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                }
+                guard AuthService.shared.uid != nil, !DemoMode.active else { return }
+                _ = await ChannelPostLink.open(ChannelPostLink.Target(name: name, cid: cid, mid: mid), push: false)
+            }
         }
     }
 
@@ -216,7 +227,9 @@ struct KulanApp: App {
     /// neither is done. Parsed now so a link shared today is a link the app already understands the
     /// day those two land, rather than one it has to be taught to recognise afterwards.
     /// `name`: a bare fariin.com/<name> (2026-10-19 groups v2), a person's or a public group's @name.
-    enum DeepLink: Equatable { case user(String), group(String), story(String, handle: String?), call(key: String), name(String), adminInvite(String), widgetChat(String), widgetStory(String), widgetAddStory }
+    /// `post`: a channel post (2026-11-08), fariin.com/<name>/<id> for a public channel or
+    /// fariin.com/c/<cid>/<id> for a private one (see `ChannelPostLink`).
+    enum DeepLink: Equatable { case user(String), group(String), story(String, handle: String?), call(key: String), name(String), adminInvite(String), widgetChat(String), widgetStory(String), widgetAddStory, post(name: String?, cid: String?, mid: String) }
 
     /// The web host every shared link points at. One constant, because the entitlement, the
     /// apple-app-site-association file on fariin.com and the parser below must all name the same
@@ -329,6 +342,23 @@ struct KulanApp: App {
                 let h = parts[0], id = parts[2]
                 guard Self.safeSegment(h), Self.safeSegment(id) else { return nil }
                 return .story(StoryLinkId.full(id), handle: h)
+            }
+            // A private channel's post link: /c/<cid>/<post id> (2026-11-08). Opens for its members.
+            if parts.count == 3, parts[0] == "c" {
+                let c = parts[1], m = parts[2]
+                guard Self.safeSegment(c), Self.safeSegment(m),
+                      m.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil else { return nil }
+                return .post(name: nil, cid: c, mid: m)
+            }
+            // A public channel's post link: /<name>/<post id> (2026-11-08). Not one of the site's own
+            // two-part paths (/u/, /g/, /a/, /s/ and the rest), which are read below.
+            if parts.count == 2 {
+                let n = parts[0], m = parts[1]
+                if n.range(of: "^[A-Za-z0-9_]{1,30}$", options: .regularExpression) != nil,
+                   !Self.sitePages.contains(n.lowercased()), n.lowercased() != "a", n.lowercased() != "c",
+                   Self.safeSegment(m), m.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil {
+                    return .post(name: n, cid: nil, mid: m)
+                }
             }
             // A public link, /<name> (2026-10-19 groups v2): only the shape a name can have, so the
             // site's own pages never read as one. 1 to 30 since 2026-10-26: the admin panel gives

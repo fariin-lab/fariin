@@ -45,7 +45,9 @@ final class CallPiPController: NSObject {
         super.init()
         let nc = NotificationCenter.default
         nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self, self.controller != nil else { return }
+            guard let self else { return }
+            self.logState("resign")
+            guard self.controller != nil else { return }
             self.attachFrames()
         }
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -54,12 +56,38 @@ final class CallPiPController: NSObject {
         // 1:1 audit r2 I7/J6, 2026-10-08: in the background with no PiP window up or starting (screen
         // locked, PiP off in Settings), nobody can see these frames; stop converting them.
         nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.logState("background")
             guard let self, !self.isSystemPiPActive, !self.pipStarting else { return }
             self.detachFrames()
         }
     }
 
     var isSupported: Bool { AVPictureInPictureController.isPictureInPictureSupported() }
+
+    /// PIP# (owner 2026-11-12: on a video call, swiping home showed no floating window). One line
+    /// with everything iOS weighs before it opens the window by itself: a controller, "possible",
+    /// auto-start, and a source view that is in a window, shown and sized. Read with read-diag.
+    private func logState(_ at: String) {
+        let call = CallService.shared
+        guard call.state != .idle, call.state != .ended else { return }
+        var line = "PIP# \(at) state=\(call.state) video=\(call.isVideoCall) supported=\(isSupported)"
+        if let c = controller {
+            line += " possible=\(c.isPictureInPicturePossible) active=\(c.isPictureInPictureActive)"
+            line += " auto=\(c.canStartPictureInPictureAutomaticallyFromInline)"
+        } else {
+            line += " controller=nil"
+        }
+        if let v = sourceView {
+            let r = v.window.map { v.convert(v.bounds, to: $0) } ?? .zero
+            line += " src win=\(v.window != nil) hidden=\(v.isHidden) alpha=\(v.alpha)"
+            line += " rect=\(Int(r.minX)),\(Int(r.minY)),\(Int(r.width))x\(Int(r.height))"
+            line += " winLevel=\(v.window?.windowLevel.rawValue ?? -1) key=\(v.window?.isKeyWindow ?? false)"
+        } else {
+            line += " src=nil"
+        }
+        line += " pending=\(pendingSource != nil) audio=\(AVAudioSession.sharedInstance().category.rawValue)"
+        DiagLog.add(line)
+    }
 
     // Idempotent: builds the controller once for a given source view, then just (re)binds the feeds.
     func configure(sourceView: UIView, feeds: CallService.PiPFeeds) {
@@ -439,6 +467,7 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
     /// M-054: the window is about to open; make sure its frames are flowing (normally already done at
     /// resign-active, this covers a start that comes some other way).
     func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
+        DiagLog.add("PIP# willStart current=\(controller === self.controller)")
         guard controller === self.controller else { return }   // 1:1 audit r3 H5: an ended call's
         pipStarting = true   // r2 I7
         attachFrames()
@@ -446,6 +475,7 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
 
     func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
         // 1:1 audit r3 H5, 2026-10-08: a window that finished opening after its call ended goes.
+        DiagLog.add("PIP# didStart current=\(controller === self.controller)")
         guard controller === self.controller else { controller.stopPictureInPicture(); return }
         pipStarting = false
         startRefresh()   // r2 I4
@@ -455,6 +485,8 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     failedToStartPictureInPictureWithError error: Error) {
         debugLog("[PiP] failed to start: \(error.localizedDescription)")
+        let ns = error as NSError
+        DiagLog.add("PIP# failed \(ns.domain) \(ns.code) \(ns.localizedDescription)")
         guard controller === self.controller else {   // r3 H5
             if controller === retiring { retiring = nil }
             return
