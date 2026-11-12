@@ -442,6 +442,7 @@ struct RootView: View {
                 if lockEnabled, lockDelay == 0 { locked = true }   // immediate lock
             }
             if new == .active {
+                ChatBackupScheduler.runIfDue()   // daily chat backup on Wi-Fi (switched off until ready)
                 // Re-lock only if Fariin was in the background longer than the grace period.
                 if lockEnabled, !locked, let t = backgroundedAt,
                    lockDelay > 0, Date().timeIntervalSince(t) >= Double(lockDelay) {

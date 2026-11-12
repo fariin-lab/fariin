@@ -112,6 +112,15 @@ struct ChatsSettingsView: View {
                 Text("When someone uses your Chat Key to message you, the chat goes to Archived, muted.")
             }
 
+            // Chat Backup (owner 2026-11-12, device-storage plan phase 3). Hidden until it is ready.
+            if ChatBackup.enabled {
+                Section {
+                    NavigationLink { ChatBackupPage() } label: { Text("Chat Backup") }
+                } footer: {
+                    Text("Back up your chats to your own iCloud, locked so only you can open them.")
+                }
+            }
+
             Section {
                 Button(role: .destructive) { confirmClear = true } label: {
                     HStack {
