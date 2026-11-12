@@ -79,6 +79,9 @@ final class MediaDownloads {
         var task: URLSessionDownloadTask?
         var resumeData: Data?
         var attempts = 0
+        /// An "r2:" job's presigned link (R2Media), asked for once per start.
+        var signed: URL?
+        var signing = false
         /// Downloads that arrived whole but would not decrypt or store. See `didComplete`.
         var finishFailures = 0
         /// The last failure was the bytes not opening, not the network. The network-back and
@@ -364,7 +367,26 @@ final class MediaDownloads {
 
     private func start(_ job: Job) {
         pending.removeAll { $0 == job.url }
-        guard let u = URL(string: job.url) else { finishJob(job, .failed(permanent: true)); return }
+        // R2 (2026-11-12): "r2:" is not a web address. Ask the server for a short link first, then
+        // start again with it. A presigned link expires, so an r2 job never resumes old bytes.
+        if R2Media.isRef(job.url), job.signed == nil {
+            guard !job.signing else { return }
+            job.signing = true
+            Task { @MainActor [weak self] in
+                let link = try? await R2Media.downloadURL(job.url)
+                job.signing = false
+                guard let self, self.jobs[job.url] === job, job.task == nil else { return }
+                guard let link else { self.finishJob(job, .failed(permanent: false)); return }
+                job.signed = link
+                job.resumeData = nil
+                self.removeResume(job.url)
+                self.start(job)
+            }
+            return
+        }
+        let signedLink = job.signed
+        job.signed = nil   // the next start asks again (it may have expired by then)
+        guard let u = signedLink ?? URL(string: job.url) else { finishJob(job, .failed(permanent: true)); return }
         // The phone is too full (owner 2026-10-27, `LowStorage`): held for a tap instead of failing
         // half-way; a tapped one says why.
         let size = job.total ?? knownSizes[job.url]
@@ -375,7 +397,7 @@ final class MediaDownloads {
             if job.priority == .user { LowStorage.warnForDownload() }
             return
         }
-        if job.resumeData == nil { job.resumeData = loadResume(job.url) }
+        if job.resumeData == nil, signedLink == nil { job.resumeData = loadResume(job.url) }
         let task: URLSessionDownloadTask
         if let data = job.resumeData {
             task = session.downloadTask(withResumeData: data)

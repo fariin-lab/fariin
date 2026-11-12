@@ -324,6 +324,14 @@ enum ChatService {
                     // trying harder. It is new code on the path every photo, video, voice note and
                     // document takes, and it could not be compiled or run where it was written, so
                     // it is opt-in until a real phone has proved it. Settings → Storage and Data.
+                    // Chat media to Cloudflare R2 while config/features.r2Media is on (R2Media).
+                    // TODO: no progress ring and no background resume on this path yet; a killed
+                    // upload is finished on Storage by the pending-upload record, which still works.
+                    if R2Media.takes(path: path) {
+                        let url = try await R2Media.upload(bytes, path: path, contentType: contentType)
+                        trace?.set { $0.url = Date() }
+                        return url
+                    }
                     if UploadEngine.backgroundEnabled {
                         let url = try await BackgroundUploader.shared.upload(file: tmp, to: path,
                                                                              contentType: contentType,
