@@ -1545,6 +1545,13 @@ struct PrivacySettingsView: View {
                 Text("Automatically delete messages for everyone after a period of time in all new chats you start.")
             }
 
+            // Backup PIN (owner 2026-11-12, both apps): its own section, above App Lock.
+            Section {
+                BackupPinRow()
+            } footer: {
+                Text("Bring your older messages back if you delete Fariin or change phones.")
+            }
+
             Section {
                 NavigationLink { AppLockPage() } label: { Text("App Lock").newBadge("privacy.appLock") }
             } footer: {

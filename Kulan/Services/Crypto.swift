@@ -22,6 +22,7 @@
 
 import Foundation
 import Security
+import CryptoKit
 import Sodium
 import FirebaseFirestore
 import FirebaseAuth
@@ -406,6 +407,51 @@ final class Crypto {
         Keychain.delete(Self.legacyPkKey)
         Keychain.delete(Self.sinceKeychainKey(uid))
         wipeIdentity()
+    }
+
+    // MARK: - Backup PIN (owner 2026-11-12, same format as Android, see KeyBackup.swift)
+
+    /// This account's keypair and when it was made (ms, 0 unknown), for a Backup PIN save.
+    func identityForBackup() async -> (sk: Bytes, pk: Bytes, madeMs: Int64)? {
+        do { try await ensureReady() } catch { return nil }
+        guard let pair = lock.withLock({ () -> (Bytes, Bytes)? in
+            guard let sk = mySecretKey, let pk = myPublicKey else { return nil }
+            return (sk, pk)
+        }) else { return nil }
+        let made = keysHeldSince().map { Int64(($0.timeIntervalSince1970 * 1000).rounded()) } ?? 0
+        return (pair.0, pair.1, made)
+    }
+
+    /// A keypair brought back by the Backup PIN becomes this account's key on this phone. Checked
+    /// first (the public half must come from the secret half), stored in the Keychain, dated with
+    /// when it was first made (0 = nothing counts as "from before this device"), published again,
+    /// and every cached lock forgotten, so old messages open at once without a restart.
+    func adoptRestoredIdentity(sk: Bytes, pk: Bytes, madeMs: Int64) throws {
+        guard let uid = currentUid() else {
+            throw NSError(domain: "Crypto", code: 20, userInfo: [NSLocalizedDescriptionKey: "Not signed in."])
+        }
+        guard sk.count == sodium.box.SecretKeyBytes,
+              let derived = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: Data(sk)).publicKey.rawRepresentation,
+              derived == Data(pk) else {
+            throw NSError(domain: "Crypto", code: 21, userInfo: [NSLocalizedDescriptionKey: "The saved key is damaged."])
+        }
+        let skB64 = Data(sk).base64EncodedString(), pkB64 = Data(pk).base64EncodedString()
+        let oldSk = Keychain.get(Self.skKeychainKey(uid)), oldPk = Keychain.get(Self.pkKeychainKey(uid))
+        guard Keychain.set(Self.skKeychainKey(uid), skB64), Keychain.set(Self.pkKeychainKey(uid), pkB64) else {
+            // Put back what was there, so this phone never ends with half a pair.
+            if let oldSk { Keychain.set(Self.skKeychainKey(uid), oldSk) }
+            if let oldPk { Keychain.set(Self.pkKeychainKey(uid), oldPk) }
+            throw NSError(domain: "Crypto", code: 22, userInfo: [NSLocalizedDescriptionKey: "The key could not be saved on this phone."])
+        }
+        // "0" (1970) rather than no date: no date would be filled in from this phone's sign-in
+        // (`noteDeviceSignedIn`) and hide the history the backup just brought back.
+        setKeysHeldSince(Date(timeIntervalSince1970: Double(max(0, madeMs)) / 1000), uid: uid)
+        lock.withLock { mySecretKey = sk; myPublicKey = pk; pubCache[uid] = pk }
+        previewCache.removeAllObjects()
+        bumpKeyEpoch()
+        NotifShare.storeIdentity(uid: uid, secretKeyB64: skB64)
+        Task { await Self.publishKeyIfChanged(db: db, uid: uid, b64: pkB64) }
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .cryptoIdentityReady, object: nil) }
     }
 
     // MARK: - History from before this phone's keys (owner 2026-11-10)

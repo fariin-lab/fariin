@@ -19,6 +19,8 @@ struct RootView: View {
     @State private var phase: Phase = .loading
     /// Which route() call owns the screen (see route()). A newer call makes an older one stale.
     @State private var routeSeq = 0
+    /// The account's Backup PIN holds another key than this phone's (owner 2026-11-12): offered once.
+    @State private var restoreOffer: KeyBackup.Status?
     /// When "Agree and continue" was tapped on this install (seconds since 1970), 0 = not yet.
     @AppStorage(FirstRun.termsAgreedAtKey) private var termsAgreedAt: Double = 0
     /// A new account's age question waits until the notifications screen is answered, so two
@@ -235,6 +237,19 @@ struct RootView: View {
                 // Our own message banner, mounted once here so it rides above every screen. It sits
                 // UNDER the call screen on purpose: a call already owns the whole display.
                 .inAppBanner()
+                // ⛔ BACKUP PIN AFTER SIGN-IN (owner 2026-11-12): asked in the background once the
+                // chats are up (launch never waits on the network), and only while this phone's key
+                // has not been checked; the full screen comes only when the backup is another key.
+                .task {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    if let offer = await KeyBackup.backupToOffer() { restoreOffer = offer }
+                }
+                .fullScreenCover(isPresented: Binding(get: { restoreOffer != nil },
+                                                      set: { if !$0 { restoreOffer = nil } })) {
+                    if let offer = restoreOffer {
+                        RestoreMessagesView(status: offer) { restoreOffer = nil }
+                    }
+                }
             }
 
             // Screen security: blank the app preview in the app switcher.

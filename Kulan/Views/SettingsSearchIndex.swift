@@ -222,6 +222,7 @@ enum SettingsIndex {
         row("Always Relay Calls", pr, "always relay calls ip address hide server") { PrivacySettingsView() }
         row("Show Calls in Recents", pr, "show calls in recents phone app call history") { PrivacySettingsView() }
         row("Disappearing Messages", pr, "disappearing messages timer auto delete default") { PrivacySettingsView() }
+        page("Backup PIN", pr, "backup pin restore older messages key new phone reinstall") { BackupPinPage() }
         page("App Lock", pr, "app lock face id touch id passcode lock") { AppLockPage() }
         row("Require Face ID", pr + ["App Lock"], "require face id touch id passcode biometrics unlock") { AppLockPage() }
         row("Auto-Lock", pr + ["App Lock"], "auto lock timer immediately minutes") { AppLockPage() }
