@@ -27,6 +27,8 @@ actor ICloudBackup {
     enum Failure: LocalizedError {
         case off
         case noICloud
+        /// CKError.quotaExceeded: the person's iCloud has no room left (owner 2026-11-12, flow D).
+        case full
         case noBackup
         case busy
         case damaged
@@ -35,7 +37,8 @@ actor ICloudBackup {
         var errorDescription: String? {
             switch self {
             case .off: return "Chat backup is not available yet."
-            case .noICloud: return "Sign in to iCloud in Settings to back up your chats."
+            case .noICloud: return "Fariin can't reach your iCloud"
+            case .full: return "Your iCloud is full"
             case .noBackup: return "There is no chat backup in your iCloud."
             case .busy: return "A backup is already running."
             case .damaged: return "The backup in your iCloud could not be opened."
@@ -94,6 +97,7 @@ actor ICloudBackup {
         let names = try await Task.detached(priority: .utility) { () throws -> [String] in
             try BackupArchive.writeFiles(uid: uid, archiveKey: archiveKey, made: made, to: dir)
         }.value
+        try Task.checkCancellation()   // Cancel on the Chat Backup page (2026-11-12)
         let header = try await BackupArchive.makeHeader(archiveKey: archiveKey, storeKey: storeKey,
                                                         password: password, made: made)
         let headerJSON = try BackupArchive.encodeHeader(header)
@@ -116,10 +120,12 @@ actor ICloudBackup {
         // 1. Every file of the new set. Remembered first, so a cut-off upload is swept next time.
         Self.setPending(uid: uid, records.map { $0.recordID.recordName })
         for start in stride(from: 0, to: records.count, by: Self.batch) {
+            try Task.checkCancellation()
             try await save(Array(records[start..<min(start + Self.batch, records.count)]))
         }
 
         // 2. The header switches to the new set: from here on, restore reads the new backup.
+        try Task.checkCancellation()
         let h = CKRecord(recordType: Self.headerType, recordID: headerID)
         h["json"] = headerJSON
         h["set"] = set
@@ -229,11 +235,25 @@ actor ICloudBackup {
     /// Saves records, overwriting what is there. Throws on the first record that failed.
     private func save(_ records: [CKRecord]) async throws {
         guard !records.isEmpty else { return }
-        let result = try await retrying {
-            try await self.database.modifyRecords(saving: records, deleting: [], savePolicy: .allKeys, atomically: false)
+        let result: (saveResults: [CKRecord.ID: Result<CKRecord, Error>], deleteResults: [CKRecord.ID: Result<Void, Error>])
+        do {
+            result = try await retrying {
+                try await self.database.modifyRecords(saving: records, deleting: [], savePolicy: .allKeys, atomically: false)
+            }
+        } catch let e as CKError {
+            throw Self.failure(e)
         }
         for (_, r) in result.saveResults {
-            if case .failure(let e) = r { throw Failure.cloud(e.localizedDescription) }
+            if case .failure(let e) = r { throw (e as? CKError).map(Self.failure) ?? Failure.cloud(e.localizedDescription) }
+        }
+    }
+
+    /// CloudKit's answer in plain words (owner 2026-11-12, flow D): full, or iCloud not reachable.
+    private static func failure(_ e: CKError) -> Failure {
+        switch e.code {
+        case .quotaExceeded: return .full
+        case .notAuthenticated, .accountTemporarilyUnavailable, .managedAccountRestricted: return .noICloud
+        default: return .cloud(e.localizedDescription)
         }
     }
 
