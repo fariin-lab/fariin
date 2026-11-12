@@ -374,6 +374,11 @@ final class ThreadRepository {
     private var oldestDoc: DocumentSnapshot?   // cursor for paging older
     private var lastDocs: [QueryDocumentSnapshot] = []   // last window, to re-decrypt once the key loads
     private var lastDocsFromCache = false   // owner audit 2026-10-06 chat #19: `lastDocs` came from the local cache
+    /// safety review 2026-11-12: the live window as last COMMITTED (`commitSnapshot`), and whether the
+    /// server sent it. `lastDocs` is set before the decrypt hop, so it can already be a newer window
+    /// whose rows are not filed yet; the delivery cursor reads only this one.
+    @ObservationIgnored private var committedWindow: [QueryDocumentSnapshot] = []
+    @ObservationIgnored private var committedWindowFromServer = false
     // Owner audit 2026-10-06 chat #17: the first SERVER window has been seen (it alone may end
     // history), and `oldestDoc` still comes from a cache window (the server's replaces it).
     @ObservationIgnored private var sawServerWindow = false
@@ -1809,6 +1814,8 @@ final class ThreadRepository {
         guard seq >= committedSeq else { return }   // never let an older snapshot overwrite a newer one
         guard chMode != .synced else { return }     // the window was let go for the change counter
         committedSeq = seq
+        committedWindow = docs   // safety review 2026-11-12: what the delivery cursor may read
+        committedWindowFromServer = !fromCache
         // owner 2026-10-21 (the open jump): what this window IS, for the list. A cache window before the
         // server has answered is still the open; the server's first window is the settle; a replay
         // after the keys arrived is a re-decrypt. Only what comes after those is a live arrival.
@@ -2111,6 +2118,9 @@ final class ThreadRepository {
         let changed = list.filter { filedToDB[$0.id] != $0 }
         guard !changed.isEmpty else { return }
         for m in changed { filedToDB[m.id] = m }
+        // The server window whose rows this write (with the ones before it) has filed. A cache window
+        // vouches for nothing (safety review 2026-11-12, item 1).
+        let window = committedWindowFromServer ? committedWindow : []
         LocalMessageDB.shared.upsert(cid: cid, uid: me, changed) { [weak self] ok in
             guard let self else { return }
             guard ok else {
@@ -2120,7 +2130,7 @@ final class ThreadRepository {
             }
             if full { self.localDBBehind = false }
             guard !self.localDBBehind, Auth.auth().currentUser?.uid == me else { return }
-            self.writeDeliveryCursor(me: me, filed: list)
+            self.writeDeliveryCursor(me: me, window: window)
         }
     }
 
@@ -2130,11 +2140,28 @@ final class ThreadRepository {
     /// switch, OFF until both apps ship). At most one write per chat every 20 s, and only forward.
     /// Channels have no cursor (their history stays on the server for good). The write itself is
     /// `DeliveryCursor.write` (owner 2026-11-12), shared with InboxSync so both keep one memory.
-    private func writeDeliveryCursor(me: String, filed: [Message]) {
-        let stamped = filed.filter { $0.hasServerTime }.map(\.createdAt)
-        guard let newest = stamped.max(), let oldest = stamped.min() else { return }
-        let ms = Int64((newest.timeIntervalSince1970 * 1000).rounded(.down))
-        let low = Int64((oldest.timeIntervalSince1970 * 1000).rounded(.down)), chat = cid
+    ///
+    /// ⛔ safety review 2026-11-12: `low` and the newest millisecond come ONLY from the live window's
+    /// own documents, and only from a window the SERVER sent (`window` is empty for a cache window):
+    /// never from seeded, cached, paged-in or local-database rows, which can have holes. A message in
+    /// that window the phone cannot keep yet (`DeliveryCursor.holdsMark`: keys not here, "…") stops
+    /// the mark one millisecond below it.
+    private func writeDeliveryCursor(me: String, window: [QueryDocumentSnapshot]) {
+        // Oldest first; a doc still waiting for its server stamp has no time and is left out (it is
+        // the newest, so leaving it out only lowers the mark).
+        let timed: [(ms: Int64, id: String)] = window.compactMap { d in
+            guard let ts = d.get("createdAt") as? Timestamp else { return nil }
+            return (ms: Int64(ts.seconds) * 1000 + Int64(ts.nanoseconds / 1_000_000), id: d.documentID)
+        }.sorted { $0.ms < $1.ms }
+        guard let low = timed.first?.ms, var ms = timed.last?.ms else { return }
+        let chat = cid
+        // A document whose message is not built here, or that cannot be kept yet, holds the mark.
+        if let hold = timed.first(where: { t in
+            guard let m = byId[t.id] else { return true }
+            return DeliveryCursor.holdsMark(m, cid: chat)
+        }) {
+            ms = min(ms, hold.ms - 1)
+        }
         // ⛔ NO GAP, EVER. The cursor tells the server "every message up to here is on this phone",
         // and the server may delete on it. An open chat holds only its newest window, so it moves the
         // mark (and the cursor) only when that window reaches back to the mark already held. No mark
@@ -2686,6 +2713,7 @@ final class ThreadRepository {
         rawReactions.removeAll()
         locallyDeleted.removeAll()
         lastDocs = []   // or a key arriving later re-decrypts the old window back onto the screen
+        committedWindow = []; committedWindowFromServer = false
         chDocs = [:]
         // A channel's store knows the history is now empty (and keeps its change counter).
         if let box = chBox { box.history.clearAll(); box.scheduleSave() }
@@ -2914,6 +2942,7 @@ extension ThreadRepository {
         FirestoreHub.drop([listener])
         listener = nil
         lastDocs = []
+        committedWindow = []; committedWindowFromServer = false
         chLog("SYNC# start cid=\(cid.suffix(5)) docs=\(docs.count) add=\(r.added) del=\(r.removed) lastChg=\(top) start=\(box.history.reachedStart)")
         attachChannelListeners()
         chMirrorAll()

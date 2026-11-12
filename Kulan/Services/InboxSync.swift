@@ -218,6 +218,14 @@ enum DeliveryCursor {
     /// cursor write goes through `write`, which applies this one helper.
     static func line(forMark mark: Int64) -> Int64 { mark - 1 }
 
+    /// ⛔ A MESSAGE THIS PHONE CANNOT KEEP YET (safety review 2026-11-12). No mark may pass it: a
+    /// mark one millisecond below it at most. Not deleted, and its words still "…" (the keys are not
+    /// warm yet; it decrypts later).
+    static func holdsMark(_ m: Message, cid: String) -> Bool {
+        guard !m.deleted else { return false }
+        return m.text == "…"
+    }
+
     /// `ms` is the MARK (newest millisecond filed); what is sent is `line(forMark:)`.
     static func write(cid: String, me: String, ms: Int64) {
         guard !cid.isEmpty, !me.isEmpty, line(forMark: ms) > 0, !Conversation.Right.isChannel(cid) else { return }
