@@ -63,7 +63,10 @@ actor ICloudBackup {
     private var busy = false
     private var zoneReady = false
 
-    private var database: CKDatabase { CKContainer.default().privateCloudDatabase }
+    /// The app's own container, by name (registered 2026-11-12 in the developer portal and on the App ID).
+    static let containerID = "iCloud.com.kulan.messenger.native"
+    private static var container: CKContainer { CKContainer(identifier: containerID) }
+    private var database: CKDatabase { Self.container.privateCloudDatabase }
     private var zoneID: CKRecordZone.ID { CKRecordZone.ID(zoneName: Self.zoneName, ownerName: CKCurrentUserDefaultName) }
     private var headerID: CKRecord.ID { CKRecord.ID(recordName: Self.headerRecordName, zoneID: zoneID) }
 
@@ -206,7 +209,7 @@ actor ICloudBackup {
     private func checkAccount() async throws {
         let status: CKAccountStatus
         do {
-            status = try await CKContainer.default().accountStatus()
+            status = try await Self.container.accountStatus()
         } catch {
             throw Failure.cloud(error.localizedDescription)
         }
