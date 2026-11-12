@@ -697,7 +697,10 @@ enum NotificationCleaner {
         // (`ChatsView.unreadChatsBadge`, which says why a muted channel still counts). The springboard
         // summed the repository only, and the official row is not in it, so the two badges disagreed.
         let official = [OfficialChannelStore.shared.listEntry].compactMap { $0 }
-        let total = (ConversationsRepository.shared.conversations + official)
+        // D5 (owner 2026-11-12): a private chat counts what its row shows (the phone's own unread).
+        let repo = ConversationsRepository.shared
+        let rows = repo.conversations.map { repo.shown($0, me: me) }
+        let total = (rows + official)
             .filter { $0.id != cid && !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
                       && (Flags.groupsEnabled || !$0.isGroup)
                       && MessageRequests.stance($0, myUid: me) != .incoming }   // as the Chats tab

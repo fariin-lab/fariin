@@ -529,7 +529,9 @@ struct ChatListTable: UIViewControllerRepresentable {
         /// Everything the row draws from, read fresh off the screen's stores. The four closures are
         /// the only way this table can see a draft, a live call, an unheard note or a story ring.
         func content(for conv: Conversation) -> ChatRowContent {
-            ChatRowContent(conv: conv,
+            // D5 (owner 2026-11-12): a private chat's preview, time and unread from the phone's own
+            // database when it has the newest message (`ConversationsRepository.shown`).
+            ChatRowContent(conv: ConversationsRepository.shared.shown(conv, me: parent.me),
                            onCall: parent.onCall(conv),
                            storySeen: parent.storySeen(conv),
                            draft: parent.draft(conv),
