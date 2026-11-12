@@ -122,37 +122,62 @@ struct NewBackupPinPage: View {
     @State private var confirm = ""
     @State private var saving = false
     @State private var problem: String?
+    /// "Use a password instead" (owner 2026-11-12, both apps): letters allowed, 8 or more.
+    @State private var usePassword = false
     @FocusState private var focus: Int?
 
     var body: some View {
         List {
             Section {
-                SecureField("PIN", text: $pin).keyboardType(.numberPad).textContentType(.oneTimeCode)
+                SecureField(usePassword ? "Password" : "PIN", text: $pin)
+                    .keyboardType(usePassword ? .default : .numberPad)
+                    .textContentType(.oneTimeCode).autocorrectionDisabled().textInputAutocapitalization(.never)
                     .focused($focus, equals: 0)
-                SecureField("Confirm PIN", text: $confirm).keyboardType(.numberPad).textContentType(.oneTimeCode)
+                SecureField(usePassword ? "Confirm Password" : "Confirm PIN", text: $confirm)
+                    .keyboardType(usePassword ? .default : .numberPad)
+                    .textContentType(.oneTimeCode).autocorrectionDisabled().textInputAutocapitalization(.never)
                     .focused($focus, equals: 1)
+                    .id(usePassword)   // a new field, so the keyboard type changes at once
             } footer: {
                 VStack(alignment: .leading, spacing: 8) {
                     if let problem { Text(problem).foregroundStyle(.red) }
-                    Text("At least \(KeyBackup.minDigits) digits. Fariin can't reset it, so pick one you will remember.")
+                    Text(usePassword
+                         ? "At least \(KeyBackup.minPasswordLength) characters. Fariin can't reset it, so pick one you will remember."
+                         : "At least \(KeyBackup.minDigits) digits. Fariin can't reset it, so pick one you will remember.")
+                    Button(usePassword ? "Use a PIN instead" : "Use a password instead") {
+                        usePassword.toggle(); pin = ""; confirm = ""; problem = nil; focus = 0
+                    }
+                    .font(.footnote.weight(.semibold))
                 }
             }
         }
-        .navigationTitle("New PIN")
+        .navigationTitle(usePassword ? "New Password" : "New PIN")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 if saving { ProgressView() } else { Button("Save") { save() }.disabled(pin.isEmpty || confirm.isEmpty) }
             }
         }
-        .onChange(of: pin) { _, v in pin = String(v.filter(\.isNumber).prefix(32)) }
-        .onChange(of: confirm) { _, v in confirm = String(v.filter(\.isNumber).prefix(32)) }
+        .onChange(of: pin) { _, v in pin = clean(v) }
+        .onChange(of: confirm) { _, v in confirm = clean(v) }
         .onAppear { focus = 0 }
     }
 
+    private func clean(_ v: String) -> String {
+        String((usePassword ? v : v.filter(\.isNumber)).prefix(64))
+    }
+
     private func save() {
-        guard pin.count >= KeyBackup.minDigits else { problem = "Use at least \(KeyBackup.minDigits) digits."; return }
-        guard pin == confirm else { problem = "The PINs don't match."; return }
+        if usePassword {
+            guard pin.count >= KeyBackup.minPasswordLength else {
+                problem = "Use at least \(KeyBackup.minPasswordLength) characters."; return
+            }
+            guard pin == confirm else { problem = "The passwords don't match."; return }
+        } else {
+            guard pin.count >= KeyBackup.minDigits else { problem = "Use at least \(KeyBackup.minDigits) digits."; return }
+            guard !KeyBackup.isWeakPin(pin) else { problem = "This PIN is easy to guess. Pick another."; return }
+            guard pin == confirm else { problem = "The PINs don't match."; return }
+        }
         problem = nil
         saving = true
         Task {
@@ -222,6 +247,8 @@ struct RestoreMessagesView: View {
     @State private var problem: String?
     /// The backup was deleted (10 wrong) or is not there: Skip just closes, no bar comes after.
     @State private var gone = false
+    /// The backup may have been made with a password (letters): this switches the keyboard.
+    @State private var usePassword = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -231,13 +258,19 @@ struct RestoreMessagesView: View {
             Text("Restore your messages").font(.title2.weight(.bold)).multilineTextAlignment(.center)
             Text("Enter your Backup PIN to bring back your older messages on this phone.")
                 .font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            SecureField("PIN", text: $pin)
-                .keyboardType(.numberPad).textContentType(.oneTimeCode)
+            SecureField(usePassword ? "Password" : "PIN", text: $pin)
+                .keyboardType(usePassword ? .default : .numberPad).textContentType(.oneTimeCode)
+                .autocorrectionDisabled().textInputAutocapitalization(.never)
                 .multilineTextAlignment(.center).font(.title3)
                 .padding(.vertical, 14).padding(.horizontal, 16)
                 .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemFill)))
                 .focused($focused)
-                .onChange(of: pin) { _, v in pin = String(v.filter(\.isNumber).prefix(32)) }
+                .id(usePassword)
+                .onChange(of: pin) { _, v in pin = String((usePassword ? v : v.filter(\.isNumber)).prefix(64)) }
+            Button(usePassword ? "Use a PIN instead" : "Use a password instead") {
+                usePassword.toggle(); pin = ""; problem = nil
+            }
+            .font(.footnote.weight(.semibold))
             if let problem {
                 Text(problem).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
             }

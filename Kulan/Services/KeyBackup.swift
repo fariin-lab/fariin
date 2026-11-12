@@ -57,6 +57,22 @@ enum KeyBackup {
     static let opsLimit = 3
     static let memLimit = 67_108_864   // 64 MiB
     static let minDigits = 6
+    /// "Use a password instead" (owner 2026-11-12, both apps): any characters, at least this many.
+    /// Same Argon2 input (the UTF-8 bytes), so the backup format does not change.
+    static let minPasswordLength = 8
+
+    private static let commonPins: Set<String> = ["121212", "112233", "000000", "123123", "696969",
+                                                  "202020", "147258", "159753"]
+
+    /// A PIN anyone would try first: one digit repeated, a straight run up or down, or a common one.
+    static func isWeakPin(_ pin: String) -> Bool {
+        let d = pin.compactMap(\.wholeNumberValue)
+        guard d.count == pin.count, d.count >= 2 else { return false }
+        if Set(d).count == 1 { return true }
+        let steps = zip(d.dropFirst(), d).map { $0 - $1 }
+        if steps.allSatisfy({ $0 == 1 }) || steps.allSatisfy({ $0 == -1 }) { return true }
+        return commonPins.contains(pin)
+    }
 
     struct Status {
         var exists = false
