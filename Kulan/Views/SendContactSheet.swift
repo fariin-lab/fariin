@@ -472,7 +472,9 @@ struct SendContactSheet: View {
         var qid: String? = nil
         if let postQuote { qid = (try? await QuoteStore.shared.made(postQuote()))?.qid }
         let quote = qid
-        let preview = quote == nil ? await cardPreview() : nil
+        var card: ChatService.OutgoingLinkPreview? = nil
+        if quote == nil { card = await cardPreview() }
+        let preview = card
         // Every chat at once: the wait is the slowest one, not all of them added together.
         var reached: [String] = []
         await withTaskGroup(of: String?.self) { tasks in

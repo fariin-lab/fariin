@@ -1032,10 +1032,10 @@ enum ChannelAdminInvites {
 
     /// Opens the channel at the post. False when the link names no channel this phone can find.
     static func open(_ t: Target, push: Bool) async -> Bool {
-        guard let cid = await cid(for: t) else { return false }
+        guard let cid = await Self.cid(for: t) else { return false }
         // A number is turned into the post's id now; one that cannot be found still opens the channel.
         var t = t
-        if isNumber(t.mid) { t.mid = await mid(for: t, cid: cid) ?? "" }
+        if isNumber(t.mid) { t.mid = await Self.mid(for: t, cid: cid) ?? "" }
         let me = AuthService.shared.uid ?? ""
         let r = AppRouter.shared
         // The channel already on screen took the tap itself (ThreadView.openPostLink).
@@ -1043,10 +1043,10 @@ enum ChannelAdminInvites {
         r.pendingMessageId = t.mid.isEmpty ? nil : t.mid
         // Spent by the channel's ThreadView as it opens; one that never opens (refused, private)
         // must not wait for the next chat.
-        let mid = t.mid
+        let jump = t.mid
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 10_000_000_000)
-            if AppRouter.shared.pendingMessageId == mid { AppRouter.shared.pendingMessageId = nil }
+            if AppRouter.shared.pendingMessageId == jump { AppRouter.shared.pendingMessageId = nil }
         }
         let mine = ConversationsRepository.shared.conversations.first { $0.id == cid && ($0.users.contains(me) || $0.isFollower(me)) }
             ?? ChannelFollows.shared.conversations.first { $0.id == cid }
