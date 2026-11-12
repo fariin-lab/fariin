@@ -182,6 +182,17 @@ targets:
         NSUserActivityTypes: [INSendMessageIntent, INStartCallIntent, INStartAudioCallIntent, INStartVideoCallIntent]
         INIntentsSupported: [INStartCallIntent]
         NSSiriUsageDescription: "Siri can start Fariin voice and video calls with the people you call."
+        # Owner 2026-11-12: people say "Fariin" the Somali way and the English way. Siri also
+        # accepts these names and sounds for the app ("call Eric on Fareen").
+        INAlternativeAppNames:
+          - INAlternativeAppName: Fareen
+            INAlternativeAppNamePronunciationHint: fah reen
+          - INAlternativeAppName: Farin
+            INAlternativeAppNamePronunciationHint: fa rin
+          - INAlternativeAppName: Fariin
+            INAlternativeAppNamePronunciationHint: fa ree in
+          - INAlternativeAppName: Fereen
+            INAlternativeAppNamePronunciationHint: feh reen
         BGTaskSchedulerPermittedIdentifiers: [com.kulan.messenger.native.refresh]
     settings:
       base:
