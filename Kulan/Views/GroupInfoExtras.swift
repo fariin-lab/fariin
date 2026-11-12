@@ -226,8 +226,10 @@ struct ChatEncryptionSheet: View {
     private let items: [Covered] = [
         .init(icon: "network.badge.shield.half.filled", title: "Protected on the way",
               line: "Messages, photos and files travel over an encrypted connection to our servers."),
-        .init(icon: "person.2.fill", title: "Kept for the members",
-              line: "On our servers, access rules let only the people in this group read its messages."),
+        // owner 2026-11-12: a public group's messages can be read from outside (guests), so the
+        // line no longer says members only.
+        .init(icon: "person.2.fill", title: "Kept on our servers",
+              line: "Only members can read a private group. Anyone who finds a public group can read it."),
         // 2026-10-23 (owner): members read the group's history, the ones who join later too, as the
         // reference app's cloud groups do. Old sealed messages open once a member who could read
         // them has opened the group; one that nobody left in the group can open stays locked.
@@ -259,7 +261,8 @@ struct ChatEncryptionSheet: View {
                     .font(.system(size: 28, weight: .bold))
                     .multilineTextAlignment(.center)
                     .padding(.top, 22)
-                Text("Messages in this group are not end-to-end encrypted. They are protected in transit and on our servers, and Fariin's servers can read them.")
+                // owner 2026-11-12: the plain reason first (history for new members), then the fact.
+                Text("Messages in this group are stored on Fariin's servers so new members can read the history. They are not end-to-end encrypted, and Fariin's servers can read them.")
                     .font(.system(size: 17))
                     .foregroundStyle(.primary.opacity(0.78))
                     .multilineTextAlignment(.center)

@@ -18,8 +18,9 @@
       people are found by typing an exact username, never by uploading an address book.
     · No advertising identifier, no third-party ad SDK, no attribution SDK.
 
-  ON THE MEDIA AND MESSAGES BELOW: chat media is end-to-end encrypted and the server holds
-  only ciphertext, but Apple's question is whether data is COLLECTED (transmitted off the
+  ON THE MEDIA AND MESSAGES BELOW: one-to-one chat media is end-to-end encrypted and the server
+  holds only ciphertext (group messages and media are stored readable on the server, owner
+  2026-11-12), but Apple's question is whether data is COLLECTED (transmitted off the
   device), not whether we can read it. It is, so it is declared. Answering otherwise would be
   the kind of clever reading that gets an app pulled.
 -->
@@ -84,7 +85,7 @@
                 <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
             </array>
         </dict>
-        <!-- Messages, captions, voice notes. End-to-end encrypted; still transmitted. -->
+        <!-- Messages, captions, voice notes. 1:1 end-to-end encrypted, groups not; transmitted either way. -->
         <dict>
             <key>NSPrivacyCollectedDataType</key>
             <string>NSPrivacyCollectedDataTypeOtherUserContent</string>
