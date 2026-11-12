@@ -29,7 +29,7 @@ v1 scope: 1-to-1 E2EE messenger. Groups are compiled out (`Flags.groupsEnabled =
 `Private, simple messaging`
 
 **Promotional text** (max 170 chars, changeable without review):
-`Private messaging without a phone number. End-to-end encrypted chats, voice and video calls, and 24-hour stories. Fariin is the Somali word for message.`
+`Private messaging without a phone number. End-to-end encrypted one to one chats and calls, plus groups, channels and 24-hour stories. Fariin is the Somali word for message.`
 
 **Description** (max 4000 chars):
 
@@ -40,7 +40,7 @@ NO PHONE NUMBER NEEDED
 Create an account in seconds with just a name and a username. No phone number, no email, no contact list upload. Find friends by username or by scanning their QR code in person.
 
 END-TO-END ENCRYPTED
-Every message is encrypted on your device before it is sent. Texts, photos, videos, voice messages and files can only be read by you and the person you send them to. Fariin cannot read them, and neither can anyone else.
+One to one messages and calls are encrypted on your device before they are sent. Texts, photos, videos, voice messages and files can only be read by you and the person you send them to. Fariin cannot read them, and neither can anyone else. Group chats, channels and stories are not end-to-end encrypted, so new members can read a group's earlier messages.
 
 VOICE AND VIDEO CALLS
 Free, private 1-to-1 voice and video calls over the internet.

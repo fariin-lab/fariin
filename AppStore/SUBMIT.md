@@ -87,7 +87,7 @@ and privacy pages, which is what Guideline 1.2 asks for.
 ### Promotional text (170 max, changeable later without review)
 
 ```
-Private messaging without a phone number. End-to-end encrypted chats, voice and video calls, and 24-hour stories. Fariin is the Somali word for message.
+Private messaging without a phone number. End-to-end encrypted one to one chats and calls, plus groups, channels and 24-hour stories. Fariin is the Somali word for message.
 ```
 
 ### Description (4000 max)
@@ -99,7 +99,7 @@ NO PHONE NUMBER NEEDED
 Create an account in seconds with just a name and a username. No phone number, no email, no contact list upload. Find friends by username or by scanning their QR code in person.
 
 END-TO-END ENCRYPTED
-Every message is encrypted on your device before it is sent. Texts, photos, videos, voice messages and files can only be read by you and the person you send them to. Fariin cannot read them, and neither can anyone else.
+One to one messages and calls are encrypted on your device before they are sent. Texts, photos, videos, voice messages and files can only be read by you and the person you send them to. Fariin cannot read them, and neither can anyone else. Group chats, channels and stories are not end-to-end encrypted, so new members can read a group's earlier messages.
 
 VOICE AND VIDEO CALLS
 Free, private 1-to-1 voice and video calls over the internet.
@@ -187,8 +187,8 @@ improvement.
 purchases, no financial info, no health, no fitness, no sensitive info, no diagnostics, no usage
 data, no advertising data.
 
-> **On messages and media being ticked at all.** They are end-to-end encrypted and the server holds
-> only ciphertext that nobody at Fariin can read. Apple's question is not whether you can read it,
+> **On messages and media being ticked at all.** One to one messages are end-to-end encrypted and the
+> server holds only ciphertext for them; group messages are stored readable on the server. Apple's question is not whether you can read it,
 > it is whether it leaves the device. It does, so it is declared. The manifest already makes that
 > call in writing and the label has to agree with it. An earlier draft of `store-listing.md` said
 > chat media is "not collected"; that reading is the clever kind that gets an app pulled later.
