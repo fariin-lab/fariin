@@ -130,6 +130,7 @@ struct OfficialChatView: View {
                 }
             }
             .toolbar(.hidden, for: .tabBar)
+            .background(TabBarReturnsWithPop())   // back with the slide (owner 2026-11-12)
             // Belt and braces under the custom header: UIKit shows the plain string title only
             // while titleView is nil, so any residual gap reads "Fariin" instead of nothing, and
             // the avatar+name header replaces it the instant it installs.

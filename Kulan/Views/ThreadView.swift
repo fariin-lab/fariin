@@ -1640,6 +1640,7 @@ struct ThreadView: View {
             showContactInfo = true
         }, onPullDown: sheetPullDown))
         .toolbar(.hidden, for: .tabBar)
+        .background(TabBarReturnsWithPop())   // back with the slide, not after it (owner 2026-11-12)
         // ⛔ THE CHAT NAMES ITS OWN BAR SCHEME — owner, 2026-09-29, phone switched to dark with a
         // chat open: Back and the call capsule stayed light-mode glass until the chat was reopened.
         // The bar's scheme came from the chat LIST under this page (`MainShell`, path.count <= 1),
