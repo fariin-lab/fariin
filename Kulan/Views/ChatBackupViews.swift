@@ -23,12 +23,13 @@ import FirebaseAuth
 /// (never synced, never sent): each new backup is locked with it the same way.
 enum ChatBackupPrefs {
     enum Frequency: String, CaseIterable, Identifiable {
-        case daily, weekly, off
+        case daily, weekly, monthly, off
         var id: String { rawValue }
         var title: String {
             switch self {
             case .daily: "Daily"
             case .weekly: "Weekly"
+            case .monthly: "Monthly"
             case .off: "Off"
             }
         }
@@ -36,6 +37,7 @@ enum ChatBackupPrefs {
             switch self {
             case .daily: 24 * 3600
             case .weekly: 7 * 24 * 3600
+            case .monthly: 30 * 24 * 3600
             case .off: nil
             }
         }
@@ -503,7 +505,9 @@ struct ChatBackupPage: View {
                     if loading && runner.latest == nil {
                         ProgressView().frame(height: 22)
                     } else if let latest = runner.latest {
-                        Text("Backed up \(latest.made.formatted(.relative(presentation: .named)))")
+                        Text(Date().timeIntervalSince(latest.made) < 60
+                             ? "Backed up just now"
+                             : "Backed up \(latest.made.formatted(.relative(presentation: .named)))")
                             .font(.headline)
                         Text(ChatBackupText.describe(latest))
                             .font(.subheadline).foregroundStyle(.secondary)
