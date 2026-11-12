@@ -160,9 +160,11 @@ actor ICloudBackup {
     /// Downloads the backup and files its rows into `uid`'s local database. Opens it with this
     /// phone's iCloud Keychain key, or with `password` when the key is not here. Throws
     /// `BackupArchive.Failure.needsPassword` when only a password can open it, `.wrongPassword`,
-    /// `.otherAccount` for another account's backup. Returns how many messages were filed.
+    /// `.otherAccount` for another account's backup. Returns how many messages were filed, and
+    /// whether that is every row of the backup (`complete`: filed > 0 and filed == the manifest's
+    /// count; only then may meta "restored" be set, safety review 2026-11-12).
     @discardableResult
-    func restore(uid: String, password: String? = nil) async throws -> Int {
+    func restore(uid: String, password: String? = nil) async throws -> (filed: Int, complete: Bool) {
         guard ChatBackup.enabled else { throw Failure.off }
         guard !uid.isEmpty else { throw Failure.damaged }
         guard !busy else { throw Failure.busy }
@@ -209,7 +211,7 @@ actor ICloudBackup {
                 LocalMessageDB.shared.insertChatRows(uid: uid, rows: lostRows.withoutMarks(rows))
             }.value
         }
-        return filed
+        return (filed, filed > 0 && filed == manifest.count)
     }
 
     // MARK: - CloudKit

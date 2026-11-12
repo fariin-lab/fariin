@@ -234,8 +234,12 @@ enum ChatTransfer {
         done += 1
         await progress(done, total)
 
-        let made = manifest.made > 0 ? manifest.made : Int64((Date().timeIntervalSince1970 * 1000).rounded())
-        LocalMessageDB.shared.setMeta(uid: uid, key: "restored", String(made))
+        // ⛔ safety review 2026-11-12: "restored" only when every row of the archive was filed. A
+        // partial transfer leaves the restore question open for a better source.
+        if filed > 0, filed == manifest.count {
+            let made = manifest.made > 0 ? manifest.made : Int64((Date().timeIntervalSince1970 * 1000).rounded())
+            LocalMessageDB.shared.setMeta(uid: uid, key: "restored", String(made))
+        }
 
         // 5. The files go; header.json last (the old phone watches for the folder to empty).
         let names = [BackupArchive.manifestName] + manifest.chunks + [BackupArchive.chatsName, BackupArchive.headerName]

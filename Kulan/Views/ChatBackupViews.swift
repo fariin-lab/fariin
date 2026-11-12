@@ -242,10 +242,11 @@ final class ChatRestoreOffer {
         circle = info
     }
 
-    func restored(_ info: ICloudBackup.Info, uid: String) {
+    /// `complete`: every row of the backup was filed (safety review 2026-11-12); only then "restored".
+    func restored(_ info: ICloudBackup.Info, uid: String, complete: Bool) {
         let made = String(ChatBackupText.ms(info.made))
         LocalMessageDB.shared.setMeta(uid: uid, key: "restore.checked", made)
-        LocalMessageDB.shared.setMeta(uid: uid, key: "restored", made)
+        if complete { LocalMessageDB.shared.setMeta(uid: uid, key: "restored", made) }
         ChatBackupPrefs.restoreSkippedMade = 0
         circle = nil
         // `screen` stays: the restore screen shows the count, its Continue closes it (RootView).
@@ -792,8 +793,9 @@ struct ChatRestoreView: View {
         let me = uid
         Task {
             do {
-                let n = try await ICloudBackup.shared.restore(uid: me, password: password)
-                ChatRestoreOffer.shared.restored(info, uid: me)
+                let got = try await ICloudBackup.shared.restore(uid: me, password: password)
+                let n = got.filed
+                ChatRestoreOffer.shared.restored(info, uid: me, complete: got.complete)
                 Haptics.notify(.success)
                 stage = .done(n)
             } catch BackupArchive.Failure.needsPassword {
