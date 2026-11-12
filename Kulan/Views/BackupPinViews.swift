@@ -170,8 +170,9 @@ struct NewBackupPinPage: View {
     }
 }
 
-/// The second chance after Skip (owner 2026-11-12, both apps): a slim bar on the chat list just
-/// above the tab bar. The bar or "Restore" opens the restore screen again; X hides it for this backup.
+/// The second chance after Skip as a slim bar above the tab bar. ⛔ NOT MOUNTED (owner 2026-11-12,
+/// same day): he moved it into the "Things you can do" card as a Restore circle (GetStartedBanner
+/// `onRestore`). Kept, not deleted, in case he wants the bar back.
 struct RestoreOlderBar: View {
     @State private var offer = KeyBackupOffer.shared
 

@@ -151,6 +151,13 @@ struct GetStartedBanner: View {
     let onTap: (GetStartedCard) -> Void
     let onRemove: (GetStartedCard) -> Void
     let onHideAll: () -> Void
+    /// ⛔ RESTORE IN THE CARD (owner 2026-11-12, both apps): after Skip on "Restore your messages",
+    /// a Restore circle (filled lock) leads the row; the row keeps at most 4 circles. Nil = none.
+    var onRestore: (() -> Void)? = nil
+    var onHideRestore: () -> Void = {}
+
+    /// What the row shows: the regular cards, one fewer while Restore leads it.
+    private var shown: [GetStartedCard] { Array(cards.prefix(onRestore == nil ? 4 : 3)) }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -174,7 +181,21 @@ struct GetStartedBanner: View {
             }
             .padding(.horizontal, 6)
             HStack(spacing: 0) {
-                ForEach(cards) { card in
+                if let onRestore {
+                    Button(action: onRestore) {
+                        PosterActionIcon(icon: "lock.fill", diameter: 54, onPhoto: false, label: "Restore")
+                    }
+                    .tint(.primary)
+                    .contextMenu {
+                        Button(role: .destructive, action: onHideRestore) {
+                            Label("Hide", systemImage: "eye.slash")
+                        }
+                    }
+                    .accessibilityLabel("Restore older messages")
+                    .accessibilityAction(named: "Hide", onHideRestore)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+                ForEach(shown) { card in
                     Button { onTap(card) } label: {
                         PosterActionIcon(icon: card.symbol, diameter: 54, onPhoto: false, label: card.title)
                     }
