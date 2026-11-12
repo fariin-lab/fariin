@@ -135,7 +135,7 @@ final class HistoryPull {
                     LocalMessageDB.shared.setMeta(uid: me, key: "pull.\(cid)", "done")
                     return true
                 }
-                return finish(cid: cid, me: me, t0: newestMs)
+                return await finish(cid: cid, me: me, t0: newestMs)
             }
 
             // Built OFF the main thread exactly as InboxSync / ThreadRepository.loadOlder do.
@@ -172,7 +172,15 @@ final class HistoryPull {
                 if BlockList.snapshot.hides(author: m.authorId, atMillis: t) { return false }
                 return !HiddenMessages.isHidden(m.id) && !m.notForMe
             }
-            LocalMessageDB.shared.upsert(cid: cid, uid: me, file)
+            // ⛔ Progress (and later the mark) only after the rows are really committed (safety review
+            // 2026-11-12): a failed write rests the chat, and a resume reads the page again.
+            let filed = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+                LocalMessageDB.shared.upsert(cid: cid, uid: me, file) { c.resume(returning: $0) }
+            }
+            guard filed else {
+                restUntil[cid] = Date().addingTimeInterval(Self.rest)
+                return false
+            }
             // Progress after the rows (one serial queue), so a resume never skips a page.
             if let low = kept.last?.ms {
                 LocalMessageDB.shared.setMeta(uid: me, key: "pull.\(cid)", "\(low)|\(top)")
@@ -188,19 +196,26 @@ final class HistoryPull {
                 return last.createdAt.timeIntervalSince1970 * 1000 <= clearedAt
             }()
             if docs.count < Self.pageSize || underCut {
-                return finish(cid: cid, me: me, t0: top)
+                return await finish(cid: cid, me: me, t0: top)
             }
             after = docs.last
             try? await Task.sleep(nanoseconds: Self.pagePause)
         }
     }
 
-    /// The chat's whole history up to T0 is on this phone: its first mark, then its cursor once the
-    /// rows have committed (same order as InboxSync).
-    private func finish(cid: String, me: String, t0: Int64) -> Bool {
-        LocalMessageDB.shared.setSyncedUpTo(cid: cid, uid: me, ms: t0)
+    /// The chat's whole history up to T0 is on this phone (every page's upsert came back true): its
+    /// first mark, then its cursor once the mark is stored (safety review 2026-11-12: from inside the
+    /// write's success, never on a queue promise). A failed mark write rests the chat.
+    private func finish(cid: String, me: String, t0: Int64) async -> Bool {
+        let marked = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            LocalMessageDB.shared.setSyncedUpTo(cid: cid, uid: me, ms: t0) { c.resume(returning: $0) }
+        }
+        guard marked else {
+            restUntil[cid] = Date().addingTimeInterval(Self.rest)
+            return false
+        }
         LocalMessageDB.shared.setMeta(uid: me, key: "pull.\(cid)", "done")
-        LocalMessageDB.shared.afterWrites { DeliveryCursor.write(cid: cid, me: me, ms: t0) }
+        DeliveryCursor.write(cid: cid, me: me, ms: t0)
         debugLog("[historyPull] done", cid, t0)
         return true
     }

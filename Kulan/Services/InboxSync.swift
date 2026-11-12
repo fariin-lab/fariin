@@ -152,14 +152,27 @@ final class InboxSync {
             if BlockList.snapshot.hides(author: m.authorId, atMillis: t) { return false }
             return !HiddenMessages.isHidden(m.id) && !m.notForMe
         }
-        // One serial database queue: the rows land before the mark that says they are here.
-        LocalMessageDB.shared.upsert(cid: cid, uid: me, file)
+        // ⛔ The mark and the cursor only after the rows are really committed (safety review
+        // 2026-11-12): a failed write rests the chat and vouches for nothing.
+        let filed = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            LocalMessageDB.shared.upsert(cid: cid, uid: me, file) { c.resume(returning: $0) }
+        }
+        guard filed else {
+            restUntil[cid] = Date().addingTimeInterval(Self.rest)
+            return
+        }
         // ⛔ NO GAP (2026-11-12): only a pull that continues from an existing mark is contiguous. A
         // chat with no mark got only its newest 60, so it vouches for nothing: no mark, no cursor
-        // (phase 4's full pull sets the first mark). The cursor goes out after the rows commit.
+        // (phase 4's full pull sets the first mark). The cursor goes out after the mark is stored.
         if from != nil {
-            LocalMessageDB.shared.setSyncedUpTo(cid: cid, uid: me, ms: upTo)
-            LocalMessageDB.shared.afterWrites { DeliveryCursor.write(cid: cid, me: me, ms: upTo) }
+            let marked = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+                LocalMessageDB.shared.setSyncedUpTo(cid: cid, uid: me, ms: upTo) { c.resume(returning: $0) }
+            }
+            guard marked else {
+                restUntil[cid] = Date().addingTimeInterval(Self.rest)
+                return
+            }
+            DeliveryCursor.write(cid: cid, me: me, ms: upTo)
         }
         if stoppedOnKeys { return }
         if from != nil, docs.count == Self.pageSize {

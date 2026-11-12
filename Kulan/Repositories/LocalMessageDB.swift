@@ -59,11 +59,22 @@ final class LocalMessageDB {
 
     /// Files these messages (new or changed). Local-only rows (notices, sends still in flight) are
     /// left out: only what the server has is history.
-    func upsert(cid: String, uid: String, _ messages: [Message]) {
+    ///
+    /// ⛔ `done(true)` ONLY WHEN EVERY ROW IS WRITTEN AND COMMITTED (safety review 2026-11-12). The
+    /// server deletes on the delivery cursor, so a mark or cursor may only be written from inside a
+    /// `done(true)`: a failed open (`handle` nil, backgrounded), prepare, encode, step or COMMIT
+    /// gives `done(false)`. Nothing to write is `done(true)`. `done` runs on the main thread, in the
+    /// order the calls were made (one serial queue, then main).
+    func upsert(cid: String, uid: String, _ messages: [Message], done: ((Bool) -> Void)? = nil) {
         let rows = messages.filter { $0.sendState == nil && $0.localNoticeSymbol == nil && !$0.id.hasPrefix("local-") }
-        guard !rows.isEmpty, !uid.isEmpty else { return }
+        func finish(_ ok: Bool) {
+            guard let done else { return }
+            DispatchQueue.main.async { done(ok) }
+        }
+        guard !uid.isEmpty else { queue.async { finish(false) }; return }
+        guard !rows.isEmpty else { queue.async { finish(true) }; return }
         queue.async {
-            guard let db = self.handle(uid) else { return }
+            guard let db = self.handle(uid) else { finish(false); return }
             let now = Self.ms(Date())
             let sql = """
                 INSERT INTO messages (cid, id, created_at, sender, type, deleted, edited_at, expires_at, body, updated_at)
@@ -73,9 +84,14 @@ final class LocalMessageDB {
                   expires_at = excluded.expires_at, body = excluded.body, updated_at = excluded.updated_at
                 """
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                sqlite3_finalize(stmt)
+                finish(false)
+                return
+            }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_exec(db, "BEGIN", nil, nil, nil)
+            guard sqlite3_exec(db, "BEGIN", nil, nil, nil) == SQLITE_OK else { finish(false); return }
+            var ok = true
             for m in rows {
                 // Delete-for-everyone keeps the row, not the words; an opened view-once loses its photo.
                 let body: String
@@ -83,7 +99,7 @@ final class LocalMessageDB {
                     body = "{}"
                 } else if let data = try? Self.encoder.encode(m), let s = String(data: data, encoding: .utf8) {
                     body = s
-                } else { continue }
+                } else { ok = false; continue }   // not written: nothing may vouch for it
                 sqlite3_reset(stmt)
                 Self.bind(stmt, 1, cid)
                 Self.bind(stmt, 2, m.id)
@@ -95,19 +111,18 @@ final class LocalMessageDB {
                 if let e = m.expiresAt { sqlite3_bind_int64(stmt, 8, Self.ms(e)) } else { sqlite3_bind_null(stmt, 8) }
                 Self.bind(stmt, 9, body)
                 sqlite3_bind_int64(stmt, 10, now)
-                sqlite3_step(stmt)
+                if sqlite3_step(stmt) != SQLITE_DONE { ok = false }
             }
-            sqlite3_exec(db, "COMMIT", nil, nil, nil)
+            if sqlite3_exec(db, "COMMIT", nil, nil, nil) != SQLITE_OK {
+                sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+                finish(false)
+                return
+            }
             // D5 (owner 2026-11-12): the chat list's row for this chat follows what was just filed.
             self.refreshSummary(db, cid: cid, uid: uid)
             Self.announceSummaries()
+            finish(ok)
         }
-    }
-
-    /// Runs `f` on the main thread once every write queued before it has committed. The delivery
-    /// cursor goes out only after the messages it vouches for are really on this phone (as Android).
-    func afterWrites(_ f: @escaping () -> Void) {
-        queue.async { DispatchQueue.main.async(execute: f) }
     }
 
     /// Disappearing messages whose time is up leave the phone (on open and on the chat's timer).
@@ -149,40 +164,60 @@ final class LocalMessageDB {
     /// written (a new chats row gets nothing else), and it never moves backwards. 0 is allowed (owner
     /// 2026-11-12): HistoryPull marks a chat with no messages at all as "everything up to 0 is here",
     /// and the forward-only WHERE below still keeps any real mark from being lowered to it.
-    func setSyncedUpTo(cid: String, uid: String, ms: Int64) {
-        guard !cid.isEmpty, !uid.isEmpty, ms >= 0 else { return }
+    ///
+    /// `done` (safety review 2026-11-12): true once the mark is stored (or a higher one already was),
+    /// on the main thread. The delivery cursor is written only from inside a `done(true)`.
+    func setSyncedUpTo(cid: String, uid: String, ms: Int64, done: ((Bool) -> Void)? = nil) {
+        func finish(_ ok: Bool) {
+            guard let done else { return }
+            DispatchQueue.main.async { done(ok) }
+        }
+        guard !cid.isEmpty, !uid.isEmpty, ms >= 0 else { finish(false); return }
         queue.async {
-            guard let db = self.handle(uid) else { return }
+            guard let db = self.handle(uid) else { finish(false); return }
             let sql = """
                 INSERT INTO chats (cid, synced_up_to) VALUES (?, ?)
                 ON CONFLICT(cid) DO UPDATE SET synced_up_to = excluded.synced_up_to
                 WHERE chats.synced_up_to IS NULL OR chats.synced_up_to < excluded.synced_up_to
                 """
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                sqlite3_finalize(stmt)
+                finish(false)
+                return
+            }
             defer { sqlite3_finalize(stmt) }
             Self.bind(stmt, 1, cid)
             sqlite3_bind_int64(stmt, 2, ms)
-            sqlite3_step(stmt)
+            finish(sqlite3_step(stmt) == SQLITE_DONE)
         }
     }
 
     /// ⛔ One `meta` row (owner 2026-11-12: HistoryPull keeps its per-chat progress here so a pull
     /// resumes after a kill). nil value deletes the row. Queued like every write, so it lands after
     /// the rows filed before it.
-    func setMeta(uid: String, key: String, _ value: String?) {
-        guard !uid.isEmpty, !key.isEmpty else { return }
+    /// `done` (safety review 2026-11-12): true once the row is written, on the main thread.
+    func setMeta(uid: String, key: String, _ value: String?, done: ((Bool) -> Void)? = nil) {
+        func finish(_ ok: Bool) {
+            guard let done else { return }
+            DispatchQueue.main.async { done(ok) }
+        }
+        guard !uid.isEmpty, !key.isEmpty else { finish(false); return }
         queue.async {
-            guard let db = self.handle(uid) else { return }
+            guard let db = self.handle(uid) else { finish(false); return }
             let sql = value == nil
                 ? "DELETE FROM meta WHERE key = ?"
                 : "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                sqlite3_finalize(stmt)
+                finish(false)
+                return
+            }
             defer { sqlite3_finalize(stmt) }
             Self.bind(stmt, 1, key)
             if let value { Self.bind(stmt, 2, value) }
-            sqlite3_step(stmt)
+            finish(sqlite3_step(stmt) == SQLITE_DONE)
         }
     }
 

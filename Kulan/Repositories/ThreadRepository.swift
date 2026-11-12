@@ -361,6 +361,9 @@ final class ThreadRepository {
     /// What this chat last wrote to the phone's database (`LocalMessageDB`, owner 2026-11-12 phase 1),
     /// so each update files only the messages that are new or changed.
     @ObservationIgnored private var filedToDB: [String: Message] = [:]
+    /// safety review 2026-11-12: a write to the phone's database failed and the full re-file that
+    /// follows has not committed yet. Nothing is vouched for (no mark, no cursor) while true.
+    @ObservationIgnored private var localDBBehind = false
     // Ids the user has just deleted for everyone, whose server write has not come back yet. Applied as
     // an overlay in rebuild() so the bubble reads as deleted immediately; cleared the moment the real
     // tombstone (or the message's removal) arrives. See markDeletedLocally.
@@ -2100,11 +2103,25 @@ final class ThreadRepository {
         guard let me = Auth.auth().currentUser?.uid else { return }
         // On the chat's first update: what ran out while it was closed leaves the database first.
         if filedToDB.isEmpty { LocalMessageDB.shared.purgeExpired(uid: me) }
+        // ⛔ safety review 2026-11-12: the cursor is written only from inside the write's success.
+        // A failed write forgets what was filed (so the next update files everything again) and
+        // vouches for nothing until such a full re-file has committed (`localDBBehind`). Completions
+        // arrive in call order, so a failure is always seen before any later write's success.
+        let full = filedToDB.isEmpty
         let changed = list.filter { filedToDB[$0.id] != $0 }
         guard !changed.isEmpty else { return }
         for m in changed { filedToDB[m.id] = m }
-        LocalMessageDB.shared.upsert(cid: cid, uid: me, changed)
-        writeDeliveryCursor(me: me, filed: list)
+        LocalMessageDB.shared.upsert(cid: cid, uid: me, changed) { [weak self] ok in
+            guard let self else { return }
+            guard ok else {
+                self.filedToDB = [:]
+                self.localDBBehind = true
+                return
+            }
+            if full { self.localDBBehind = false }
+            guard !self.localDBBehind, Auth.auth().currentUser?.uid == me else { return }
+            self.writeDeliveryCursor(me: me, filed: list)
+        }
     }
 
     /// ⛔ PHASE 2 DELIVERY CURSOR (owner 2026-11-12, shared plan D1): "this phone has every message of
@@ -2124,8 +2141,10 @@ final class ThreadRepository {
         // yet = this chat's history was never fully pulled (phase 4 does that): nothing is vouched for.
         LocalMessageDB.shared.syncedUpTo(cid: chat, uid: me) { mark in
             guard let mark, low <= mark, ms > mark else { return }
-            LocalMessageDB.shared.setSyncedUpTo(cid: chat, uid: me, ms: ms)
-            LocalMessageDB.shared.afterWrites { DeliveryCursor.write(cid: chat, me: me, ms: ms) }
+            LocalMessageDB.shared.setSyncedUpTo(cid: chat, uid: me, ms: ms) { stored in
+                guard stored else { return }
+                DeliveryCursor.write(cid: chat, me: me, ms: ms)
+            }
         }
     }
 
