@@ -34,13 +34,8 @@ enum SiriCalls {
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .outgoing
         interaction.donate(completion: nil)
-        askOnce()
-    }
-
-    /// The one-time "Allow Fariin to use Siri?" question, asked after the first call.
-    static func askOnce() {
-        guard INPreferences.siriAuthorizationStatus() == .notDetermined else { return }
-        DispatchQueue.main.async { INPreferences.requestSiriAuthorization { _ in } }
+        // No permission popup from the app (owner 2026-11-12: other apps never ask). Siri asks by
+        // itself the first time someone uses it with Fariin.
     }
 
     /// 1:1 chats whose person's name matches what was said, best match first.
