@@ -113,9 +113,11 @@ final class LocalMessageDB {
 
     /// ⛔ INBOX SYNC MARK (owner 2026-11-12, plan phase 2): `chats.synced_up_to` = the server time (ms)
     /// up to which `InboxSync` has pulled every message of `cid` to this phone. Only that column is
-    /// written (a new chats row gets nothing else), and it never moves backwards.
+    /// written (a new chats row gets nothing else), and it never moves backwards. 0 is allowed (owner
+    /// 2026-11-12): HistoryPull marks a chat with no messages at all as "everything up to 0 is here",
+    /// and the forward-only WHERE below still keeps any real mark from being lowered to it.
     func setSyncedUpTo(cid: String, uid: String, ms: Int64) {
-        guard !cid.isEmpty, !uid.isEmpty, ms > 0 else { return }
+        guard !cid.isEmpty, !uid.isEmpty, ms >= 0 else { return }
         queue.async {
             guard let db = self.handle(uid) else { return }
             let sql = """
@@ -128,6 +130,25 @@ final class LocalMessageDB {
             defer { sqlite3_finalize(stmt) }
             Self.bind(stmt, 1, cid)
             sqlite3_bind_int64(stmt, 2, ms)
+            sqlite3_step(stmt)
+        }
+    }
+
+    /// ⛔ One `meta` row (owner 2026-11-12: HistoryPull keeps its per-chat progress here so a pull
+    /// resumes after a kill). nil value deletes the row. Queued like every write, so it lands after
+    /// the rows filed before it.
+    func setMeta(uid: String, key: String, _ value: String?) {
+        guard !uid.isEmpty, !key.isEmpty else { return }
+        queue.async {
+            guard let db = self.handle(uid) else { return }
+            let sql = value == nil
+                ? "DELETE FROM meta WHERE key = ?"
+                : "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            Self.bind(stmt, 1, key)
+            if let value { Self.bind(stmt, 2, value) }
             sqlite3_step(stmt)
         }
     }
@@ -147,6 +168,27 @@ final class LocalMessageDB {
         queue.async {
             let marks = self.syncedMarks(uid: uid, cid: nil)
             DispatchQueue.main.async { done(marks) }
+        }
+    }
+
+    /// Every `meta` row whose key starts with `prefix`, key -> value, in one read. Main thread.
+    func meta(uid: String, prefix: String, done: @escaping ([String: String]) -> Void) {
+        queue.async {
+            var out: [String: String] = [:]
+            if let db = self.handle(uid) {
+                var stmt: OpaquePointer?
+                if sqlite3_prepare_v2(db, "SELECT key, value FROM meta WHERE substr(key, 1, ?) = ?",
+                                      -1, &stmt, nil) == SQLITE_OK {
+                    sqlite3_bind_int64(stmt, 1, Int64(prefix.unicodeScalars.count))
+                    Self.bind(stmt, 2, prefix)
+                    while sqlite3_step(stmt) == SQLITE_ROW {
+                        guard let k = sqlite3_column_text(stmt, 0), let v = sqlite3_column_text(stmt, 1) else { continue }
+                        out[String(cString: k)] = String(cString: v)
+                    }
+                }
+                sqlite3_finalize(stmt)
+            }
+            DispatchQueue.main.async { done(out) }
         }
     }
 
