@@ -581,8 +581,22 @@ struct CallView: View {
 
             // No Add people here any more (owner 2026-11-08: it broke calls on real phones and is
             // deleted). The space keeps the name centred (Share Screen moved into the control bar).
-            Color.clear.frame(width: 48, height: 48)
-                .accessibilityHidden(true)
+            // Owner 2026-11-12: with MY camera as the big view the tile holds them, so its flip glyph
+            // was gone and the camera could not be flipped. The flip sits here, top right, then.
+            if showLocalFull, call.localPreviewLive, !myScreenOnCamera, !iAmSharing {
+                Button { buzz(); flipCamera() } label: {
+                    topCircle(image: Image("ic_flip_camera").renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: 20, height: 20))
+                }
+                .buttonStyle(CallControlStyle())
+                .accessibilityLabel("Flip camera")
+                .opacity(controlsVisible ? 1 : 0)
+                .allowsHitTesting(controlsVisible)
+                .accessibilityHidden(!controlsVisible)
+            } else {
+                Color.clear.frame(width: 48, height: 48)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, safeTop + 14)   // clear the iOS status-bar call indicator (green pill)
