@@ -402,6 +402,11 @@ final class ChannelFollows {
     /// The first follow-list snapshot has been applied. The launch's first snapshot does not ask
     /// for channel stories again: the tray's own start already did (audit P10, a double run).
     @ObservationIgnored private var listLoaded = false
+    /// Each live channel document as Firestore sent it, for the chat list's disk copy (owner
+    /// 2026-11-11: VE3 popped in after the first frame and pushed the rows below it down).
+    @ObservationIgnored private var rawDocs: [String: [String: Any]] = [:]
+    /// Channels whose own document has answered at least once this session (found or gone).
+    @ObservationIgnored private var answered: Set<String> = []
     /// One chat-list rebuild per burst (audit P9): at launch every channel's document arrives on
     /// its own, and each one rebuilt the whole list.
     @ObservationIgnored private var listRebuildQueued = false
@@ -430,6 +435,25 @@ final class ChannelFollows {
             c.followedAtMillis = followedAt[cid] ?? 0
             return c
         }
+    }
+
+    /// The followed channels as raw documents for `ConversationsDiskCache`, each carrying my
+    /// follower state under "__follow" (read, mute, pin, archive), so the next launch draws them in
+    /// the first frame exactly as they were.
+    var rawForDisk: [(id: String, data: [String: Any])] {
+        rawDocs.compactMap { cid, data in
+            guard let e = entries[cid] else { return nil }
+            var d = data
+            d["__follow"] = ["read": e.read, "muted": e.muted, "mutedUntil": e.mutedUntil,
+                             "pinned": e.pinned, "archived": e.archived, "at": followedAt[cid] ?? 0]
+            return (cid, d)
+        }
+    }
+
+    /// A followed channel drawn from the disk copy may stay on screen until its live document
+    /// answers, unless the follow list (once loaded) no longer has it. Never a blink out and back.
+    func savedRowStillValid(_ cid: String) -> Bool {
+        docs[cid] == nil && !answered.contains(cid) && !(listLoaded && entries[cid] == nil)
     }
 
     func start(uid: String) {
@@ -597,6 +621,8 @@ final class ChannelFollows {
         followedAt = [:]
         entries = [:]
         docs = [:]
+        rawDocs = [:]
+        answered = []
         myReactions = [:]
         followRx = [:]
         adminRx = [:]
@@ -685,12 +711,15 @@ final class ChannelFollows {
                     return
                 }
                 // A deleted (or no longer readable) channel just drops off the list.
+                self.answered.insert(cid)
                 guard let snap, snap.exists, let data = snap.data(with: .estimate) else {
+                    self.rawDocs[cid] = nil
                     if self.docs.removeValue(forKey: cid) != nil { self.queueListRebuild() }
                     return
                 }
                 let c = Conversation(id: cid, data: data)
                 self.docs[cid] = c
+                self.rawDocs[cid] = data
                 // ⛔ THE CHANNEL'S WALLPAPER REACHES ITS FOLLOWERS (owner 2026-11-03: "when I set a
                 // wallpaper users can't see it"). Shared wallpapers were only read off the chat
                 // list's own feed, and a follower is not in `users`, so a followed channel arrives
@@ -728,10 +757,13 @@ final class ChannelFollows {
             return (followedAt[a] ?? 0) > (followedAt[b] ?? 0)
         }
         let live = Set(ranked.prefix(Self.maxLive))
+        // Not listed live: no document will answer, so a saved row of it must not wait for one.
+        answered.formUnion(next.keys.filter { !live.contains($0) })
         for (cid, l) in docListeners where !live.contains(cid) {
             l.remove()
             docListeners[cid] = nil
             docs[cid] = nil
+            rawDocs[cid] = nil
         }
         for cid in live where docListeners[cid] == nil { attachDocListener(cid) }
         // Keep what I marked locally if the server has not caught up yet (a Mark as Unread is

@@ -293,6 +293,9 @@ final class ConversationsRepository {
             // and `BlockList.start()` above has already put this account's saved list in memory.
             let cached = hideAccountBlocked(ConversationsDiskCache.shared.load(uid: uid), me: uid)
                 .map(Self.burnedIfDue)   // a message that ran out while the app was closed is not shown again
+            // Followed channels from the disk copy hold their rows until their own documents answer
+            // (owner 2026-11-11: VE3 popped in after the first frame). See `withPinnedExtras`.
+            savedFollowed = cached.filter { $0.followerRead != nil }
             if !cached.isEmpty {
                 conversations = cached
                 hasLoaded = true
@@ -842,6 +845,8 @@ final class ConversationsRepository {
     // unpinned, left or deleted and is forgotten.
     @ObservationIgnored private var pinnedExtraListeners: [String: ListenerRegistration] = [:]
     @ObservationIgnored private var pinnedExtraDocs: [String: Conversation] = [:]
+    /// Followed channels drawn from the disk copy at launch, until their live documents answer.
+    @ObservationIgnored private var savedFollowed: [Conversation] = []
     /// The same extras, as the RAW document `ConversationsDiskCache.store` needs (see `writeDiskCache`).
     @ObservationIgnored private var pinnedExtraRaw: [String: (id: String, data: [String: Any])] = [:]
     /// The current window's raw documents, kept so a pinned extra that arrives later can still be
@@ -948,11 +953,17 @@ final class ConversationsRepository {
     private func withPinnedExtras(_ window: [Conversation]) -> [Conversation] {
         // Channels I follow (2026-10-28) are not in `users`, so never in the window: added here.
         let followed = ChannelFollows.shared.conversations
-        guard !pinnedExtraDocs.isEmpty || !followed.isEmpty else { return window }
+        // ⛔ A FOLLOWED CHANNEL IS IN THE FIRST FRAME (owner 2026-11-11, screen recording: VE3
+        // appeared a beat after the list and pushed every row below it down). Its live document
+        // comes two reads later (follow list, then the channel), so the disk copy's row stands in
+        // until that answers, or until the follow list says it is no longer followed.
+        savedFollowed.removeAll { !ChannelFollows.shared.savedRowStillValid($0.id) }
+        guard !pinnedExtraDocs.isEmpty || !followed.isEmpty || !savedFollowed.isEmpty else { return window }
         var seen = Set(window.map(\.id))
         var out = window
         for c in pinnedExtraDocs.values where seen.insert(c.id).inserted { out.append(c) }
         for c in followed where seen.insert(c.id).inserted { out.append(c) }
+        for c in savedFollowed where seen.insert(c.id).inserted { out.append(c) }
         return out
     }
 
@@ -961,6 +972,7 @@ final class ConversationsRepository {
     func channelsChanged() {
         guard listener != nil, let me = Auth.auth().currentUser?.uid, BlockList.shared.isLoaded else { return }
         publish(hideAccountBlocked(withPinnedExtras(lastRaw), me: me))
+        writeDiskCache(uid: me)   // the channels' rows ride the disk copy too
     }
 
     /// L10: the same merge `withPinnedExtras` makes for the live list, but as the raw Firestore
@@ -968,8 +980,13 @@ final class ConversationsRepository {
     /// pinned chat below it out of the very cache that exists to answer the first frame instantly —
     /// it only reappeared a moment later, once the live listener re-merged it in memory.
     private func writeDiskCache(uid: String) {
-        let inWindow = Set(lastRawDocs.map { $0.id })
-        let merged = lastRawDocs + pinnedExtraRaw.values.filter { !inWindow.contains($0.id) }
+        var seen = Set(lastRawDocs.map { $0.id })
+        var merged = lastRawDocs
+        for d in pinnedExtraRaw.values where seen.insert(d.id).inserted { merged.append(d) }
+        // Followed channels too (owner 2026-11-11), so the next launch draws them in the first frame.
+        // A launch's first window write can come before them; `channelsChanged` writes again once
+        // they answer (both collapse into one write, ConversationsDiskCache.writeDelay).
+        for d in ChannelFollows.shared.rawForDisk where seen.insert(d.id).inserted { merged.append(d) }
         ConversationsDiskCache.shared.store(merged, uid: uid)
     }
 
@@ -1071,6 +1088,7 @@ final class ConversationsRepository {
     func reset() {
         stop()
         ChannelFollows.shared.stop()   // the old account's channels
+        savedFollowed = []
         ChannelViewQueue.shared.reset()   // and the views it sent (audit P14)
         Task { @MainActor in ChannelStoryCounts.shared.stop() }   // its story numbers (audit P15)
         // 2026-09-24 fix-all #6: the per-document pin listeners and the window belong to the old account.

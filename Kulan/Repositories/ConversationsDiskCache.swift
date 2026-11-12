@@ -79,8 +79,22 @@ final class ConversationsDiskCache {
             guard let id = entry["__id"] as? String,
                   let body = entry["__doc"] as? [String: Any],
                   let doc = restore(body) as? [String: Any] else { return nil }
-            return Conversation(id: id, data: doc, me: uid)
+            return Self.withFollow(Conversation(id: id, data: doc, me: uid), doc)
         }
+    }
+
+    /// A followed channel (`ChannelFollows.rawForDisk`) carries my follower state under "__follow";
+    /// put back here, so its row draws with the same unread count, mute, pin and archive.
+    private static func withFollow(_ conv: Conversation, _ doc: [String: Any]) -> Conversation {
+        guard let f = doc["__follow"] as? [String: Any] else { return conv }
+        var c = conv
+        c.followerRead = (f["read"] as? NSNumber)?.intValue ?? 0
+        c.followerMuted = f["muted"] as? Bool ?? false
+        c.followerMutedUntil = (f["mutedUntil"] as? NSNumber)?.doubleValue ?? 0
+        c.followerPinned = f["pinned"] as? Bool ?? false
+        c.followerArchived = f["archived"] as? Bool ?? false
+        c.followedAtMillis = (f["at"] as? NSNumber)?.doubleValue ?? 0
+        return c
     }
 
     /// True when the server's last word, saved on this phone, was "no chats". No file at all is
