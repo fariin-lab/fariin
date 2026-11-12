@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Siri calls (owner 2026-11-12). App Store Connect requires example phrases for every intent
+	     the app supports (ITMS-90626 on build 1164 without them). -->
+	<key>IntentPhrases</key>
+	<array>
+		<dict>
+			<key>IntentName</key>
+			<string>INStartCallIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Call Eric on Fariin</string>
+				<string>Video call Amina on Fariin</string>
+				<string>Call Hodan with Fariin</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
