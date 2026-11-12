@@ -42,7 +42,8 @@ actor ICloudBackup {
             case .noBackup: return "There is no chat backup in your iCloud."
             case .busy: return "A backup is already running."
             case .damaged: return "The backup in your iCloud could not be opened."
-            case .cloud(let s): return s
+            // The raw iCloud text (record ids, schema words) means nothing to a person.
+            case .cloud: return "The backup didn't finish. Check your connection and try again."
             }
         }
     }

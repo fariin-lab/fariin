@@ -398,27 +398,15 @@ struct ChatBackupPage: View {
 
     var body: some View {
         List {
+            // Status first, one action under it, settings below (redesign 2026-11-12).
             Section {
-                statusRow
-                if runner.running || runner.waiting != nil {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text(runner.waiting ?? "Backing up...").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-                if let problem = runner.problem, !runner.busy {
-                    Label(problem, systemImage: "exclamationmark.icloud.fill")
-                        .font(.subheadline).foregroundStyle(.red)
-                }
-                backUpPill
+                hero
                     .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-            } footer: {
-                Text("Your chats are saved to your own iCloud, locked so only you can open them. Fariin can't read them. Photos and videos are not included yet.")
+                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
             }
 
             Section {
-                Picker("How Often", selection: $frequency) {
+                Picker("Automatic Backup", selection: $frequency) {
                     ForEach(ChatBackupPrefs.Frequency.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.menu)
@@ -433,21 +421,17 @@ struct ChatBackupPage: View {
             }
 
             Section {
-                Toggle(isOn: Binding(get: { hasPassword }, set: { on in
+                Toggle("Backup Password", isOn: Binding(get: { hasPassword }, set: { on in
                     if on { editLock = true } else { askTurnOff() }
-                })) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Backup Password")
-                        Text(hasPassword ? "On" : "Off · Only this iCloud account can restore")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
+                }))
                 .tint(.green)
                 if hasPassword {
-                    Button("Change Password or Key") { editLock = true }
+                    Button("Change Password") { editLock = true }
                 }
             } footer: {
-                Text("Without a password, a new iPhone can only restore if your iCloud Keychain is on.")
+                Text(hasPassword
+                     ? "You need this password to restore on a new phone."
+                     : "Add a password to restore on a phone without your iCloud Keychain.")
             }
         }
         .navigationTitle("Chat Backup")
@@ -465,18 +449,56 @@ struct ChatBackupPage: View {
         .task { await load() }
     }
 
-    private var statusRow: some View {
-        HStack(spacing: 12) {
+    private var hero: some View {
+        VStack(spacing: 14) {
             Image(systemName: "icloud.fill")
-                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.onFariinAction)
-                .frame(width: 32, height: 32)
-                .background(Circle().fill(Color.fariinAction))
-            if loading && runner.latest == nil {
-                ProgressView()
-            } else {
-                Text(runner.latest.map { "Last backup: \(ChatBackupText.describe($0))" } ?? "No backup yet")
+                .font(.system(size: 34, weight: .regular))
+                .foregroundStyle(Color.fariinAction)
+                .frame(width: 76, height: 76)
+                .background(Circle().fill(Color.fariinAction.opacity(0.12)))
+                .padding(.top, 4)
+
+            VStack(spacing: 4) {
+                if loading && runner.latest == nil {
+                    ProgressView().frame(height: 44)
+                } else if let latest = runner.latest {
+                    Text("Last backup")
+                        .font(.title3.weight(.semibold))
+                    Text(ChatBackupText.describe(latest))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    Text("No backup yet")
+                        .font(.title3.weight(.semibold))
+                    Text("Keep your chats safe if you lose this phone.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
             }
+            .multilineTextAlignment(.center)
+
+            if runner.busy {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(runner.waiting ?? "Backing up...")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                .transition(.opacity)
+            } else if let problem = runner.problem {
+                Text(problem)
+                    .font(.footnote).foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .transition(.opacity)
+            }
+
+            backUpPill.padding(.top, 4)
+
+            Text("Locked so only you can open it. Fariin can't read your backup. Photos and videos are not included yet.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 12)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 4)
+        .animation(.easeOut(duration: 0.2), value: runner.busy)
     }
 
     private var backUpPill: some View {
