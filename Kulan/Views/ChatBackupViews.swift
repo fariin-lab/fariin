@@ -148,6 +148,8 @@ final class ChatBackupRunner {
     private(set) var waiting: String?
     /// Where the running backup is (the page's progress bar).
     private(set) var step: ICloudBackup.Step?
+    /// Goes up once per backup that really finished (not cancelled or failed): the card's checkmark.
+    private(set) var finishedCount = 0
     var problem: String?
     /// The backup now in iCloud, as last read or made.
     var latest: ICloudBackup.Info?
@@ -223,6 +225,7 @@ final class ChatBackupRunner {
                 self?.latest = info
                 ChatRestoreOffer.shared.replacedBy(info)
                 if !quiet { Haptics.notify(.success) }
+                self?.finishedCount += 1
             } catch {
                 guard let words = ChatBackupText.plain(error) else { return }   // cancelled
                 self?.problem = words
@@ -504,11 +507,7 @@ struct ChatBackupPage: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "icloud.fill")
-                    .font(.system(size: 24))
-                    .foregroundStyle(Color.fariinAction)
-                    .frame(width: 48, height: 48)
-                    .background(Circle().fill(Color.fariinAction.opacity(0.1)))
+                BackupBadge(busy: runner.busy, finished: runner.finishedCount)
                 VStack(alignment: .leading, spacing: 3) {
                     if loading && runner.latest == nil {
                         ProgressView().frame(height: 22)
@@ -902,6 +901,14 @@ struct ChatRestoreView: View {
             do {
                 let got = try await ICloudBackup.shared.restore(uid: me, password: password)
                 let n = got.filed
+                // A restore that stopped half way (some parts did not come down) is not marked as
+                // checked, so the offer stays and the person can try again (2026-11-12, with Android).
+                if !got.complete, n > 0 {
+                    problem = "Some chats did not come back. Check your connection and tap Restore again."
+                    Haptics.notify(.error)
+                    stage = needsSecret ? .secret : .ask
+                    return
+                }
                 ChatRestoreOffer.shared.restored(info, uid: me, complete: got.complete)
                 Haptics.notify(.success)
                 stage = .done(n)
@@ -928,5 +935,66 @@ struct ChatRestoreView: View {
     private func skip() {
         ChatRestoreOffer.shared.skipped(info, uid: uid)
         onDone()
+    }
+}
+
+/// The Chat Backup card's badge (owner 2026-11-12): a black circle with the cloud. While a backup
+/// runs, an arrow inside the cloud keeps rising and fading (0.9 s, linear). When a backup really
+/// finishes, the cloud turns into a checkmark for 1.8 s and the circle pops. Still when idle.
+struct BackupBadge: View {
+    var busy: Bool
+    var finished: Int
+
+    @State private var showCheck = false
+    @State private var pop: CGFloat = 1
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color.fariinAction)
+            if showCheck {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(Color.onFariinAction)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+            } else {
+                Image(systemName: "cloud.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(Color.onFariinAction)
+                    .overlay {
+                        if busy && !reduceMotion { RisingArrow().offset(y: 3) }
+                    }
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: 64, height: 64)
+        .scaleEffect(pop)
+        .onChange(of: finished) { _, _ in celebrate() }
+        .accessibilityHidden(true)
+    }
+
+    private func celebrate() {
+        pop = 0.7
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.4)) { pop = 1 }
+        withAnimation(.easeOut(duration: 0.25)) { showCheck = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            withAnimation(.easeInOut(duration: 0.3)) { showCheck = false }
+        }
+    }
+}
+
+/// The arrow inside the cloud while a backup runs: rises and fades, again and again.
+private struct RisingArrow: View {
+    @State private var up = false
+
+    var body: some View {
+        Image(systemName: "arrow.up")
+            .font(.system(size: 12, weight: .heavy))
+            .foregroundStyle(Color.fariinAction)
+            .offset(y: up ? -6 : 4)
+            .opacity(up ? 0 : 1)
+            .onAppear {
+                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { up = true }
+            }
     }
 }
