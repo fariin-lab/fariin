@@ -1290,15 +1290,32 @@ final class Crypto {
     // that has not switched is sealed exactly as before. Every group send path calls these two; 1:1
     // chats never do. Old "encg1:" messages and sealed files still open through the paths above.
 
+    //
+    // owner 2026-11-12: confirmed again. Groups stay on the server and new group messages are NOT
+    // end-to-end encrypted, so new members and guests can read the history. The one way back is the
+    // server switch `GroupCrypto.sealNewMessages` (config/features.groupE2EE, off by default): on, and
+    // every group seals again (the rules take a sealed envelope in any group). Off, a group seals
+    // only while its document has not switched (`e2ee` not false), because the rules refuse plain
+    // text there; every group made since 2026-10-19 and every one the server switched is plain.
+
     func sealForGroup(_ text: String, members: [String], cid: String) async throws -> String {
-        if await ChatService.groupIsPlain(cid) { return text }
+        if !GroupCrypto.sealNewMessages, await ChatService.groupIsPlain(cid) { return text }
         return try await encryptForGroup(text, members: members)
     }
 
     func sealBytesForGroup(_ data: Data, members: [String], cid: String) async throws -> (cipher: Data, meta: EncMeta) {
-        if await ChatService.groupIsPlain(cid) { return (data, .plain) }
+        if !GroupCrypto.sealNewMessages, await ChatService.groupIsPlain(cid) { return (data, .plain) }
         return try await encryptBytesForGroup(data, members: members)
     }
+}
+
+/// ⛔ GROUP SEAL SWITCH (owner 2026-11-12). New group messages go out without end-to-end encryption
+/// (text, captions, replies, link previews, reactions, files with `EncMeta.plain`). This server
+/// switch (admin panel, config/features key `groupE2EE`) turns group sealing back on for every
+/// phone at its next launch, with no new build. Old sealed group messages open either way. 1:1 chats
+/// never read it: they are always sealed.
+enum GroupCrypto {
+    static var sealNewMessages: Bool { RemoteFeatures.value("groupE2EE", default: false) }
 }
 
 extension Notification.Name {
