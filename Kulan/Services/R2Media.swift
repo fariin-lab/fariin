@@ -77,7 +77,8 @@ enum R2Media {
     }
 
     /// Uploads the (already encrypted) bytes to `path` and returns the "r2:" reference to store.
-    static func upload(_ bytes: Data, path: String, contentType: String) async throws -> String {
+    static func upload(_ bytes: Data, path: String, contentType: String,
+                       progressId: String? = nil) async throws -> String {
         let res: HTTPSCallableResult
         do {
             res = try await callable.call(["op": "put", "key": path, "size": bytes.count,
@@ -93,9 +94,23 @@ enum R2Media {
         var req = URLRequest(url: u)
         req.httpMethod = "PUT"
         req.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        let (_, response) = try await URLSession.shared.upload(for: req, from: bytes)
+        let (_, response) = try await URLSession.shared.upload(for: req, from: bytes,
+                                                               delegate: progressId.map(ProgressRelay.init))
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(code) else { throw Failure.http(code) }
         return "r2:" + path
+    }
+}
+
+/// Sends an R2 upload's bytes-sent to the bubble's ring (`UploadProgress`), like the Storage path.
+private final class ProgressRelay: NSObject, URLSessionTaskDelegate {
+    let id: String
+    init(_ id: String) { self.id = id }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        let f = Double(totalBytesSent) / Double(totalBytesExpectedToSend)
+        let id = id
+        Task { @MainActor in UploadProgress.shared.report(id, f) }
     }
 }
