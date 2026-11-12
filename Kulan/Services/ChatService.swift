@@ -4847,6 +4847,10 @@ enum ChatService {
     /// decrypted copies of those messages are dropped, as Clear Messages does for a whole chat.
     @MainActor
     private static func forgetClearedLocally(_ cid: String, atMillis ms: Double) {
+        // ⛔ The phone's own database too (owner 2026-11-12, phase 1). First, so the open chat
+        // files whatever it still shows again after it.
+        let me = uid
+        if !me.isEmpty { LocalMessageDB.shared.removeChat(cid: cid, uid: me) }
         ThreadRepository.clearedForMe(cid, atMillis: ms)
         let all = ThreadMessageCache.shared.memoryMessages(for: cid) ?? []
         let gone = all.filter { $0.sendState == nil && $0.hasServerTime && $0.createdAt.timeIntervalSince1970 * 1000 <= ms }

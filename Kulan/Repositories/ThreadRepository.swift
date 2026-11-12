@@ -2322,6 +2322,8 @@ final class ThreadRepository {
     @MainActor
     static func clearedForMe(_ cid: String, atMillis ms: Double) {
         guard let r = live[cid]?.value else { return }
+        // The phone's database just lost this chat: what stays on screen is filed again.
+        r.filedToDB = [:]
         r.applyChatCleared(ms)
         for m in r.byId.values where r.isClearedForMe(m) { ChatService.forgetLocalCopies(of: m, cid: cid) }
     }
@@ -2619,6 +2621,8 @@ final class ThreadRepository {
     /// scrolling up would stay), and this phone's cached and decrypted copies go too.
     @MainActor
     static func clearedOnServer(_ cid: String) {
+        // ⛔ The phone's own database too (owner 2026-11-12, phase 1).
+        if let me = Auth.auth().currentUser?.uid { LocalMessageDB.shared.removeChat(cid: cid, uid: me) }
         if let r = live[cid]?.value { r.clearAllLocally() }
         else if let uid = Auth.auth().currentUser?.uid { ChannelHistoryStore.shared.forget(uid: uid, cid: cid) }
         for m in ThreadMessageCache.shared.memoryMessages(for: cid) ?? [] {
@@ -2632,6 +2636,7 @@ final class ThreadRepository {
     private func clearAllLocally() {
         for m in byId.values { ChatService.forgetLocalCopies(of: m, cid: cid) }
         byId.removeAll()
+        filedToDB.removeAll()
         rawReactions.removeAll()
         locallyDeleted.removeAll()
         lastDocs = []   // or a key arriving later re-decrypts the old window back onto the screen
