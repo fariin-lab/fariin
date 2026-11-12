@@ -152,8 +152,13 @@ final class InboxSync {
         }
         // One serial database queue: the rows land before the mark that says they are here.
         LocalMessageDB.shared.upsert(cid: cid, uid: me, file)
-        LocalMessageDB.shared.setSyncedUpTo(cid: cid, uid: me, ms: upTo)
-        DeliveryCursor.write(cid: cid, me: me, ms: upTo)
+        // ⛔ NO GAP (2026-11-12): only a pull that continues from an existing mark is contiguous. A
+        // chat with no mark got only its newest 60, so it vouches for nothing: no mark, no cursor
+        // (phase 4's full pull sets the first mark). The cursor goes out after the rows commit.
+        if from != nil {
+            LocalMessageDB.shared.setSyncedUpTo(cid: cid, uid: me, ms: upTo)
+            LocalMessageDB.shared.afterWrites { DeliveryCursor.write(cid: cid, me: me, ms: upTo) }
+        }
         if stoppedOnKeys { return }
         if from != nil, docs.count == Self.pageSize {
             queue.append((conv: conv, from: upTo))   // more behind this page

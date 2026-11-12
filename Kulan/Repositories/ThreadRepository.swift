@@ -2114,8 +2114,19 @@ final class ThreadRepository {
     /// Channels have no cursor (their history stays on the server for good). The write itself is
     /// `DeliveryCursor.write` (owner 2026-11-12), shared with InboxSync so both keep one memory.
     private func writeDeliveryCursor(me: String, filed: [Message]) {
-        guard let newest = filed.filter({ $0.hasServerTime }).map(\.createdAt).max() else { return }
-        DeliveryCursor.write(cid: cid, me: me, ms: Int64((newest.timeIntervalSince1970 * 1000).rounded(.down)))
+        let stamped = filed.filter { $0.hasServerTime }.map(\.createdAt)
+        guard let newest = stamped.max(), let oldest = stamped.min() else { return }
+        let ms = Int64((newest.timeIntervalSince1970 * 1000).rounded(.down))
+        let low = Int64((oldest.timeIntervalSince1970 * 1000).rounded(.down)), chat = cid
+        // ⛔ NO GAP, EVER. The cursor tells the server "every message up to here is on this phone",
+        // and the server may delete on it. An open chat holds only its newest window, so it moves the
+        // mark (and the cursor) only when that window reaches back to the mark already held. No mark
+        // yet = this chat's history was never fully pulled (phase 4 does that): nothing is vouched for.
+        LocalMessageDB.shared.syncedUpTo(cid: chat, uid: me) { mark in
+            guard let mark, low <= mark, ms > mark else { return }
+            LocalMessageDB.shared.setSyncedUpTo(cid: chat, uid: me, ms: ms)
+            LocalMessageDB.shared.afterWrites { DeliveryCursor.write(cid: chat, me: me, ms: ms) }
+        }
     }
 
     /// Everything due right now: off the screen first, then gone for both people.

@@ -80,6 +80,12 @@ final class LocalMessageDB {
         }
     }
 
+    /// Runs `f` on the main thread once every write queued before it has committed. The delivery
+    /// cursor goes out only after the messages it vouches for are really on this phone (as Android).
+    func afterWrites(_ f: @escaping () -> Void) {
+        queue.async { DispatchQueue.main.async(execute: f) }
+    }
+
     /// Disappearing messages whose time is up leave the phone (on open and on the chat's timer).
     func purgeExpired(uid: String) {
         queue.async {
