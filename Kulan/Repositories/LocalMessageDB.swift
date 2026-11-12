@@ -29,6 +29,12 @@ final class LocalMessageDB {
                                                object: nil, queue: nil) { [weak self] _ in
             self?.closeForBackground()
         }
+        // safety review 2026-11-12: open again only once the app is really back in front.
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                               object: nil, queue: nil) { [weak self] _ in
+            guard let self else { return }
+            self.queue.async { self.backgrounded = false }
+        }
     }
 
     private func closeForBackground() {
@@ -37,10 +43,19 @@ final class LocalMessageDB {
             UIApplication.shared.endBackgroundTask(task)
         }
         queue.async {
+            // safety review 2026-11-12: set before the close, on the queue, so the writes queued
+            // before it still land and nothing after it reopens the file while in the background.
+            self.backgrounded = true
             self.close()
             DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(task) }
         }
     }
+
+    /// ⛔ IN THE BACKGROUND THE FILE STAYS SHUT (safety review 2026-11-12). Set on the queue on
+    /// didEnterBackground just before the close, cleared on didBecomeActive. While true `handle`
+    /// refuses to open the file: every call fails quietly, and since a failed write reports
+    /// `done(false)` (`upsert`), no mark and no cursor move on it. On `queue` only.
+    private var backgrounded = false
 
     static let schemaVersion = 1
     /// All database work, in order, off the main thread.
@@ -342,6 +357,7 @@ final class LocalMessageDB {
 
     /// The open database for `uid` (on `queue` only). Another account's file is closed first.
     private func handle(_ uid: String) -> OpaquePointer? {
+        if backgrounded { return nil }   // safety review 2026-11-12: see `backgrounded`
         if openUid == uid, let db { return db }
         close()
         guard let url = Self.fileURL(uid) else { return nil }
