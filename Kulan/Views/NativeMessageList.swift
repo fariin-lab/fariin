@@ -6352,8 +6352,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             interactionHoldUntil = Date().addingTimeInterval(8)
         case .ended, .cancelled, .failed:
             // Keep the gate up briefly past the lift-off: the menu presentation is still settling.
-            interactionHoldUntil = Date().addingTimeInterval(1.0)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) { [weak self] in
+            // ⛔ ONLY WHEN A MENU IS COMING (owner 2026-11-12: "the reaction badge sometimes comes
+            // fast, sometimes late"). Any finger resting 0.25 s fires this recognizer: the start of a
+            // slow scroll, a press that never opened a menu. Each of those held every land for a
+            // whole second, so a double-tap reaction made just after touching the list waited for it.
+            // With no menu up or ripening, the gate stays only as long as a squeeze could still be
+            // springing back (0.2 s in + 0.2 s out); a menu still has its full second.
+            let hold: TimeInterval = (activeMenu != nil || contextMenuVisible) ? 1.0 : 0.45
+            interactionHoldUntil = Date().addingTimeInterval(hold)
+            DispatchQueue.main.asyncAfter(deadline: .now() + hold + 0.05) { [weak self] in
                 self?.settleFlush()
             }
             // NOTE: the old file also captured the offset at press-start and restored it 1.05s later,
@@ -6864,7 +6871,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 // AND drop the land gate. beginCustomMenu holds it for 8s expecting the menu (or the
                 // passive 0.25s hold recognizer) to release it; a press let go between 0.20s and
                 // 0.25s hits neither, so new messages sat frozen for the full 8s (audit).
-                interactionHoldUntil = Date()
+                // ⛔ AND LAND WHAT IT HELD (owner 2026-11-12, late reaction badge). Opening the gate
+                // alone left a reaction parked during the press waiting for some later, unrelated
+                // land. The gate stays only while the bubble can still be springing back (0.2 s
+                // in + 0.2 s out: a cell must not be laid out under a live transform), then flushes.
+                interactionHoldUntil = Date().addingTimeInterval(0.45)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.settleFlush() }
                 // Chat #64: no menu came, so a jump parked by this press runs now.
                 DispatchQueue.main.async { [weak self] in self?.releaseParkedNewestJump() }
             }

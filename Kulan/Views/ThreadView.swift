@@ -5302,6 +5302,7 @@ struct ThreadView: View {
 
     /// A channel reaction goes through the server, which keeps who picked what private.
     private func sendChannelReaction(_ mid: String, _ emoji: String?) {
+        MessageRowCell.ReactDiag.tap(mid, "channel \(emoji == nil ? "off" : "on")")
         if emoji != nil { ReactionFlight.markLocal() }   // the channel picker calls here directly
         // An emoji the post already shows stays tappable when the list no longer has it (owner
         // 2026-10-30): only a post without it refuses it, as the server does (reactRefusal).
@@ -9892,6 +9893,7 @@ struct ThreadView: View {
     /// (message deleted meanwhile, server said no) used to vanish with nothing said. Same brief toast
     /// the forward and jump paths use.
     private func sendReaction(messageId: String, emoji: String?, toAuthor: String) {
+        MessageRowCell.ReactDiag.tap(messageId, "chat \(emoji == nil ? "off" : "on")")
         if emoji != nil { ReactionFlight.markLocal() }   // the landing animation is for picks made here
         if conversation?.isChannel == true { sendChannelReaction(messageId, emoji); return }
         RxTrace.begin("sendReaction \(emoji ?? "remove")")   // TEMPORARY, see RxTrace
