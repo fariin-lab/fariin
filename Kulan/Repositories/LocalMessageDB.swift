@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import UIKit
 
 /// ⛔ THE PHONE'S OWN MESSAGE DATABASE (owner 2026-11-12: private chats live on the phone, like the
 /// big messengers; Documents/fariin-plans/2026-11-12-device-storage-plan.md, phase 1). Android has
@@ -19,7 +20,27 @@ import SQLite3
 ///   message keeps its row with an empty body; an opened view-once loses its body.
 final class LocalMessageDB {
     static let shared = LocalMessageDB()
-    private init() {}
+    private init() {
+        // ⛔ NO LOCK WHILE SUSPENDED. The file sits in the shared App Group container, and iOS kills an
+        // app that holds a file lock there when it suspends (0xDEAD10CC). Closed on every trip to the
+        // background (writes queued before it finish first, under a background task); the next call
+        // reopens it. `queue: nil`: runs on the posting thread, nothing waits on the main run loop.
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: nil) { [weak self] _ in
+            self?.closeForBackground()
+        }
+    }
+
+    private func closeForBackground() {
+        var task: UIBackgroundTaskIdentifier = .invalid
+        task = UIApplication.shared.beginBackgroundTask(withName: "fariin.localdb.close") {
+            UIApplication.shared.endBackgroundTask(task)
+        }
+        queue.async {
+            self.close()
+            DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(task) }
+        }
+    }
 
     static let schemaVersion = 1
     /// All database work, in order, off the main thread.
@@ -328,8 +349,12 @@ final class LocalMessageDB {
     }
 
     private static func fileURL(_ uid: String) -> URL? {
+        // ⛔ IN THE APP GROUP (2026-11-12): the notification extension must reach it to keep the icon
+        // badge right while the app is closed. Nothing shipped with the old place, so no move is needed.
+        // A lock held there while suspended gets the app killed (0xDEAD10CC): see `closeForBackground`.
         guard !uid.isEmpty, uid.allSatisfy({ $0.isLetter || $0.isNumber }),
-              let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+              let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.kulan.messenger.native")
+                ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         let dir = base.appendingPathComponent("LocalDB", isDirectory: true)
         if !FileManager.default.fileExists(atPath: dir.path) {
             try? FileManager.default.createDirectory(
