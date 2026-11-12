@@ -206,22 +206,30 @@ enum ChatTransfer {
 
         // 3. The message chunks, filed one at a time.
         var filed = 0
+        // safety review 2026-11-12: a chat with any row that did not convert or file gets no mark.
+        var lost = LocalMessageDB.RowLoss()
         for name in manifest.chunks {
             try Task.checkCancellation()
             let file = try await download(folder, name)
-            filed += try await Task.detached(priority: .userInitiated) { () throws -> Int in
-                let rows = try BackupArchive.readMessageRows(file, key: archiveKey)
-                return LocalMessageDB.shared.insertRows(uid: uid, rows: rows)
+            let got = try await Task.detached(priority: .userInitiated) { () throws -> (Int, LocalMessageDB.RowLoss) in
+                let read = try BackupArchive.readMessageRows(file, key: archiveKey)
+                let put = LocalMessageDB.shared.insertRows(uid: uid, rows: read.rows)
+                var lost = read.lost
+                lost.merge(put.lost)
+                return (put.written, lost)
             }.value
+            filed += got.0
+            lost.merge(got.1)
             done += 1
             await progress(done, total)
         }
 
         // 4. chats.bin last: filing it rebuilds every chat's list row from the messages now here.
         let chatsData = try await download(folder, BackupArchive.chatsName)
+        let lostRows = lost
         try await Task.detached(priority: .userInitiated) { () throws -> Void in
             let rows = try BackupArchive.readRows(chatsData, key: archiveKey)
-            LocalMessageDB.shared.insertChatRows(uid: uid, rows: rows)
+            LocalMessageDB.shared.insertChatRows(uid: uid, rows: lostRows.withoutMarks(rows))
         }.value
         done += 1
         await progress(done, total)

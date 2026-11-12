@@ -422,6 +422,38 @@ final class LocalMessageDB {
 extension LocalMessageDB {
     typealias RawRow = [String: Any]
 
+    /// A backup read that did not finish (safety review 2026-11-12): the backup stops rather than
+    /// carry a mark for rows it never read.
+    struct ReadFailed: Error {}
+
+    /// ⛔ ROWS THAT DID NOT MAKE IT (safety review 2026-11-12). A chat that lost any row on the way
+    /// into or out of a backup gets NO `synced_up_to` from that backup: its mark would vouch for the
+    /// lost row. A lost row whose chat is unknown takes every chat's mark.
+    struct RowLoss {
+        var cids: Set<String> = []
+        var unknown = false
+
+        mutating func add(_ row: RawRow) {
+            if let c = row["cid"] as? String, !c.isEmpty { cids.insert(c) } else { unknown = true }
+        }
+
+        mutating func merge(_ other: RowLoss) {
+            cids.formUnion(other.cids)
+            unknown = unknown || other.unknown
+        }
+
+        /// `rows` (chats rows) with `synced_up_to` taken off every chat that lost a row.
+        func withoutMarks(_ rows: [RawRow]) -> [RawRow] {
+            guard unknown || !cids.isEmpty else { return rows }
+            return rows.map { row in
+                guard unknown || (row["cid"] as? String).map({ cids.contains($0) }) ?? true else { return row }
+                var r = row
+                r["synced_up_to"] = NSNull()
+                return r
+            }
+        }
+    }
+
     static let messageColumns = ["cid", "id", "created_at", "sender", "type", "deleted", "edited_at",
                                  "expires_at", "body", "updated_at"]
     static let chatColumns = ["cid", "last_id", "last_at", "unread", "delivered_up_to", "synced_up_to",
@@ -430,18 +462,23 @@ extension LocalMessageDB {
     /// Every message row of `uid`, oldest first (created_at, then cid, id), handed to `each` one page
     /// at a time so memory stays at one page however big the history is. The queue is let go between
     /// pages, so the chats keep filing while a backup reads. `each` runs on the caller's thread.
-    func allRows(uid: String, pageSize: Int = 2000, _ each: ([RawRow]) throws -> Void) rethrows {
+    /// Throws `ReadFailed` when a page cannot be read (safety review 2026-11-12: a short read used to
+    /// look like the end of the history).
+    func allRows(uid: String, pageSize: Int = 2000, _ each: ([RawRow]) throws -> Void) throws {
         let cols = Self.messageColumns.joined(separator: ", ")
         let limit = Int64(max(1, pageSize))
         var after: (at: Int64, cid: String, id: String)?
         while true {
-            let page: [RawRow] = queue.sync {
-                guard let db = self.handle(uid) else { return [] }
+            let read: [RawRow]? = queue.sync {
+                guard let db = self.handle(uid) else { return nil }
                 let sql = after == nil
                     ? "SELECT \(cols) FROM messages ORDER BY created_at, cid, id LIMIT ?1"
                     : "SELECT \(cols) FROM messages WHERE created_at > ?2 OR (created_at = ?2 AND (cid > ?3 OR (cid = ?3 AND id > ?4))) ORDER BY created_at, cid, id LIMIT ?1"
                 var stmt: OpaquePointer?
-                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                    sqlite3_finalize(stmt)
+                    return nil
+                }
                 defer { sqlite3_finalize(stmt) }
                 sqlite3_bind_int64(stmt, 1, limit)
                 if let a = after {
@@ -451,6 +488,7 @@ extension LocalMessageDB {
                 }
                 return Self.readRows(stmt, Self.messageColumns)
             }
+            guard let page = read else { throw ReadFailed() }
             guard let last = page.last,
                   let at = (last["created_at"] as? NSNumber)?.int64Value,
                   let cid = last["cid"] as? String, let id = last["id"] as? String else { return }
@@ -460,16 +498,21 @@ extension LocalMessageDB {
         }
     }
 
-    /// Every chats row of `uid` (one per chat, so small).
-    func allChatRows(uid: String) -> [RawRow] {
+    /// Every chats row of `uid` (one per chat, so small). Throws `ReadFailed` when they cannot be read.
+    func allChatRows(uid: String) throws -> [RawRow] {
         let cols = Self.chatColumns.joined(separator: ", ")
-        return queue.sync {
-            guard let db = self.handle(uid) else { return [] }
+        let read: [RawRow]? = queue.sync {
+            guard let db = self.handle(uid) else { return nil }
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, "SELECT \(cols) FROM chats ORDER BY cid", -1, &stmt, nil) == SQLITE_OK else { return [] }
+            guard sqlite3_prepare_v2(db, "SELECT \(cols) FROM chats ORDER BY cid", -1, &stmt, nil) == SQLITE_OK else {
+                sqlite3_finalize(stmt)
+                return nil
+            }
             defer { sqlite3_finalize(stmt) }
             return Self.readRows(stmt, Self.chatColumns)
         }
+        guard let read else { throw ReadFailed() }
+        return read
     }
 
     /// Restore at sign-in (agreed with Android 2026-11-12): does this phone already hold history for
@@ -489,9 +532,10 @@ extension LocalMessageDB {
     }
 
     /// Restore: files backup rows as they are (INSERT OR REPLACE). Rows without cid / id /
-    /// created_at are skipped. Returns how many were written.
+    /// created_at are skipped. Returns how many were written, and (safety review 2026-11-12) which
+    /// chats lost a row on the way in: those get no mark from this backup.
     @discardableResult
-    func insertRows(uid: String, rows: [RawRow]) -> Int {
+    func insertRows(uid: String, rows: [RawRow]) -> (written: Int, lost: RowLoss) {
         insertRaw(uid: uid, table: "messages", columns: Self.messageColumns,
                   required: ["cid": .text, "id": .text, "created_at": .integer],
                   defaults: ["deleted": NSNumber(value: 0)], rows: rows)
@@ -501,7 +545,7 @@ extension LocalMessageDB {
     @discardableResult
     func insertChatRows(uid: String, rows: [RawRow]) -> Int {
         let written = insertRaw(uid: uid, table: "chats", columns: Self.chatColumns,
-                                required: ["cid": .text], defaults: [:], rows: rows)
+                                required: ["cid": .text], defaults: [:], rows: rows).written
         // D5 (owner 2026-11-12): the chats rows are the last thing a restore files; every chat's list
         // row is worked out again from the messages now here (a row written by the other app or an
         // older backup does not have to agree with this one).
@@ -511,17 +555,29 @@ extension LocalMessageDB {
 
     private enum RawKind { case text, integer }
 
+    /// Every row that is skipped or not written, or a batch that does not commit, is reported in
+    /// `lost` (safety review 2026-11-12).
     private func insertRaw(uid: String, table: String, columns: [String], required: [String: RawKind],
-                           defaults: [String: Any], rows: [RawRow]) -> Int {
-        guard !rows.isEmpty, !uid.isEmpty else { return 0 }
+                           defaults: [String: Any], rows: [RawRow]) -> (written: Int, lost: RowLoss) {
+        guard !rows.isEmpty else { return (0, RowLoss()) }
+        func allLost() -> (written: Int, lost: RowLoss) {
+            var lost = RowLoss()
+            for row in rows { lost.add(row) }
+            return (0, lost)
+        }
+        guard !uid.isEmpty else { return allLost() }
         let sql = "INSERT OR REPLACE INTO \(table) (\(columns.joined(separator: ", "))) VALUES (\(columns.map { _ in "?" }.joined(separator: ", ")))"
         return queue.sync {
-            guard let db = self.handle(uid) else { return 0 }
+            guard let db = self.handle(uid) else { return allLost() }
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                sqlite3_finalize(stmt)
+                return allLost()
+            }
             defer { sqlite3_finalize(stmt) }
             var written = 0
-            sqlite3_exec(db, "BEGIN", nil, nil, nil)
+            var lost = RowLoss()
+            guard sqlite3_exec(db, "BEGIN", nil, nil, nil) == SQLITE_OK else { return allLost() }
             for row in rows {
                 let ok = required.allSatisfy { key, kind in
                     switch kind {
@@ -529,7 +585,7 @@ extension LocalMessageDB {
                     case .integer: return row[key] is NSNumber
                     }
                 }
-                guard ok else { continue }
+                guard ok else { lost.add(row); continue }
                 sqlite3_reset(stmt)
                 sqlite3_clear_bindings(stmt)
                 for (i, col) in columns.enumerated() {
@@ -537,16 +593,22 @@ extension LocalMessageDB {
                     if v == nil || v is NSNull { v = defaults[col] }
                     Self.bindRaw(stmt, Int32(i + 1), v)
                 }
-                if sqlite3_step(stmt) == SQLITE_DONE { written += 1 }
+                if sqlite3_step(stmt) == SQLITE_DONE { written += 1 } else { lost.add(row) }
             }
-            sqlite3_exec(db, "COMMIT", nil, nil, nil)
-            return written
+            guard sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+                sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+                return allLost()
+            }
+            return (written, lost)
         }
     }
 
-    private static func readRows(_ stmt: OpaquePointer?, _ columns: [String]) -> [RawRow] {
+    /// nil when the read stopped on an error rather than at the end (safety review 2026-11-12).
+    private static func readRows(_ stmt: OpaquePointer?, _ columns: [String]) -> [RawRow]? {
         var out: [RawRow] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        var rc = sqlite3_step(stmt)
+        while rc == SQLITE_ROW {
+            defer { rc = sqlite3_step(stmt) }
             var row = RawRow(minimumCapacity: columns.count)
             for (i, col) in columns.enumerated() {
                 let c = Int32(i)
@@ -563,7 +625,7 @@ extension LocalMessageDB {
             }
             out.append(row)
         }
-        return out
+        return rc == SQLITE_DONE ? out : nil
     }
 
     private static func bindRaw(_ stmt: OpaquePointer?, _ i: Int32, _ value: Any?) {

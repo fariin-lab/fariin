@@ -199,6 +199,14 @@ enum BackupArchive {
     /// Writes the encrypted files of one backup into `dir` (manifest.bin, m-0001.bin..., chats.bin;
     /// header.json is the caller's, it needs the store key). Reads the database a page at a time and
     /// keeps one chunk in memory. Returns the file names written. Run it off the main thread.
+    ///
+    /// ⛔ safety review 2026-11-12: the chats rows (with their marks) are read FIRST, then the
+    /// messages. The database has one connection whose queue is let go between pages, so one read
+    /// transaction cannot span them; reading the marks first is what keeps the archive honest: a
+    /// mark only says rows up to it were filed BEFORE it was read, and those rows are then read
+    /// after it (rows are only added later, or removed on purpose: an expired message, Clear
+    /// History). A chat with any message row left out (its body would not convert to the wire
+    /// body) gets NO `synced_up_to` in chats.bin. A database read that fails stops the backup.
     static func writeFiles(uid: String, archiveKey: Bytes, made: Int64, to dir: URL,
                            db: LocalMessageDB = .shared) throws -> [String] {
         var names: [String] = []
@@ -206,6 +214,8 @@ enum BackupArchive {
         var buffer = Data()
         var rowsInBuffer = 0
         var count = 0
+        let chatRows = try db.allChatRows(uid: uid)   // first: see above
+        var lost = LocalMessageDB.RowLoss()
 
         func flush() throws {
             guard rowsInBuffer > 0 else { return }
@@ -220,7 +230,7 @@ enum BackupArchive {
         try db.allRows(uid: uid) { page in
             for var row in page {
                 // A body that will not convert is left out rather than written in this app's own shape.
-                guard let wire = wireBody(row) else { continue }
+                guard let wire = wireBody(row) else { lost.add(row); continue }
                 row["body"] = wire
                 let line = try jsonLine(row, columns: LocalMessageDB.messageColumns)
                 if rowsInBuffer >= maxRowsPerChunk || (rowsInBuffer > 0 && buffer.count + line.count > maxBytesPerChunk) {
@@ -234,7 +244,7 @@ enum BackupArchive {
         try flush()
 
         var chats = Data()
-        for row in db.allChatRows(uid: uid) {
+        for row in lost.withoutMarks(chatRows) {
             chats.append(try jsonLine(row, columns: LocalMessageDB.chatColumns))
         }
         try writeSealed(Bytes(chats), key: archiveKey, to: dir.appendingPathComponent(chatsName))
@@ -272,14 +282,23 @@ enum BackupArchive {
     }
 
     /// The rows of one message chunk, each `body` turned from the wire body back into this app's own
-    /// Message JSON (what LocalMessageDB files). Rows whose body will not convert are skipped.
-    static func readMessageRows(_ file: Data, key: Bytes) throws -> [LocalMessageDB.RawRow] {
-        try readRows(file, key: key).compactMap { row -> LocalMessageDB.RawRow? in
-            var row = row
-            guard let own = ownBody(row) else { return nil }
+    /// Message JSON (what LocalMessageDB files). Rows whose body will not convert, and lines that do
+    /// not parse, are skipped and reported in `lost` (safety review 2026-11-12): their chats get no
+    /// mark from this backup (`RowLoss.withoutMarks`).
+    static func readMessageRows(_ file: Data, key: Bytes) throws -> (rows: [LocalMessageDB.RawRow], lost: LocalMessageDB.RowLoss) {
+        guard let plain = open(Bytes(file), key: key) else { throw Failure.damaged }
+        var rows: [LocalMessageDB.RawRow] = []
+        var lost = LocalMessageDB.RowLoss()
+        for line in plain.split(separator: 0x0A, omittingEmptySubsequences: true) {
+            guard var row = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else {
+                lost.unknown = true   // whose chat it was cannot be told
+                continue
+            }
+            guard let own = ownBody(row) else { lost.add(row); continue }
             row["body"] = own
-            return row
+            rows.append(row)
         }
+        return (rows, lost)
     }
 
     static func isChunkName(_ s: String) -> Bool {

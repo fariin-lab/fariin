@@ -182,23 +182,31 @@ actor ICloudBackup {
         guard manifest.uid == uid else { throw BackupArchive.Failure.otherAccount }
 
         var filed = 0
+        // safety review 2026-11-12: a chat with any row that did not convert or file gets no mark.
+        var lost = LocalMessageDB.RowLoss()
         for start in stride(from: 0, to: manifest.chunks.count, by: Self.batch) {
             let names = Array(manifest.chunks[start..<min(start + Self.batch, manifest.chunks.count)])
             let files = try await download(names, set: set)
             for name in names {
                 guard let file = files[name] else { throw Failure.damaged }
-                filed += try await Task.detached(priority: .utility) { () throws -> Int in
-                    let rows = try BackupArchive.readMessageRows(file, key: archiveKey)
-                    return LocalMessageDB.shared.insertRows(uid: uid, rows: rows)
+                let got = try await Task.detached(priority: .utility) { () throws -> (Int, LocalMessageDB.RowLoss) in
+                    let read = try BackupArchive.readMessageRows(file, key: archiveKey)
+                    let put = LocalMessageDB.shared.insertRows(uid: uid, rows: read.rows)
+                    var lost = read.lost
+                    lost.merge(put.lost)
+                    return (put.written, lost)
                 }.value
+                filed += got.0
+                lost.merge(got.1)
             }
         }
 
         let chatsFile = try await download([BackupArchive.chatsName], set: set)
         if let cf = chatsFile[BackupArchive.chatsName] {
+            let lostRows = lost
             try await Task.detached(priority: .utility) { () throws -> Void in
                 let rows = try BackupArchive.readRows(cf, key: archiveKey)
-                LocalMessageDB.shared.insertChatRows(uid: uid, rows: rows)
+                LocalMessageDB.shared.insertChatRows(uid: uid, rows: lostRows.withoutMarks(rows))
             }.value
         }
         return filed
