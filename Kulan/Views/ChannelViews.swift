@@ -274,9 +274,16 @@ struct DiscoverChannelsView: View {
             .toolbar {
                 // ⛔ DESIGN C (owner 2026-11-11): "Channels | Groups" in the bar where the title was,
                 // filling it, with the back button's width left free on the right too so it sits centred.
+                // ⛔ THE iOS SWITCH, NOT A DRAWN ONE (owner 2026-11-12: "someone removed the iOS pill
+                // tab?"). Design C's hand-drawn capsule (`ExploreTabSwitch`, kept below, unused) read
+                // as flat text and a white pill; the system segmented control is the liquid glass
+                // pill he means. Same place in the bar, same width.
                 ToolbarItem(placement: .principal) {
-                    ExploreTabSwitch(tab: $tab)
-                        .frame(width: max(160, barWidth - 2 * Self.barSide))
+                    Picker("Show", selection: $tab) {
+                        ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: max(160, barWidth - 2 * Self.barSide))
                 }
                 .sharedBackgroundVisibility(.hidden)   // the switch is its own glass; no second capsule
                 if !embedded {
