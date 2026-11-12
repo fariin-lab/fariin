@@ -111,7 +111,7 @@ enum ChatTransfer {
         do {
             // Reading the database and sealing the files: blocking work, off the main thread.
             names = try await Task.detached(priority: .userInitiated) { () throws -> [String] in
-                try BackupArchive.writeFiles(uid: uid, archiveKey: archiveKey, made: made, to: dir)
+                try BackupArchive.writeFiles(uid: uid, archiveKey: archiveKey, made: made, to: dir).names
             }.value
             let header = try await BackupArchive.makeHeader(archiveKey: archiveKey, storeKey: transferKey,
                                                             password: nil, made: made)

@@ -13,15 +13,20 @@ enum BackupStoreKey {
     private static let service = "com.fariin.messenger.backup"
 
     private static func account(_ uid: String) -> String { "fariin_backup_store_key.\(uid)" }
+    private static func mediaAccount(_ uid: String) -> String { "fariin_backup_media_key.\(uid)" }
 
     /// This account's key, or nil when this phone has none (yet: iCloud Keychain can take a while
     /// to bring it to a new phone).
     static func get(uid: String) -> Bytes? {
         guard !uid.isEmpty else { return nil }
+        return read(account(uid))
+    }
+
+    private static func read(_ name: String) -> Bytes? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account(uid),
+            kSecAttrAccount as String: name,
             kSecAttrSynchronizable as String: true,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
@@ -52,14 +57,41 @@ enum BackupStoreKey {
         }
     }
 
-    /// Account deletion: the key goes from every device on this iCloud Keychain.
-    static func delete(uid: String) {
-        let query: [String: Any] = [
+    /// The media key (BackupMedia): names and locks the photo / voice / video records, which later
+    /// backups reuse. Synchronizable like the store key; a restore puts the backup's own key here.
+    static func mediaKey(uid: String) -> Bytes? {
+        guard !uid.isEmpty else { return nil }
+        if let k = read(mediaAccount(uid)) { return k }
+        guard let k = BackupArchive.newKey() else { return nil }
+        setMediaKey(uid: uid, k)
+        return read(mediaAccount(uid))
+    }
+
+    static func setMediaKey(uid: String, _ key: Bytes) {
+        guard !uid.isEmpty, key.count == BackupArchive.keyBytes else { return }
+        let match: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account(uid),
+            kSecAttrAccount as String: mediaAccount(uid),
             kSecAttrSynchronizable as String: true,
         ]
-        SecItemDelete(query as CFDictionary)
+        SecItemDelete(match as CFDictionary)
+        var add = match
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        add[kSecValueData as String] = Data(key)
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    /// Account deletion: the key goes from every device on this iCloud Keychain.
+    static func delete(uid: String) {
+        for name in [account(uid), mediaAccount(uid)] {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: name,
+                kSecAttrSynchronizable as String: true,
+            ]
+            SecItemDelete(query as CFDictionary)
+        }
     }
 }

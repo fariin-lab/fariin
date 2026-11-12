@@ -94,6 +94,25 @@ enum BackupArchive {
         var count: Int
         var chunks: [String]
         var made: Int64
+        /// Photos / voice / videos (BackupMedia); empty in a backup without them.
+        var media: [BackupMedia.Entry] = []
+        var mediaKey: Bytes?
+    }
+
+    /// What a backup with media should hold: the account's media key, whether videos go in, and
+    /// the md- records already in iCloud (listed again, not uploaded again).
+    struct MediaPlan {
+        let master: Bytes
+        let videos: Bool
+        let existing: Set<String>
+    }
+
+    struct Written {
+        /// Every file name of the backup, md- names included. A name with no file in the folder is
+        /// an md- record already in iCloud.
+        var names: [String]
+        /// The bytes of those reused records (for the size shown on the page).
+        var reusedBytes: Int64 = 0
     }
 
     private static let sodium = Sodium()
@@ -211,7 +230,7 @@ enum BackupArchive {
     /// History). A chat with any message row left out (its body would not convert to the wire
     /// body) gets NO `synced_up_to` in chats.bin. A database read that fails stops the backup.
     static func writeFiles(uid: String, archiveKey: Bytes, made: Int64, to dir: URL,
-                           db: LocalMessageDB = .shared) throws -> [String] {
+                           media: MediaPlan? = nil, db: LocalMessageDB = .shared) throws -> Written {
         var names: [String] = []
         var chunks: [String] = []
         var buffer = Data()
@@ -219,6 +238,8 @@ enum BackupArchive {
         var count = 0
         let chatRows = try db.allChatRows(uid: uid)   // first: see above
         var lost = LocalMessageDB.RowLoss()
+        var mediaEntries: [BackupMedia.Entry] = []
+        var mediaSeen = Set<String>()
 
         func flush() throws {
             guard rowsInBuffer > 0 else { return }
@@ -232,6 +253,14 @@ enum BackupArchive {
 
         try db.allRows(uid: uid) { page in
             for var row in page {
+                if let media, let body = row["body"] as? String, body != "{}",
+                   let m = try? messageDecoder.decode(Message.self, from: Data(body.utf8)) {
+                    let cid = row["cid"] as? String ?? ""
+                    for e in BackupMedia.entries(m, cid: cid, master: media.master, videos: media.videos)
+                    where mediaSeen.insert(e.name).inserted {
+                        mediaEntries.append(e)
+                    }
+                }
                 // A body that will not convert is left out rather than written in this app's own shape.
                 guard let wire = wireBody(row) else { lost.add(row); continue }
                 row["body"] = wire
@@ -253,10 +282,32 @@ enum BackupArchive {
         try writeSealed(Bytes(chats), key: archiveKey, to: dir.appendingPathComponent(chatsName))
         names.append(chatsName)
 
-        let manifest: [String: Any] = ["uid": uid, "count": count, "chunks": chunks, "made": NSNumber(value: made)]
+        // Media last: an item that is not on this phone (or too big) is simply left out.
+        var kept: [BackupMedia.Entry] = []
+        var reused: Int64 = 0
+        if let media {
+            for e in mediaEntries {
+                guard let size = BackupMedia.localSize(e) else { continue }
+                if media.existing.contains(e.name) {
+                    reused += Int64(size + nonceBytes + 16)
+                } else {
+                    guard let key = BackupMedia.key(master: media.master, e),
+                          let bytes = BackupMedia.localBytes(e) else { continue }
+                    try autoreleasepool { try writeSealed(Bytes(bytes), key: key, to: dir.appendingPathComponent(e.name)) }
+                }
+                kept.append(e)
+                names.append(e.name)
+            }
+        }
+
+        var manifest: [String: Any] = ["uid": uid, "count": count, "chunks": chunks, "made": NSNumber(value: made)]
+        if let media, !kept.isEmpty {
+            manifest["mediaKey"] = b64(media.master)
+            manifest["media"] = kept.map(\.json)
+        }
         try writeSealed(Bytes(try json(manifest)), key: archiveKey, to: dir.appendingPathComponent(manifestName))
         names.insert(manifestName, at: 0)
-        return names
+        return Written(names: names, reusedBytes: reused)
     }
 
     // MARK: - Reading
@@ -267,9 +318,12 @@ enum BackupArchive {
               let uid = obj["uid"] as? String,
               let chunks = obj["chunks"] as? [String] else { throw Failure.damaged }
         // Only names of the agreed shape: a changed manifest must not ask for other files.
+        let mediaKey = unb64(obj["mediaKey"]).flatMap { $0.count == keyBytes ? $0 : nil }
+        let media = mediaKey == nil ? [] : ((obj["media"] as? [[String: Any]]) ?? []).compactMap(BackupMedia.Entry.init)
         return Manifest(uid: uid, count: (obj["count"] as? NSNumber)?.intValue ?? 0,
                         chunks: chunks.filter(isChunkName),
-                        made: (obj["made"] as? NSNumber)?.int64Value ?? 0)
+                        made: (obj["made"] as? NSNumber)?.int64Value ?? 0,
+                        media: media, mediaKey: mediaKey)
     }
 
     /// The rows of one encrypted chunk (m-NNNN.bin or chats.bin). Lines that do not parse are skipped.

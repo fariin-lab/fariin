@@ -52,6 +52,12 @@ enum ChatBackupPrefs {
     }
     static var frequency: Frequency { frequencyChoice ?? .off }
 
+    /// Off by default: videos are big. Photos and voice notes always go in.
+    static var includeVideos: Bool {
+        get { d.bool(forKey: key("videos")) }
+        set { d.set(newValue, forKey: key("videos")) }
+    }
+
     /// Off by default: backups wait for Wi-Fi.
     static var useMobileData: Bool {
         get { d.bool(forKey: key("mobileData")) }
@@ -198,7 +204,8 @@ final class ChatBackupRunner {
                 guard has else { return }
             }
             do {
-                let info = try await ICloudBackup.shared.backupNow(uid: uid, password: password)
+                let info = try await ICloudBackup.shared.backupNow(uid: uid, password: password,
+                                                                   videos: ChatBackupPrefs.includeVideos)
                 ChatBackupPrefs.lastMade = info.made
                 self?.latest = info
                 ChatRestoreOffer.shared.replacedBy(info)
@@ -393,6 +400,7 @@ struct ChatBackupPage: View {
     @State private var loading = true
     @State private var frequency = ChatBackupPrefs.frequency
     @State private var mobileData = ChatBackupPrefs.useMobileData
+    @State private var videos = ChatBackupPrefs.includeVideos
     @State private var hasPassword = ChatBackupPrefs.password != nil
     @State private var editLock = false
 
@@ -414,6 +422,8 @@ struct ChatBackupPage: View {
                     ChatBackupPrefs.frequencyChoice = f
                     ChatBackupScheduler.runIfDue()
                 }
+                Toggle("Include Videos", isOn: $videos).tint(.green)
+                    .onChange(of: videos) { _, on in ChatBackupPrefs.includeVideos = on }
                 Toggle("Use Mobile Data", isOn: $mobileData).tint(.green)
                     .onChange(of: mobileData) { _, on in ChatBackupPrefs.useMobileData = on }
             } footer: {
@@ -491,7 +501,7 @@ struct ChatBackupPage: View {
 
             backUpPill.padding(.top, 4)
 
-            Text("Locked so only you can open it. Fariin can't read your backup. Photos and videos are not included yet.")
+            Text("Locked so only you can open it. Fariin can't read your backup. Photos and voice messages saved on this phone are included.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 12)

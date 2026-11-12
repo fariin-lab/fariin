@@ -76,7 +76,7 @@ actor ICloudBackup {
     /// Backs up `uid`'s whole local database now. `password` (optional, at least 8 characters, or the
     /// 64-digit key) adds a second lock beside the iCloud Keychain one. Returns the new backup.
     @discardableResult
-    func backupNow(uid: String, password: String? = nil) async throws -> Info {
+    func backupNow(uid: String, password: String? = nil, videos: Bool = false) async throws -> Info {
         guard ChatBackup.enabled else { throw Failure.off }
         guard !uid.isEmpty else { throw Failure.damaged }
         guard !busy else { throw Failure.busy }
@@ -98,19 +98,27 @@ actor ICloudBackup {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         // Reading the database and sealing the files: plain blocking work, off this actor.
-        let names = try await Task.detached(priority: .utility) { () throws -> [String] in
-            try BackupArchive.writeFiles(uid: uid, archiveKey: archiveKey, made: made, to: dir)
+        // Photos / voice / videos: the md- records the current backup already has are reused.
+        let plan = BackupStoreKey.mediaKey(uid: uid).map {
+            BackupArchive.MediaPlan(master: $0, videos: videos,
+                                    existing: Set(((old?["names"] as? [String]) ?? []).filter(BackupMedia.isName)))
+        }
+        let written = try await Task.detached(priority: .utility) { () throws -> BackupArchive.Written in
+            try BackupArchive.writeFiles(uid: uid, archiveKey: archiveKey, made: made, to: dir, media: plan)
         }.value
+        let names = written.names
         try Task.checkCancellation()   // Cancel on the Chat Backup page (2026-11-12)
         let header = try await BackupArchive.makeHeader(archiveKey: archiveKey, storeKey: storeKey,
                                                         password: password, made: made)
         let headerJSON = try BackupArchive.encodeHeader(header)
 
         let set = UUID().uuidString.lowercased()
-        var size = Int64(headerJSON.count)
+        var size = Int64(headerJSON.count) + written.reusedBytes
         var records: [CKRecord] = []
         for name in names {
             let url = dir.appendingPathComponent(name)
+            // An md- name with no file here is a record already in iCloud.
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
             let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
             size += bytes
             let r = CKRecord(recordType: Self.fileType,
@@ -142,7 +150,7 @@ actor ICloudBackup {
 
         // 3. Only now the old set goes.
         if let old {
-            let fresh = Set(records.map { $0.recordID.recordName })
+            let fresh = Set(names.map { Self.recordName(set: set, file: $0) })
             let gone = Self.recordNames(old).filter { !fresh.contains($0) }
             await deleteQuietly(gone)
         }
@@ -213,6 +221,23 @@ actor ICloudBackup {
                 let rows = try BackupArchive.readRows(cf, key: archiveKey)
                 LocalMessageDB.shared.insertChatRows(uid: uid, rows: lostRows.withoutMarks(rows))
             }.value
+        }
+
+        // Photos / voice / videos after the messages. A missing or damaged item is skipped: the
+        // message still shows, and fetches from our server while it is there.
+        if let master = manifest.mediaKey, !manifest.media.isEmpty {
+            BackupStoreKey.setMediaKey(uid: uid, master)   // the next backup from here reuses them
+            for start in stride(from: 0, to: manifest.media.count, by: Self.batch) {
+                let part = Array(manifest.media[start..<min(start + Self.batch, manifest.media.count)])
+                guard let files = try? await download(part.map(\.name), set: set) else { continue }
+                await Task.detached(priority: .utility) {
+                    for e in part {
+                        guard let file = files[e.name], let key = BackupMedia.key(master: master, e),
+                              let plain = BackupArchive.open(Bytes(file), key: key) else { continue }
+                        BackupMedia.put(Data(plain), e)
+                    }
+                }.value
+            }
         }
         return (filed, filed > 0 && filed == manifest.count)
     }
@@ -329,7 +354,10 @@ actor ICloudBackup {
 
     // MARK: - Names
 
-    private static func recordName(set: String, file: String) -> String { "\(set)-\(file)" }
+    /// Media records (md-) belong to no set: every backup that still has the item lists them.
+    private static func recordName(set: String, file: String) -> String {
+        BackupMedia.isName(file) ? file : "\(set)-\(file)"
+    }
 
     private static func recordNames(_ header: CKRecord) -> [String] {
         guard let set = header["set"] as? String, let names = header["names"] as? [String] else { return [] }
