@@ -7,7 +7,10 @@ import Sodium
 /// Turning it on also needs the iCloud (CloudKit) capability on the App ID in the Apple Developer
 /// portal, then the entitlement in Kulan.entitlements; without both, CloudKit stops the app.
 enum ChatBackup {
-    static let enabled = false
+    /// ON for test builds (owner 2026-11-12: finish everything, his phone-to-phone test is last).
+    /// iCloud container + entitlement + production CloudKit schema are in place. The server can still
+    /// switch it off at once: config/features.chatBackup = false (read as of the last launch).
+    static var enabled: Bool { RemoteFeatures.offOnly("chatBackup", default: true) }
 }
 
 /// BACKUP ARCHIVE FORMAT v1 (agreed with Android 2026-11-12; the Android app writes and reads the same

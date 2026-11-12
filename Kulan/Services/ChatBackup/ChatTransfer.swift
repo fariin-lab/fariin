@@ -19,7 +19,8 @@ import FirebaseStorage
 ///   last). The old phone sees the folder empty and says so.
 /// - The server deletes transfer folders older than an hour (and a 1-day lifecycle rule backs it up).
 enum ChatTransfer {
-    static let enabled = false
+    /// ON for test builds (owner 2026-11-12). Server kill switch: config/features.chatTransfer = false.
+    static var enabled: Bool { RemoteFeatures.offOnly("chatTransfer", default: true) }
 
     static let scheme = "fariin-transfer"
     static let version = "v1"
