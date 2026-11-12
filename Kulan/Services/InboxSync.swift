@@ -134,11 +134,12 @@ final class InboxSync {
             }
         }.value
         guard Auth.auth().currentUser?.uid == me, !ThreadRepository.isListening(cid) else { return }
-        // Oldest first. A message whose keys are still missing ("…") stops the page there: what
-        // came before it is filed and marked, it and the rest are read again on a later run.
+        // Oldest first. A message whose keys are still missing ("…", or "🔒" in a group: safety
+        // review 2026-11-12, `DeliveryCursor.holdsMark`) stops the page there: what came before it is
+        // filed and marked, it and the rest are read again on a later run.
         var kept = built
         var stoppedOnKeys = false
-        if let i = built.firstIndex(where: { !$0.m.deleted && $0.m.text == "…" }) {
+        if let i = built.firstIndex(where: { DeliveryCursor.holdsMark($0.m, cid: cid) }) {
             kept = Array(built[..<i])
             stoppedOnKeys = true
             restUntil[cid] = Date().addingTimeInterval(Self.rest)
@@ -219,11 +220,17 @@ enum DeliveryCursor {
     static func line(forMark mark: Int64) -> Int64 { mark - 1 }
 
     /// ⛔ A MESSAGE THIS PHONE CANNOT KEEP YET (safety review 2026-11-12). No mark may pass it: a
-    /// mark one millisecond below it at most. Not deleted, and its words still "…" (the keys are not
-    /// warm yet; it decrypts later).
+    /// mark one millisecond below it at most, and InboxSync / HistoryPull stop filing there and read
+    /// it again later. Not deleted, and either
+    /// - its words still "…" (the keys are not warm yet; it decrypts later), or
+    /// - a GROUP message sealed for keys this phone does not hold ("🔒", no wrap for me `notForMe`,
+    ///   or a caption-less file whose key will not open, `sealUnreadable`). In a group that is not final: a member can release the
+    ///   key (`rk`) later and it opens then. In a 1:1 chat "🔒" is final and is filed as it is.
     static func holdsMark(_ m: Message, cid: String) -> Bool {
         guard !m.deleted else { return false }
-        return m.text == "…"
+        if m.text == "…" { return true }
+        let group = !cid.contains("_")   // the server's own test (ChatService.summaryOfNewest)
+        return group && (m.text == "🔒" || m.notForMe || m.sealUnreadable == true)
     }
 
     /// `ms` is the MARK (newest millisecond filed); what is sent is `line(forMark:)`.

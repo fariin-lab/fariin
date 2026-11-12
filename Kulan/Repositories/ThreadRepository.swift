@@ -2144,8 +2144,8 @@ final class ThreadRepository {
     /// ⛔ safety review 2026-11-12: `low` and the newest millisecond come ONLY from the live window's
     /// own documents, and only from a window the SERVER sent (`window` is empty for a cache window):
     /// never from seeded, cached, paged-in or local-database rows, which can have holes. A message in
-    /// that window the phone cannot keep yet (`DeliveryCursor.holdsMark`: keys not here, "…") stops
-    /// the mark one millisecond below it.
+    /// that window the phone cannot keep yet (`DeliveryCursor.holdsMark`: keys not here, "…", or "🔒"
+    /// in a group) stops the mark one millisecond below it.
     private func writeDeliveryCursor(me: String, window: [QueryDocumentSnapshot]) {
         // Oldest first; a doc still waiting for its server stamp has no time and is left out (it is
         // the newest, so leaving it out only lowers the mark).

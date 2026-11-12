@@ -13,8 +13,10 @@ import FirebaseFirestore
 /// - T0 = the server time of the newest message, read as the first page (newest first).
 /// - Pages of 100 go backwards from there (server only, cursor = the page's last document), built off
 ///   the main thread exactly like InboxSync, with the same hide rules, and filed page by page.
-/// - A message whose keys are not here yet ("…") stops the chat; it is tried again later. A message
-///   that can never be read ("🔒") is filed like any other.
+/// - A message whose keys are not here yet ("…") stops the chat; it is tried again later. So does a
+///   GROUP message sealed without a key here ("🔒": a released key can still open it, safety review
+///   2026-11-12, `DeliveryCursor.holdsMark`). In a 1:1 chat "🔒" can never be read and is filed like
+///   any other.
 /// - A short page means the first message is reached: mark = T0, then the delivery cursor at T0 once
 ///   the rows have committed. A chat with no messages at all gets mark 0 (no cursor).
 /// - Progress lives in the database's `meta` ("pull.<cid>" = "<oldest filed ms>|<T0>", then "done"),
@@ -155,11 +157,12 @@ final class HistoryPull {
             }
             guard let top = t0 else { return false }
 
-            // Newest first. A message whose keys are missing ("…") stops the chat there: what is newer
-            // than it is filed and remembered, it and everything older are read again later.
+            // Newest first. A message whose keys are missing ("…", or "🔒" in a group: safety review
+            // 2026-11-12, `DeliveryCursor.holdsMark`) stops the chat there: what is newer than it is
+            // filed and remembered, it and everything older are read again later.
             var kept = built
             var stoppedOnKeys = false
-            if let i = built.firstIndex(where: { !$0.m.deleted && $0.m.text == "…" }) {
+            if let i = built.firstIndex(where: { DeliveryCursor.holdsMark($0.m, cid: cid) }) {
                 kept = Array(built[..<i])
                 stoppedOnKeys = true
             }
