@@ -14,7 +14,8 @@ import FirebaseFirestore
 ///   run at a time, at most 3 chats at once.
 /// - A chat the app is already listening to (`ThreadRepository.isListening`) files itself.
 /// - Filing twice is harmless: the database upserts by (cid, id).
-/// - A chat never pulled before gets only its newest 60 messages; older history is phase 4.
+/// - A chat never pulled before gets only its newest 60 messages; its whole history and first mark
+///   come from `HistoryPull` (phase 4).
 @MainActor
 final class InboxSync {
     static let shared = InboxSync()
@@ -51,6 +52,7 @@ final class InboxSync {
 
     /// Ask for a run. Kicks within the 2 s wait share one run; a kick during a run brings one more.
     func kick() {
+        HistoryPull.shared.start()   // owner 2026-11-12: phase 4 full pull sets each chat's FIRST mark
         guard Self.enabled, pendingKick == nil else { return }
         pendingKick = Task { [weak self] in
             try? await Task.sleep(nanoseconds: Self.delay)
