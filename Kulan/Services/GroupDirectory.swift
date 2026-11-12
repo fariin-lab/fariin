@@ -218,7 +218,7 @@ enum GroupNameCheck: Equatable {
             if d["available"] as? Bool == true { return .available }
             switch d["code"] as? String {
             case "USERNAME_TAKEN": return .taken
-            case "USERNAME_RESERVED": return .invalid("This link can't be used.")
+            case "USERNAME_RESERVED": return .invalid(lockedText)
             default: return .invalid(groupWords(d["reason"] as? String) ?? "This link can't be used.")
             }
         } catch {
@@ -236,7 +236,7 @@ enum GroupNameCheck: Equatable {
                 // The literal "details" (the SDK constant's value), as ChatPin.lockDeadline does.
                 let code = (ns.userInfo["details"] as? [String: Any])?["code"] as? String
                 if code == "USERNAME_TAKEN" { throw Failure("Another group or person already has this link.") }
-                if code == "USERNAME_RESERVED" { throw Failure("This link can't be used.") }
+                if code == "USERNAME_RESERVED" { throw Failure(lockedText) }
                 throw Failure(groupWords(ns.localizedDescription) ?? "Couldn't save the link. Try again.")
             }
             throw Failure(NetworkState.shared.isOnline ? "Couldn't save the link. Try again."
@@ -251,8 +251,14 @@ enum GroupNameCheck: Equatable {
     }
 
     /// The name rules' sentences speak of "Usernames"; on a group's page it is the link.
+    /// ⛔ A LOCKED NAME, WORD FOR WORD (owner 2026-11-12, his screenshot of "That link is reserved."
+    /// on a channel's link): "Sorry, this username is invalid." here too, not "reserved" and not
+    /// swapped to "link". The server sends the same sentence (RESERVED_TEXT) for every locked name.
+    static let lockedText = "Sorry, this username is invalid."
+
     private static func groupWords(_ s: String?) -> String? {
         guard let s, !s.isEmpty, s != "taken" else { return nil }
+        if s == lockedText { return s }
         return s.replacingOccurrences(of: "Usernames", with: "Links")
             .replacingOccurrences(of: "username", with: "link")
     }
