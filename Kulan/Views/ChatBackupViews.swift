@@ -298,6 +298,9 @@ final class ChatRestoreOffer {
     /// After sign-in (RootView, once per launch on the main screen). Restore first, then the setup
     /// card, never both on screen. All quiet: an iCloud problem here just asks nothing.
     static func atSignIn() async {
+        // Phase 4: "Moving from another phone?" comes first (only with no history here); a finished
+        // transfer sets meta "restored", so the iCloud check below then offers nothing.
+        await ChatTransferFlow.atSignIn()
         guard ChatBackup.enabled, let uid = Auth.auth().currentUser?.uid else { return }
         let offer = ChatRestoreOffer.shared
         try? await Task.sleep(nanoseconds: 1_000_000_000)

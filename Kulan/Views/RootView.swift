@@ -22,6 +22,7 @@ struct RootView: View {
     /// The account's Backup PIN holds another key than this phone's (owner 2026-11-12): offered once.
     @State private var keyOffer = KeyBackupOffer.shared
     @State private var chatOffer = ChatRestoreOffer.shared
+    @State private var transferOffer = ChatTransferOffer.shared
     /// "Set Up" on the Keep your messages alert: the Backup PIN page in a sheet.
     @State private var showBackupPin = false
 
@@ -288,6 +289,11 @@ struct RootView: View {
                     if let info = chatOffer.screen {
                         ChatRestoreView(info: info) { chatOffer.screen = nil }
                     }
+                }
+                // Phone-to-phone transfer (phase 4): asked first by ChatBackupFlow.atSignIn.
+                .fullScreenCover(isPresented: Binding(get: { transferOffer.asking },
+                                                      set: { if !$0 { transferOffer.asking = false } })) {
+                    ChatReceiveView { transferOffer.asking = false }
                 }
                 .sheet(isPresented: $showBackupPin) {
                     NavigationStack {
