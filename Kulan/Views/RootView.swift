@@ -259,8 +259,13 @@ struct RootView: View {
                     // "Keep your messages" (owner 2026-11-12, as Android): 20 s after start, once per
                     // account, never over another question or screen that is up.
                     try? await Task.sleep(nanoseconds: 18_500_000_000)
-                    guard keyOffer.screen == nil, keyOffer.bar == nil, !Self.somethingPresented, await KeyBackup.shouldNudge(),
-                          !Self.somethingPresented else { return }
+                    guard keyOffer.screen == nil, keyOffer.bar == nil, await KeyBackup.shouldNudge() else { return }
+                    // A call or another screen is up: wait until it is gone, then ask (as Android).
+                    while Self.somethingPresented {
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        if Task.isCancelled { return }
+                    }
+                    guard keyOffer.screen == nil, keyOffer.bar == nil else { return }
                     KeyBackup.markNudged()
                     GlassConfirmDoor.show(
                         title: "Keep your messages",
