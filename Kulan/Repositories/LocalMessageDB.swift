@@ -218,3 +218,152 @@ final class LocalMessageDB {
         sqlite3_bind_text(stmt, i, s, -1, transient)
     }
 }
+
+// MARK: - Raw rows for the backup (phase 3)
+
+/// The backup archive (BackupArchive, format v1 agreed with Android) carries the database's rows as
+/// they are, column for column, not through `Message`: a row Android wrote and a row iOS wrote travel
+/// the same way. Values are `String`, `NSNumber` (INTEGER / REAL) or `NSNull`, ready for
+/// JSONSerialization. Every function here waits for the database queue, so never call one ON it
+/// (they are for the backup's own background task).
+extension LocalMessageDB {
+    typealias RawRow = [String: Any]
+
+    static let messageColumns = ["cid", "id", "created_at", "sender", "type", "deleted", "edited_at",
+                                 "expires_at", "body", "updated_at"]
+    static let chatColumns = ["cid", "last_id", "last_at", "unread", "delivered_up_to", "synced_up_to",
+                              "oldest_pulled", "body"]
+
+    /// Every message row of `uid`, oldest first (created_at, then cid, id), handed to `each` one page
+    /// at a time so memory stays at one page however big the history is. The queue is let go between
+    /// pages, so the chats keep filing while a backup reads. `each` runs on the caller's thread.
+    func allRows(uid: String, pageSize: Int = 2000, _ each: ([RawRow]) throws -> Void) rethrows {
+        let cols = Self.messageColumns.joined(separator: ", ")
+        let limit = Int64(max(1, pageSize))
+        var after: (at: Int64, cid: String, id: String)?
+        while true {
+            let page: [RawRow] = queue.sync {
+                guard let db = self.handle(uid) else { return [] }
+                let sql = after == nil
+                    ? "SELECT \(cols) FROM messages ORDER BY created_at, cid, id LIMIT ?1"
+                    : "SELECT \(cols) FROM messages WHERE created_at > ?2 OR (created_at = ?2 AND (cid > ?3 OR (cid = ?3 AND id > ?4))) ORDER BY created_at, cid, id LIMIT ?1"
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+                defer { sqlite3_finalize(stmt) }
+                sqlite3_bind_int64(stmt, 1, limit)
+                if let a = after {
+                    sqlite3_bind_int64(stmt, 2, a.at)
+                    Self.bind(stmt, 3, a.cid)
+                    Self.bind(stmt, 4, a.id)
+                }
+                return Self.readRows(stmt, Self.messageColumns)
+            }
+            guard let last = page.last,
+                  let at = (last["created_at"] as? NSNumber)?.int64Value,
+                  let cid = last["cid"] as? String, let id = last["id"] as? String else { return }
+            try each(page)
+            if page.count < limit { return }
+            after = (at, cid, id)
+        }
+    }
+
+    /// Every chats row of `uid` (one per chat, so small).
+    func allChatRows(uid: String) -> [RawRow] {
+        let cols = Self.chatColumns.joined(separator: ", ")
+        return queue.sync {
+            guard let db = self.handle(uid) else { return [] }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT \(cols) FROM chats ORDER BY cid", -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            return Self.readRows(stmt, Self.chatColumns)
+        }
+    }
+
+    /// Restore: files backup rows as they are (INSERT OR REPLACE). Rows without cid / id /
+    /// created_at are skipped. Returns how many were written.
+    @discardableResult
+    func insertRows(uid: String, rows: [RawRow]) -> Int {
+        insertRaw(uid: uid, table: "messages", columns: Self.messageColumns,
+                  required: ["cid": .text, "id": .text, "created_at": .integer],
+                  defaults: ["deleted": NSNumber(value: 0)], rows: rows)
+    }
+
+    /// Restore: the chats rows (INSERT OR REPLACE). Rows without cid are skipped.
+    @discardableResult
+    func insertChatRows(uid: String, rows: [RawRow]) -> Int {
+        insertRaw(uid: uid, table: "chats", columns: Self.chatColumns,
+                  required: ["cid": .text], defaults: [:], rows: rows)
+    }
+
+    private enum RawKind { case text, integer }
+
+    private func insertRaw(uid: String, table: String, columns: [String], required: [String: RawKind],
+                           defaults: [String: Any], rows: [RawRow]) -> Int {
+        guard !rows.isEmpty, !uid.isEmpty else { return 0 }
+        let sql = "INSERT OR REPLACE INTO \(table) (\(columns.joined(separator: ", "))) VALUES (\(columns.map { _ in "?" }.joined(separator: ", ")))"
+        return queue.sync {
+            guard let db = self.handle(uid) else { return 0 }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            var written = 0
+            sqlite3_exec(db, "BEGIN", nil, nil, nil)
+            for row in rows {
+                let ok = required.allSatisfy { key, kind in
+                    switch kind {
+                    case .text: return (row[key] as? String).map { !$0.isEmpty } ?? false
+                    case .integer: return row[key] is NSNumber
+                    }
+                }
+                guard ok else { continue }
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                for (i, col) in columns.enumerated() {
+                    var v = row[col]
+                    if v == nil || v is NSNull { v = defaults[col] }
+                    Self.bindRaw(stmt, Int32(i + 1), v)
+                }
+                if sqlite3_step(stmt) == SQLITE_DONE { written += 1 }
+            }
+            sqlite3_exec(db, "COMMIT", nil, nil, nil)
+            return written
+        }
+    }
+
+    private static func readRows(_ stmt: OpaquePointer?, _ columns: [String]) -> [RawRow] {
+        var out: [RawRow] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            var row = RawRow(minimumCapacity: columns.count)
+            for (i, col) in columns.enumerated() {
+                let c = Int32(i)
+                switch sqlite3_column_type(stmt, c) {
+                case SQLITE_INTEGER:
+                    row[col] = NSNumber(value: sqlite3_column_int64(stmt, c))
+                case SQLITE_FLOAT:
+                    row[col] = NSNumber(value: sqlite3_column_double(stmt, c))
+                case SQLITE_TEXT:
+                    if let t = sqlite3_column_text(stmt, c) { row[col] = String(cString: t) } else { row[col] = NSNull() }
+                default:
+                    row[col] = NSNull()
+                }
+            }
+            out.append(row)
+        }
+        return out
+    }
+
+    private static func bindRaw(_ stmt: OpaquePointer?, _ i: Int32, _ value: Any?) {
+        guard let value, !(value is NSNull) else { sqlite3_bind_null(stmt, i); return }
+        if let s = value as? String {
+            bind(stmt, i, s)
+        } else if let n = value as? NSNumber {
+            if CFNumberIsFloatType(n as CFNumber) {
+                sqlite3_bind_double(stmt, i, n.doubleValue)
+            } else {
+                sqlite3_bind_int64(stmt, i, n.int64Value)
+            }
+        } else {
+            sqlite3_bind_null(stmt, i)
+        }
+    }
+}
