@@ -10024,12 +10024,22 @@ struct ThreadView: View {
         let compressing: @Sendable (Double) -> Void = { f in
             Task { @MainActor in UploadProgress.shared.report(clientId, f) }
         }
+        // VIDEO TIMINGS (owner 2026-11-12, "why is the reference app faster"): how long the compress and the
+        // upload each take, as info telemetry, so the slow step is measured instead of guessed.
+        let compressStart = Date()
         var exported = await VideoTranscoder.prepare(url, hd: wantHD, progress: compressing)
         if wantHD, let big = exported, big.data.count > Limits.videoMessageBytes {
             debugLog("sendVideo: HD export was \(big.data.count / 1_048_576)MB, over the limit — retrying at standard")
             exported = await VideoTranscoder.prepare(url, hd: false, progress: compressing)
         }
         await MainActor.run { UploadProgress.shared.stage(clientId, from: 0.3, span: 0.7) }
+        if let exported {
+            Telemetry.event(.info, component: "media", code: "video_compress",
+                            detail: ["ms": String(Int(Date().timeIntervalSince(compressStart) * 1000)),
+                                     "mb": String(format: "%.1f", Double(exported.data.count) / 1_048_576),
+                                     "count": String(Int(exported.duration)),
+                                     "kind": wantHD ? "hd" : "sd"])
+        }
         guard let prepared = exported else {
             try? FileManager.default.removeItem(at: url)
             await ChatService.cancelAnnounced(cid: cid, messageId: announcedId)
@@ -10067,8 +10077,12 @@ struct ThreadView: View {
         do {
             // Phase two. The bubble, its poster and its inline thumbnail have been on the other
             // person's screen since before the compression started.
+            let uploadStart = Date()
             try await ChatService.attachVideo(cid: cid, messageId: announcedId, video: prepared.data,
                                               clientId: clientId, group: isGroup ? groupMembers : nil)
+            Telemetry.event(.info, component: "media", code: "video_upload",
+                            detail: ["ms": String(Int(Date().timeIntervalSince(uploadStart) * 1000)),
+                                     "mb": String(format: "%.1f", Double(prepared.data.count) / 1_048_576)])
             try? FileManager.default.removeItem(at: retryURL)   // delivered → retry payload no longer needed
         } catch {
             await ChatService.cancelAnnounced(cid: cid, messageId: announcedId)
