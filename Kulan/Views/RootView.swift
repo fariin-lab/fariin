@@ -20,7 +20,7 @@ struct RootView: View {
     /// Which route() call owns the screen (see route()). A newer call makes an older one stale.
     @State private var routeSeq = 0
     /// The account's Backup PIN holds another key than this phone's (owner 2026-11-12): offered once.
-    @State private var restoreOffer: KeyBackup.Status?
+    @State private var keyOffer = KeyBackupOffer.shared
     /// "Set Up" on the Keep your messages alert: the Backup PIN page in a sheet.
     @State private var showBackupPin = false
 
@@ -251,11 +251,11 @@ struct RootView: View {
                 // has not been checked; the full screen comes only when the backup is another key.
                 .task {
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    if let offer = await KeyBackup.backupToOffer() { restoreOffer = offer; return }
+                    if let o = await KeyBackup.backupToOffer() { keyOffer.offer(o.status, asBar: o.asBar); return }
                     // "Keep your messages" (owner 2026-11-12, as Android): 20 s after start, once per
                     // account, never over another question or screen that is up.
                     try? await Task.sleep(nanoseconds: 18_500_000_000)
-                    guard restoreOffer == nil, !Self.somethingPresented, await KeyBackup.shouldNudge(),
+                    guard keyOffer.screen == nil, keyOffer.bar == nil, !Self.somethingPresented, await KeyBackup.shouldNudge(),
                           !Self.somethingPresented else { return }
                     KeyBackup.markNudged()
                     GlassConfirmDoor.show(
@@ -263,10 +263,10 @@ struct RootView: View {
                         message: "Set a Backup PIN so your older messages come back if you delete Fariin or change phones.",
                         confirm: "Set Up", cancel: "Not Now", confirmColor: .primary) { showBackupPin = true }
                 }
-                .fullScreenCover(isPresented: Binding(get: { restoreOffer != nil },
-                                                      set: { if !$0 { restoreOffer = nil } })) {
-                    if let offer = restoreOffer {
-                        RestoreMessagesView(status: offer) { restoreOffer = nil }
+                .fullScreenCover(isPresented: Binding(get: { keyOffer.screen != nil },
+                                                      set: { if !$0 { keyOffer.screen = nil } })) {
+                    if let offer = keyOffer.screen {
+                        RestoreMessagesView(status: offer) { keyOffer.finished($0, offer) }
                     }
                 }
                 .sheet(isPresented: $showBackupPin) {

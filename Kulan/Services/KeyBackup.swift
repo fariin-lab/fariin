@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Sodium
 import FirebaseAuth
 import FirebaseFunctions
@@ -16,6 +17,42 @@ import FirebaseFunctions
 /// tries (5 lock 1 h, then 4 h, then 24 h; 10 in a row delete the backup) and never lets a client
 /// read `keyBackups`. Android (crypto/KeyBackup.kt) writes and reads the same bytes, so a backup made
 /// on one opens on the other.
+/// What the app is offering right now: the full "Restore your messages" screen, or after Skip the
+/// slim bar on the chat list (owner 2026-11-12). Both go once a restore succeeds.
+@MainActor @Observable
+final class KeyBackupOffer {
+    static let shared = KeyBackupOffer()
+    var screen: KeyBackup.Status?
+    var bar: KeyBackup.Status?
+
+    func offer(_ s: KeyBackup.Status, asBar: Bool) {
+        if asBar { bar = s } else { screen = s }
+    }
+    func skipped(_ s: KeyBackup.Status) {
+        KeyBackup.skip(s)
+        screen = nil
+        bar = s
+    }
+    func hideBar() {
+        if let s = bar { KeyBackup.hideBar(s) }
+        bar = nil
+    }
+    func restored() {
+        screen = nil
+        bar = nil
+    }
+    func reopen() {
+        if let s = bar { screen = s }
+    }
+    /// How the full screen ended: restored or gone clears both, Skip leaves the bar.
+    func finished(_ outcome: RestoreMessagesView.Outcome, _ s: KeyBackup.Status) {
+        switch outcome {
+        case .restored, .gone: restored()
+        case .skipped: skipped(s)
+        }
+    }
+}
+
 enum KeyBackup {
     static let opsLimit = 3
     static let memLimit = 67_108_864   // 64 MiB
@@ -158,17 +195,32 @@ enum KeyBackup {
     /// The backup to offer on "Restore your messages", or nil. Asked once per key this phone holds:
     /// once answered (no backup, the backup IS this key, or Skip), it is not asked again until this
     /// phone's key changes. Skip is remembered for that backup's `updatedAt` only.
-    static func backupToOffer() async -> Status? {
+    /// `asBar`: Skipped before, so it comes back as the chat list's slim bar, not the full screen
+    /// (owner 2026-11-12: a second chance after Skip), until its X or a restore.
+    static func backupToOffer() async -> (status: Status, asBar: Bool)? {
         guard let uid = Auth.auth().currentUser?.uid,
               let mine = await Crypto.shared.identityForBackup() else { return nil }
         let myPk = Data(mine.pk).base64EncodedString()
         guard UserDefaults.standard.string(forKey: "keyBackup.checkedPk.\(uid)") != myPk else { return nil }
         guard let s = try? await status() else { return nil }   // offline: ask again next launch
-        if !s.exists || s.pk == myPk || UserDefaults.standard.string(forKey: "keyBackup.skipped.\(uid)") == s.updatedAt {
+        if !s.exists || s.pk == myPk || UserDefaults.standard.string(forKey: "keyBackup.barHidden.\(uid)") == s.updatedAt {
             markChecked()
             return nil
         }
-        return s
+        return (s, UserDefaults.standard.string(forKey: "keyBackup.skipped.\(uid)") == s.updatedAt)
+    }
+
+    /// The bar's X (or a backup that is gone): not offered again for this backup.
+    static func hideBar(_ s: Status) {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        UserDefaults.standard.set(s.updatedAt, forKey: "keyBackup.barHidden.\(uid)")
+        markChecked()
+    }
+
+    /// Is the account's backup another key than this phone's? (The Backup PIN page's Restore row.)
+    static func holdsOtherKey(_ s: Status) async -> Bool {
+        guard s.exists, let mine = await Crypto.shared.identityForBackup() else { return false }
+        return s.pk != Data(mine.pk).base64EncodedString()
     }
 
     /// "Keep your messages" (owner 2026-11-12, both apps): once per account on this phone, when it
@@ -186,10 +238,10 @@ enum KeyBackup {
         UserDefaults.standard.set(true, forKey: "keyBackup.nudged.\(uid)")
     }
 
+    /// Skip on the full screen: remembered for this backup; the chat list's bar takes its place.
     static func skip(_ s: Status) {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         UserDefaults.standard.set(s.updatedAt, forKey: "keyBackup.skipped.\(uid)")
-        markChecked()
     }
 
     /// Last known On/Off, so the Settings row has a word before the server answers.

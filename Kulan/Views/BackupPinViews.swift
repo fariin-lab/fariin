@@ -27,6 +27,10 @@ struct BackupPinPage: View {
     @State private var working = false
     @State private var problem: String?
     @State private var makePin = false
+    /// The backup holds another key than this phone's (owner 2026-11-12): a Restore row, so a
+    /// restore is never lost behind a Skip.
+    @State private var otherKey: KeyBackup.Status?
+    @State private var showRestore = false
 
     static let footer = "Your messages are end-to-end encrypted, so only your phone has the key that opens them. With a Backup PIN, that key is saved locked with your PIN. If you delete Fariin or move to a new phone, the PIN brings your older messages back. Fariin never sees your PIN and cannot reset it."
 
@@ -36,6 +40,7 @@ struct BackupPinPage: View {
                 if on == nil && loading {
                     HStack { Spacer(); ProgressView(); Spacer() }
                 } else if on == true {
+                    if otherKey != nil { Button("Restore Messages") { showRestore = true } }
                     Button("Change PIN") { makePin = true }
                     Button("Turn Off", role: .destructive) { confirmOff() }
                         .disabled(working)
@@ -52,14 +57,29 @@ struct BackupPinPage: View {
         .navigationTitle("Backup PIN")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: $makePin) {
-            NewBackupPinPage { set(true) }
+            NewBackupPinPage { set(true); otherKey = nil }
+        }
+        .fullScreenCover(isPresented: $showRestore) {
+            if let s = otherKey {
+                RestoreMessagesView(status: s) { outcome in
+                    showRestore = false
+                    KeyBackupOffer.shared.finished(outcome, s)
+                    if outcome != .skipped { otherKey = nil }
+                    if outcome == .gone { set(false) }
+                }
+            }
         }
         .task { await load() }
     }
 
     private func load() async {
         loading = true
-        do { set(try await KeyBackup.status().exists); problem = nil }
+        do {
+            let s = try await KeyBackup.status()
+            set(s.exists)
+            otherKey = await KeyBackup.holdsOtherKey(s) ? s : nil
+            problem = nil
+        }
         catch { if on == nil { problem = "Couldn't check your backup. Check your connection and try again." } }
         loading = false
     }
@@ -140,13 +160,57 @@ struct NewBackupPinPage: View {
     }
 }
 
+/// The second chance after Skip (owner 2026-11-12, both apps): a slim bar on the chat list just
+/// above the tab bar. The bar or "Restore" opens the restore screen again; X hides it for this backup.
+struct RestoreOlderBar: View {
+    @State private var offer = KeyBackupOffer.shared
+
+    var body: some View {
+        if offer.bar != nil {
+            HStack(spacing: 12) {
+                Button { offer.reopen() } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.onFariinAction)
+                            .frame(width: 32, height: 32)
+                            .background(Circle().fill(Color.fariinAction))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Restore older messages").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                            Text("Enter your Backup PIN").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("Restore").font(.subheadline.weight(.semibold)).foregroundStyle(Color.fariinAction)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Button { withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { offer.hideBar() } } label: {
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28).contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Hide")
+            }
+            .padding(.leading, 10).padding(.trailing, 12)
+            .frame(height: 52)
+            .liquidGlass(Capsule())
+            .padding(.horizontal, 16).padding(.bottom, 8)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+}
+
 /// After sign-in, when the account's backup holds a key other than this phone's.
 struct RestoreMessagesView: View {
+    enum Outcome { case restored, skipped, gone }
     let status: KeyBackup.Status
-    var onDone: () -> Void
+    var onDone: (Outcome) -> Void
     @State private var pin = ""
     @State private var working = false
     @State private var problem: String?
+    /// The backup was deleted (10 wrong) or is not there: Skip just closes, no bar comes after.
+    @State private var gone = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -177,14 +241,15 @@ struct RestoreMessagesView: View {
                 .background(Capsule().fill(Color.fariinAction))
             }
             .disabled(pin.count < KeyBackup.minDigits || working)
-            Button("Skip") { KeyBackup.skip(status); onDone() }
+            Button(gone ? "Continue" : "Skip") { onDone(gone ? .gone : .skipped) }
                 .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 .disabled(working)
                 .padding(.bottom, 8)
         }
         .padding(.horizontal, 24)
-        .background(Color(.systemBackground).ignoresSafeArea())
-        .onAppear { focused = true }
+        // ⛔ NO KEYBOARD BY ITSELF (owner 2026-11-12: it came up with no way to close it). It opens
+        // on a tap in the PIN box; a tap anywhere else closes it.
+        .background(Color(.systemBackground).ignoresSafeArea().onTapGesture { focused = false })
         .interactiveDismissDisabled()
     }
 
@@ -196,12 +261,12 @@ struct RestoreMessagesView: View {
                 try await KeyBackup.restore(pin: pin, status: status)
                 Haptics.notify(.success)
                 ToastNotice.show("Your messages are back.")
-                onDone()
+                onDone(.restored)
             } catch {
                 pin = ""
                 problem = (error as? KeyBackup.Failure)?.errorDescription ?? error.localizedDescription
                 Haptics.notify(.error)
-                if case .gone? = error as? KeyBackup.Failure { KeyBackup.skip(status) }
+                if case .gone? = error as? KeyBackup.Failure { gone = true; KeyBackup.hideBar(status) }
             }
             working = false
         }

@@ -3022,6 +3022,9 @@ struct ChatsView: View {
                         .overlay(alignment: .topTrailing) { firstChatCueLayer }
                         .overlay(alignment: .bottom) { getStartedLayer }
                         .overlay(alignment: .bottom) { leaveUndoBar }
+                        // Restore older messages, after a Skip (owner 2026-11-12). Only on the list
+                        // itself, and out of the way while a leave's Undo bar is up.
+                        .overlay(alignment: .bottom) { restoreBarLayer }
                         // owner 2026-10-19: the cards no longer end at the first chat; an X takes a
                         // card away. Five real chats end them (the reference's own number): by then
                         // the list reaches the panel, which would sit over the chats.
@@ -3092,6 +3095,10 @@ struct ChatsView: View {
     /// by day (his pick, from the reference app's bar), a dark grey at night; white words on both.
     static let undoBarFill = Color(UIColor { $0.userInterfaceStyle == .dark
         ? UIColor(white: 0.17, alpha: 1) : UIColor(white: 0.35, alpha: 1) })
+
+    @ViewBuilder private var restoreBarLayer: some View {
+        if LeaveGroupUndo.shared.barTitle == nil { RestoreOlderBar() }
+    }
 
     @ViewBuilder private var leaveUndoBar: some View {
         let leave = LeaveGroupUndo.shared
