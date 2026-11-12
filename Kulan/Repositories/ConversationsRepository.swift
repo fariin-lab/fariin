@@ -773,6 +773,7 @@ final class ConversationsRepository {
             + convs.dropFirst(Self.pageSize).filter { $0.isPinned(warmMe) }
         Task { @MainActor in ChatHistoryPreloader.shared.refresh(warmList, me: warmMe) }
         guard convs != conversations else { hasLoaded = true; return }   // no-op snapshot → no re-render
+        Task { @MainActor in InboxSync.shared.kick() }   // owner 2026-11-12: unopened private chats file too (phase 2)
         if Date().timeIntervalSince(lastPublish) >= minPublishInterval {
             lastPublish = Date()
             conversations = convs

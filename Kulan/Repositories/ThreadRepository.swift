@@ -2111,20 +2111,11 @@ final class ThreadRepository {
     /// this chat up to here". conversations/{cid}/cursors/{me} = { deliveredUpTo: ms, at: server time };
     /// the rules only let it move forward. The server deletes what every member has (behind its own
     /// switch, OFF until both apps ship). At most one write per chat every 20 s, and only forward.
-    /// Channels have no cursor (their history stays on the server for good).
-    @ObservationIgnored private var cursorSent: Int64 = 0
-    @ObservationIgnored private var cursorSentAt = Date.distantPast
+    /// Channels have no cursor (their history stays on the server for good). The write itself is
+    /// `DeliveryCursor.write` (owner 2026-11-12), shared with InboxSync so both keep one memory.
     private func writeDeliveryCursor(me: String, filed: [Message]) {
-        guard !Conversation.Right.isChannel(cid) else { return }
         guard let newest = filed.filter({ $0.hasServerTime }).map(\.createdAt).max() else { return }
-        let ms = Int64((newest.timeIntervalSince1970 * 1000).rounded(.down))
-        guard ms > cursorSent, Date().timeIntervalSince(cursorSentAt) > 20 else { return }
-        cursorSent = ms
-        cursorSentAt = Date()
-        db.collection("conversations").document(cid).collection("cursors").document(me)
-            .setData(["deliveredUpTo": ms, "at": FieldValue.serverTimestamp()]) { err in
-                if let err { debugLog("[cursor] write refused:", err.localizedDescription) }
-            }
+        DeliveryCursor.write(cid: cid, me: me, ms: Int64((newest.timeIntervalSince1970 * 1000).rounded(.down)))
     }
 
     /// Everything due right now: off the screen first, then gone for both people.
@@ -2636,6 +2627,10 @@ final class ThreadRepository {
     static func adoptAsLive(_ r: ThreadRepository) {
         if live[r.cid]?.value == nil { live[r.cid] = WeakRef(value: r) }
     }
+
+    /// A chat whose live repository is listening right now files its own messages (owner 2026-11-12:
+    /// InboxSync leaves it alone). Main thread, as `live` is.
+    static func isListening(_ cid: String) -> Bool { live[cid]?.value?.listener != nil }
 
     /// Clear Messages (owner 2026-11-08): the server deleted every message of `cid`. The open chat
     /// shows it empty at once (the listener only covers the newest window, and a page loaded by
