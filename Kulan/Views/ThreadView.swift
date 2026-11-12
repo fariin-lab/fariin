@@ -1894,6 +1894,9 @@ struct ThreadView: View {
                                     clipProvider: { MediaOpenRects.clipRect })
                 }
             }
+            // The keyboard never lays this page out: if the keys are still leaving as it lands, the
+            // bottom bar must not ride them down (build 1150, the jump after the open).
+            .ignoresSafeArea(.keyboard)
             // No transition modifier: MediaOpen flies the media BEFORE this cover presents, and
             // MediaDismissHost owns the drag-down close. The disabled ConditionalZoomTransition that
             // used to sit here was the last trace of the system zoom for chat media.
@@ -1929,6 +1932,7 @@ struct ThreadView: View {
                             },
                             onDeleteForMe: { m in deleteForMe(m) },
                             clipProvider: { MediaOpenRects.clipRect })
+            .ignoresSafeArea(.keyboard)   // as the single-photo cover: the keys never lay it out
             // NO `.navigationTransition(.zoom)` here any more. The album viewer was the last place the
             // SYSTEM zoom transition still ran for chat media, and it is a third pipeline: it scales the
             // entire presented cover — backdrop, header, thumb strip, toolbar — out of the tapped tile,
@@ -1944,6 +1948,7 @@ struct ThreadView: View {
             VideoPlayerScreen(message: msg, cid: cid,
                               clipProvider: { MediaOpenRects.clipRect },
                               onDeleteForMe: { m in deleteForMe(m) })   // 2026-09-24 decision D16
+                .ignoresSafeArea(.keyboard)   // as the photo covers: the keys never lay it out
                 // No transition modifier: the poster flies via MediaOpen before this presents,
                 // exactly like photos. One pipeline, both directions.
         }
@@ -3819,6 +3824,7 @@ struct ThreadView: View {
                     MediaOpen.flyOrPresent(
                         imageUrl: m.imageUrl, rectKey: key, clip: MediaOpenRects.clipRect,
                         present: { openChatPhoto(m) })
+                    lowerKeysForMedia()
                 },
                 // ALBUM IMAGES FLY TOO — this was the last media kind opening with no transition at all
                 // (user: "make it sure image video multiple swipe swipe images"). It was never a broken
@@ -3834,6 +3840,7 @@ struct ThreadView: View {
                         present: {
                             MediaPresentGate.present { albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) }
                         })
+                    lowerKeysForMedia()
                 },
                 onOpenAlbum: { m in albumScreen = m },
                 // Video takes the SAME path with its poster - one pipeline for all media, which is also
@@ -3843,6 +3850,7 @@ struct ThreadView: View {
                     MediaOpen.flyOrPresent(
                         imageUrl: m.thumbUrl, rectKey: key, clip: MediaOpenRects.clipRect,
                         present: { MediaPresentGate.present { viewerVideo = m } })
+                    lowerKeysForMedia()
                 },
                 // 2026-09-24 feature-audit: the bubble's double-tap asks the same `canReact` as the bar.
                 onReact: { emoji in
@@ -5508,6 +5516,7 @@ struct ThreadView: View {
                         imageUrl: m.imageUrl, rectKey: key, clip: MediaOpenRects.clipRect,
                         present: { openChatPhoto(m) })
                 }
+                lowerKeysForMedia()
             },
             // ALBUM TILES FLY TOO. A tile's rect is registered under "<messageId>-<index>", which is
             // exactly the `startId` the pager is handed — so the geometry was already there.
@@ -5533,6 +5542,7 @@ struct ThreadView: View {
                     viewedOnceTick += 1
                 }
                 MediaPresentGate.present { viewerImage = m }
+                lowerKeysForMedia()
             },
             // ⛔ THE GALLERY IS ONE SYNTHETIC MESSAGE PER TILE, NOT THE ALBUM MESSAGE. His report,
             // 2026-08-26: a single photo opens fine, an album tile opens black with a spinner that
@@ -5567,6 +5577,7 @@ struct ThreadView: View {
                         imageUrl: vmsg.thumbUrl, rectKey: MediaOpenRects.key(.chat, startId),
                         clip: MediaOpenRects.clipRect,
                         present: { MediaPresentGate.present { viewerVideo = vmsg } })
+                    lowerKeysForMedia()
                     return
                 }
                 let gallery: [Message] = m.album.enumerated().filter { !$0.element.isVideo }
@@ -5584,6 +5595,7 @@ struct ThreadView: View {
                             albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId)
                         }
                     })
+                lowerKeysForMedia()
             },
             onTapFile: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }), m.sendState == nil { openFile(m) }
@@ -10195,6 +10207,20 @@ struct ThreadView: View {
         // 16/6 and looked off against the screen's rounded corners). The bar stands in the
         // composer's slot, so it takes the composer's device-derived sides and bottom.
         .modifier(KeyboardUpChrome(keyboard: keyboard))   // perf audit T8
+    }
+
+    /// ⛔ THE KEYS GO DOWN WHEN MEDIA OPENS — owner, build 1150: keyboard up, tap a photo, and the
+    /// viewer opened UNDER the keyboard (the keyboard has its own window above the app's, so it is
+    /// drawn over the flight copy and the cover alike). Nothing resigned the field, so the keys only
+    /// left a second later and the viewer's bottom bar re-laid down with them. As the reference app
+    /// does: end editing at the tap, while the media flies. Called AFTER `flyOrPresent`, so the
+    /// bubble's rect is read before the list moves for the keyboard close. One run-loop turn later,
+    /// never inside the cell's tap handler (see `openGroupLink`: resigning there ran the stack out).
+    private func lowerKeysForMedia() {
+        DispatchQueue.main.async { [self] in
+            if inputFocused { inputFocused = false }
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
     }
 
     /// ⛔ A GROUP'S OR CHANNEL'S PHOTOS SWIPE (owner 2026-11-08: "if user open one photo, swipe
