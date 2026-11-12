@@ -162,7 +162,7 @@ final class ThreadRepository {
         joinedAtStore[cid] = joinedAt
         return changed
     }
-    private static func cuts(_ cid: String) -> (start: Date?, joined: Date?) {
+    static func cuts(_ cid: String) -> (start: Date?, joined: Date?) {
         cutLock.lock(); defer { cutLock.unlock() }
         return (historyStartStore[cid], joinedAtStore[cid])
     }

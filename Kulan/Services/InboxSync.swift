@@ -247,7 +247,13 @@ enum DeliveryCursor {
         guard !m.deleted else { return false }
         if m.text == "…" { return true }
         let group = !cid.contains("_")   // the server's own test (ChatService.summaryOfNewest)
-        return group && (m.text == "🔒" || m.notForMe || m.sealUnreadable == true)
+        guard group else { return false }
+        // A group message sent BEFORE I joined (with the chat's own 5 s margin, ThreadRepository
+        // rebuild) is never shown to me, so it holds nothing; without this every late-joined group
+        // would never get a mark. Join time unknown = hold (the safe side). (2026-11-12)
+        if m.notForMe, let joined = ThreadRepository.cuts(cid).joined,
+           m.createdAt < joined.addingTimeInterval(5) { return false }
+        return m.text == "🔒" || m.notForMe || m.sealUnreadable == true
     }
 
     /// ⛔ MEDIA FIRST (safety review 2026-11-12). A message that carries a file (photo, video, voice
