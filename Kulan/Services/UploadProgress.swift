@@ -18,8 +18,19 @@ final class UploadProgress: ObservableObject {
     /// why the ring spins rather than sitting empty until the first byte lands.
     @Published private(set) var fractions: [String: Double] = [:]
 
+    /// A send with more than one stage (a video: compress, then upload) gives each stage a slice of
+    /// the ring, so it fills from the moment Send is tapped (owner 2026-11-12: a long video sat on a
+    /// spinner for minutes while it compressed). `report` then maps 0...1 into the current slice.
+    private var slices: [String: (base: Double, span: Double)] = [:]
+
+    func stage(_ id: String, from base: Double, span: Double) {
+        slices[id] = (base, span)
+        report(id, 0)
+    }
+
     func report(_ id: String, _ fraction: Double) {
-        let clamped = min(1, max(0, fraction))
+        let raw = min(1, max(0, fraction))
+        let clamped = slices[id].map { $0.base + $0.span * raw } ?? raw
         // Never let it go backwards within one attempt. Firebase can deliver progress events out of
         // order, and a ring that stutters backwards reads as a fault in the upload.
         if let existing = fractions[id], clamped < existing { return }
@@ -28,9 +39,9 @@ final class UploadProgress: ObservableObject {
     }
 
     /// A retry starts the bytes over, so the ring must start over too.
-    func reset(_ id: String) { fractions[id] = 0 }
+    func reset(_ id: String) { fractions[id] = slices[id]?.base ?? 0 }
 
-    func finish(_ id: String) { fractions.removeValue(forKey: id) }
+    func finish(_ id: String) { fractions.removeValue(forKey: id); slices.removeValue(forKey: id) }
 
     func fraction(_ id: String?) -> Double? { id.flatMap { fractions[$0] } }
 }

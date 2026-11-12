@@ -10018,11 +10018,18 @@ struct ThreadView: View {
         // Telling somebody their video is too large when we could simply have sent it smaller is a
         // bad answer. Standard is 540p, which for the same clip is a few megabytes.
         let wantHD = hd || ChatService.highQualitySends
-        var exported = await VideoTranscoder.prepare(url, hd: wantHD)
+        // The ring fills from the first second (owner 2026-11-12): compressing is its first 30%,
+        // the upload the rest (`UploadProgress.stage`).
+        await MainActor.run { UploadProgress.shared.stage(clientId, from: 0, span: 0.3) }
+        let compressing: @Sendable (Double) -> Void = { f in
+            Task { @MainActor in UploadProgress.shared.report(clientId, f) }
+        }
+        var exported = await VideoTranscoder.prepare(url, hd: wantHD, progress: compressing)
         if wantHD, let big = exported, big.data.count > Limits.videoMessageBytes {
             debugLog("sendVideo: HD export was \(big.data.count / 1_048_576)MB, over the limit — retrying at standard")
-            exported = await VideoTranscoder.prepare(url, hd: false)
+            exported = await VideoTranscoder.prepare(url, hd: false, progress: compressing)
         }
+        await MainActor.run { UploadProgress.shared.stage(clientId, from: 0.3, span: 0.7) }
         guard let prepared = exported else {
             try? FileManager.default.removeItem(at: url)
             await ChatService.cancelAnnounced(cid: cid, messageId: announcedId)

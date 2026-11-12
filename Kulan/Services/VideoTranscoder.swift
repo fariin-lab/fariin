@@ -71,7 +71,8 @@ enum VideoTranscoder {
                         backdrop: UIImage? = nil, storyBackdrop: Bool = false,
                         brightness: Double = 0,
                         holeCorner: CGFloat = 0,
-                        bytesPerSecond rate: Double? = nil) async -> Prepared? {
+                        bytesPerSecond rate: Double? = nil,
+                        progress: (@Sendable (Double) -> Void)? = nil) async -> Prepared? {
         // A STORY goes through its own encoder (`StoryVideoEncoder`): one encode, the clip's own frame
         // rate, HEVC, an explicit bitrate, SDR colour. Anything it cannot do falls through to the
         // export-session path below, which is unchanged and is still the only path for chat videos.
@@ -261,6 +262,16 @@ enum VideoTranscoder {
         // block because `duration` is only final once the slice and the cap have had their say.
         session.fileLengthLimit = min(session.fileLengthLimit,
                                       max(Int64(duration * (rate ?? 400_000)), 2 * 1024 * 1024))
+        // The encode is the long wait before a video's bytes move (minutes for a ten minute clip):
+        // its progress goes to the caller so the bubble's ring fills instead of spinning.
+        let watch = progress.map { report in
+            Task {
+                for await state in session.states(updateInterval: 0.25) {
+                    if case .exporting(let p) = state { report(p.fractionCompleted) }
+                }
+            }
+        }
+        defer { watch?.cancel() }
         do { try await session.export(to: out, as: .mp4) } catch { return nil }
         guard let data = try? Data(contentsOf: out) else { return nil }
         // ⚠️ THE POSTER IS A FRAME OF THE FILE THAT WAS JUST WRITTEN, NOT OF THE SOURCE, whenever
