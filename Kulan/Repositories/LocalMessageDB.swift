@@ -262,7 +262,7 @@ extension LocalMessageDB {
                   let at = (last["created_at"] as? NSNumber)?.int64Value,
                   let cid = last["cid"] as? String, let id = last["id"] as? String else { return }
             try each(page)
-            if page.count < limit { return }
+            if Int64(page.count) < limit { return }
             after = (at, cid, id)
         }
     }
