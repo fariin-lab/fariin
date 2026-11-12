@@ -139,12 +139,14 @@ final class InboxSync {
         // filed and marked, it and the rest are read again on a later run.
         var kept = built
         var stoppedOnKeys = false
+        var cap = Int64.max
         if let i = built.firstIndex(where: { DeliveryCursor.holdsMark($0.m, cid: cid) }) {
             kept = Array(built[..<i])
             stoppedOnKeys = true
             restUntil[cid] = Date().addingTimeInterval(Self.rest)
+            cap = built[i].ms - 1   // a kept message may share its millisecond: the mark stays below it
         }
-        guard let upTo = kept.map({ $0.ms }).max() else { return }
+        guard var upTo = kept.map({ $0.ms }).max() else { return }
         // The rules the chat applies before filing: my Clear Chat cut (`isClearedForMe`, rebuilt
         // here from the conversation, server-stamped messages only) and the account block list
         // (static). The chat's per-1:1 block window (`hiddenByBlock`'s myBlockedAtMillis part) is
@@ -157,6 +159,18 @@ final class InboxSync {
             if BlockList.snapshot.hides(author: m.authorId, atMillis: t) { return false }
             return !HiddenMessages.isHidden(m.id) && !m.notForMe
         }
+        // ⛔ MEDIA FIRST (safety review 2026-11-12, `DeliveryCursor.mediaMissing`): every row is filed,
+        // but the mark stops below the oldest filed message whose file is not on this phone yet, and
+        // that file is asked for. The chat rests and is read again from the mark later.
+        let filedIds = Set(file.map(\.id))
+        var heldOnMedia = false
+        if let h = kept.first(where: { filedIds.contains($0.m.id) && DeliveryCursor.mediaMissing($0.m, cid: cid) }) {
+            cap = min(cap, h.ms - 1)
+            heldOnMedia = true
+            restUntil[cid] = Date().addingTimeInterval(Self.rest)
+            DeliveryCursor.fetchMissing(h.m, cid: cid)
+        }
+        upTo = min(upTo, cap)
         // ⛔ The mark and the cursor only after the rows are really committed (safety review
         // 2026-11-12): a failed write rests the chat and vouches for nothing.
         let filed = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
@@ -169,7 +183,7 @@ final class InboxSync {
         // ⛔ NO GAP (2026-11-12): only a pull that continues from an existing mark is contiguous. A
         // chat with no mark got only its newest 60, so it vouches for nothing: no mark, no cursor
         // (phase 4's full pull sets the first mark). The cursor goes out after the mark is stored.
-        if from != nil {
+        if let from, upTo > from {
             let marked = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
                 LocalMessageDB.shared.setSyncedUpTo(cid: cid, uid: me, ms: upTo) { c.resume(returning: $0) }
             }
@@ -179,7 +193,7 @@ final class InboxSync {
             }
             DeliveryCursor.write(cid: cid, me: me, ms: upTo)
         }
-        if stoppedOnKeys { return }
+        if stoppedOnKeys || heldOnMedia { return }
         if let from, docs.count == Self.pageSize, upTo > from {
             queue.append((conv: conv, from: upTo))   // more behind this page
         } else {
@@ -231,6 +245,87 @@ enum DeliveryCursor {
         if m.text == "…" { return true }
         let group = !cid.contains("_")   // the server's own test (ChatService.summaryOfNewest)
         return group && (m.text == "🔒" || m.notForMe || m.sealUnreadable == true)
+    }
+
+    /// ⛔ MEDIA FIRST (safety review 2026-11-12). A message that carries a file (photo, video, voice
+    /// note, document, album, a sticker I made) is not vouched for until its file is on this phone:
+    /// the server deletes the message and its media on the cursor, and the database row alone only
+    /// holds the link. The simplest safe rule for now: InboxSync, HistoryPull and the open chat stop
+    /// the mark one millisecond below the OLDEST such message whose file is not yet in the app's own
+    /// media store, and ask for that file (`fetchMissing`, under the person's auto-download settings).
+    /// The mark moves on once it has landed.
+    ///
+    /// "On this phone" is what the app's stores already answer: photos and album photos
+    /// `DiskImageCache.isCached(url)`, videos and album clips `VideoCache.url(for: id / "id-i")`,
+    /// voice notes `AudioCache.url(for: id or clientId)`, documents `DocumentPrefetch.cached`.
+    /// Not waited for: a deleted message, an opened view-once, media the server already reported
+    /// gone for good (`DeadMedia`), a GIF (a public link, not our file), and a 1:1 file that can
+    /// never open here (`sealUnreadable`). An UNOPENED view-once is waited for and never fetched
+    /// ahead of the tap: it holds the mark until it is opened.
+    ///
+    /// ⚠️ Known limits, for the next pass: photos live in the image CACHE (evictable by Keep Media,
+    /// Clear Cache, the size budget and iOS), documents in the temporary directory; a file on the
+    /// phone today can be gone later. And a file the auto-download settings never fetch holds the
+    /// mark until the person opens it, so the server keeps that chat's messages (the safe side).
+    static func mediaMissing(_ m: Message, cid: String) -> Bool {
+        guard !m.deleted, !(m.viewOnce && m.consumed), !DeadMedia.contains(m.id) else { return false }
+        if cid.contains("_"), m.sealUnreadable == true { return false }   // 1:1: can never open here
+        if !m.album.isEmpty {
+            for (i, it) in m.album.enumerated() {
+                if it.isVideo, let v = it.videoUrl, !v.isEmpty {
+                    if VideoCache.url(for: "\(m.id)-\(i)") == nil { return true }
+                } else if !it.imageUrl.isEmpty, !DiskImageCache.shared.isCached(it.imageUrl) {
+                    return true
+                }
+            }
+            return false
+        }
+        let hasFile = [m.videoUrl, m.audioUrl, m.fileUrl, m.type == "gif" ? nil : m.imageUrl]
+            .contains { !($0 ?? "").isEmpty }
+        if m.viewOnce { return hasFile }   // unopened view-once: waits for the tap
+        if let v = m.videoUrl, !v.isEmpty { return VideoCache.url(for: m.id) == nil }
+        if let a = m.audioUrl, !a.isEmpty {
+            return AudioCache.url(for: m.id) == nil && (m.clientId.map { AudioCache.url(for: $0) == nil } ?? true)
+        }
+        if let f = m.fileUrl, !f.isEmpty { return DocumentPrefetch.cached(id: m.id, fileName: m.fileName) == nil }
+        if m.type != "gif", let u = m.imageUrl, !u.isEmpty { return !DiskImageCache.shared.isCached(u) }
+        return false
+    }
+
+    /// Asks for the files `mediaMissing` is waiting on, through the same shared downloader and the
+    /// same auto-download rules as the chat's own media (safety review 2026-11-12). A view-once is
+    /// never fetched ahead of the tap.
+    @MainActor static func fetchMissing(_ m: Message, cid: String) {
+        guard !m.viewOnce, !m.deleted else { return }
+        if !m.album.isEmpty {
+            for (i, it) in m.album.enumerated() {
+                if it.isVideo, let v = it.videoUrl, !v.isEmpty {
+                    if VideoCache.url(for: "\(m.id)-\(i)") == nil {
+                        MediaFetch.requestVideo(url: v, enc: it.videoEnc, cid: cid, messageId: "\(m.id)-\(i)",
+                                                authorId: m.authorId, priority: .auto)
+                    }
+                } else if !it.imageUrl.isEmpty, !DiskImageCache.shared.isCached(it.imageUrl) {
+                    MediaFetch.requestPhoto(url: it.imageUrl, enc: it.enc, cid: cid, gated: true)
+                }
+            }
+            return
+        }
+        if let v = m.videoUrl, !v.isEmpty {
+            MediaFetch.requestVideo(url: v, enc: m.enc, cid: cid, messageId: m.id, authorId: m.authorId, priority: .auto)
+        } else if m.audioUrl?.isEmpty == false {
+            MediaFetch.requestVoice(m, cid: cid, priority: .auto)
+        } else if let f = m.fileUrl, !f.isEmpty {
+            // As MediaAutoDownloader.sweep fetches a document, to the path ThreadView.openFile opens.
+            guard m.enc != nil, AutoDownloadPrefs.allowedNow(.documents),
+                  Int64(m.fileSize ?? 0) <= MediaAutoDownloader.maxAutoBytes else { return }
+            let dest = DocumentPrefetch.localURL(id: m.id, fileName: m.fileName)
+            MediaDownloads.shared.request(f, priority: .auto,
+                                          finish: MediaFetch.dataFinisher(enc: m.enc, cid: cid) {
+                                              DocumentPrefetch.write($0, to: dest); return true
+                                          })
+        } else if m.type != "gif", let u = m.imageUrl, !u.isEmpty {
+            MediaFetch.requestPhoto(url: u, enc: m.enc, cid: cid, gated: true)
+        }
     }
 
     /// `ms` is the MARK (newest millisecond filed); what is sent is `line(forMark:)`.

@@ -2153,21 +2153,34 @@ final class ThreadRepository {
             guard let ts = d.get("createdAt") as? Timestamp else { return nil }
             return (ms: Int64(ts.seconds) * 1000 + Int64(ts.nanoseconds / 1_000_000), id: d.documentID)
         }.sorted { $0.ms < $1.ms }
-        guard let low = timed.first?.ms, var ms = timed.last?.ms else { return }
+        guard let low = timed.first?.ms, let newest = timed.last?.ms else { return }
         let chat = cid
-        // A document whose message is not built here, or that cannot be kept yet, holds the mark.
-        if let hold = timed.first(where: { t in
-            guard let m = byId[t.id] else { return true }
-            return DeliveryCursor.holdsMark(m, cid: chat)
-        }) {
-            ms = min(ms, hold.ms - 1)
-        }
         // ⛔ NO GAP, EVER. The cursor tells the server "every message up to here is on this phone",
         // and the server may delete on it. An open chat holds only its newest window, so it moves the
         // mark (and the cursor) only when that window reaches back to the mark already held. No mark
         // yet = this chat's history was never fully pulled (phase 4 does that): nothing is vouched for.
-        LocalMessageDB.shared.syncedUpTo(cid: chat, uid: me) { mark in
-            guard let mark, low <= mark, ms > mark else { return }
+        LocalMessageDB.shared.syncedUpTo(cid: chat, uid: me) { [weak self] mark in
+            guard let self, let mark, low <= mark else { return }
+            // From the mark's own millisecond up (a later message can share it): a document whose
+            // message is not built here, that cannot be kept yet (`DeliveryCursor.holdsMark`), or
+            // whose file is not on this phone yet (`DeliveryCursor.mediaMissing`, safety review
+            // 2026-11-12) holds the mark one millisecond below it. A missing file is asked for.
+            var ms = newest
+            if let hold = timed.first(where: { t in
+                guard t.ms >= mark else { return false }
+                guard let m = self.byId[t.id] else { return true }
+                if DeliveryCursor.holdsMark(m, cid: chat) { return true }
+                // Hidden here (my Clear Chat, a block): not filed, nothing to wait for.
+                if self.hiddenByBlock(m) || self.isClearedForMe(m) { return false }
+                if DeliveryCursor.mediaMissing(m, cid: chat) {
+                    Task { @MainActor in DeliveryCursor.fetchMissing(m, cid: chat) }
+                    return true
+                }
+                return false
+            }) {
+                ms = min(ms, hold.ms - 1)
+            }
+            guard ms > mark else { return }
             LocalMessageDB.shared.setSyncedUpTo(cid: chat, uid: me, ms: ms) { stored in
                 guard stored else { return }
                 DeliveryCursor.write(cid: chat, me: me, ms: ms)

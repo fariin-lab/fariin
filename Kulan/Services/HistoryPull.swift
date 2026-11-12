@@ -19,8 +19,11 @@ import FirebaseFirestore
 ///   any other.
 /// - A short page means the first message is reached: mark = T0, then the delivery cursor at T0 once
 ///   the rows have committed. A chat with no messages at all gets mark 0 (no cursor).
-/// - Progress lives in the database's `meta` ("pull.<cid>" = "<oldest filed ms>|<T0>", then "done"),
-///   so a pull killed half way goes on from where it stopped.
+/// - Progress lives in the database's `meta` ("pull.<cid>" = "<oldest filed ms>|<T0>[|<hold>]", then
+///   "done"), so a pull killed half way goes on from where it stopped.
+/// - MEDIA FIRST (safety review 2026-11-12, `DeliveryCursor.mediaMissing`): <hold> is the oldest
+///   filed message whose file is not on this phone yet; the first mark is then one millisecond below
+///   it instead of T0, and InboxSync carries it on once the file has landed.
 /// - One chat at a time, newest activity first, a short pause between pages, only while the app is
 ///   in front and online. The first run waits 10 s after launch.
 @MainActor
@@ -97,13 +100,22 @@ final class HistoryPull {
         try? await Crypto.shared.ensureReady()
         _ = await Crypto.shared.preloadKeys(first.users.filter { $0 != me })
 
-        // Resume: "<oldest filed ms>|<T0>". "done" (or anything else) with no mark starts over.
+        // Resume: "<oldest filed ms>|<T0>[|<hold>]". "done" (or anything else) with no mark starts over.
         var t0: Int64?
         var oldest: Int64?
-        if let parts = saved?.split(separator: "|"), parts.count == 2,
+        var hold: Int64?
+        if let parts = saved?.split(separator: "|"), parts.count == 2 || parts.count == 3,
            let o = Int64(parts[0]), let t = Int64(parts[1]) {
             oldest = o
             t0 = t
+            if parts.count == 3 {
+                guard let h = Int64(parts[2]) else {   // unreadable hold: never guess, start over later
+                    LocalMessageDB.shared.setMeta(uid: me, key: "pull.\(cid)", nil)
+                    restUntil[cid] = Date().addingTimeInterval(Self.rest)
+                    return false
+                }
+                hold = h
+            }
         }
         let base = FirestoreHub.db.collection("conversations").document(cid).collection("messages")
         // A resume reads its oldest filed millisecond again (`< oldest + 1`): a message sharing that
@@ -137,7 +149,7 @@ final class HistoryPull {
                     LocalMessageDB.shared.setMeta(uid: me, key: "pull.\(cid)", "done")
                     return true
                 }
-                return await finish(cid: cid, me: me, t0: newestMs)
+                return await finish(cid: cid, me: me, t0: newestMs, hold: hold)
             }
 
             // Built OFF the main thread exactly as InboxSync / ThreadRepository.loadOlder do.
@@ -184,9 +196,16 @@ final class HistoryPull {
                 restUntil[cid] = Date().addingTimeInterval(Self.rest)
                 return false
             }
+            // MEDIA FIRST: newest first, so the last missing file of this page is the oldest so far.
+            let filedIds = Set(file.map(\.id))
+            if let h = kept.last(where: { filedIds.contains($0.m.id) && DeliveryCursor.mediaMissing($0.m, cid: cid) }) {
+                hold = min(hold ?? .max, h.ms)
+                DeliveryCursor.fetchMissing(h.m, cid: cid)
+            }
             // Progress after the rows (one serial queue), so a resume never skips a page.
             if let low = kept.last?.ms {
-                LocalMessageDB.shared.setMeta(uid: me, key: "pull.\(cid)", "\(low)|\(top)")
+                let held = hold.map { "|\($0)" } ?? ""
+                LocalMessageDB.shared.setMeta(uid: me, key: "pull.\(cid)", "\(low)|\(top)\(held)")
             }
             if stoppedOnKeys {
                 restUntil[cid] = Date().addingTimeInterval(Self.rest)
@@ -199,7 +218,7 @@ final class HistoryPull {
                 return last.createdAt.timeIntervalSince1970 * 1000 <= clearedAt
             }()
             if docs.count < Self.pageSize || underCut {
-                return await finish(cid: cid, me: me, t0: top)
+                return await finish(cid: cid, me: me, t0: top, hold: hold)
             }
             after = docs.last
             try? await Task.sleep(nanoseconds: Self.pagePause)
@@ -209,17 +228,19 @@ final class HistoryPull {
     /// The chat's whole history up to T0 is on this phone (every page's upsert came back true): its
     /// first mark, then its cursor once the mark is stored (safety review 2026-11-12: from inside the
     /// write's success, never on a queue promise). A failed mark write rests the chat.
-    private func finish(cid: String, me: String, t0: Int64) async -> Bool {
+    /// `hold`: the oldest filed message whose file is not here yet; the mark stops one ms below it.
+    private func finish(cid: String, me: String, t0: Int64, hold: Int64?) async -> Bool {
+        let mark = hold.map { max(0, min(t0, $0 - 1)) } ?? t0
         let marked = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
-            LocalMessageDB.shared.setSyncedUpTo(cid: cid, uid: me, ms: t0) { c.resume(returning: $0) }
+            LocalMessageDB.shared.setSyncedUpTo(cid: cid, uid: me, ms: mark) { c.resume(returning: $0) }
         }
         guard marked else {
             restUntil[cid] = Date().addingTimeInterval(Self.rest)
             return false
         }
         LocalMessageDB.shared.setMeta(uid: me, key: "pull.\(cid)", "done")
-        DeliveryCursor.write(cid: cid, me: me, ms: t0)
-        debugLog("[historyPull] done", cid, t0)
+        DeliveryCursor.write(cid: cid, me: me, ms: mark)
+        debugLog("[historyPull] done", cid, t0, mark)
         return true
     }
 
