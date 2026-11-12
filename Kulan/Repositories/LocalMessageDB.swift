@@ -555,21 +555,43 @@ extension LocalMessageDB {
         }
     }
 
-    /// Restore: files backup rows as they are (INSERT OR REPLACE). Rows without cid / id /
-    /// created_at are skipped. Returns how many were written, and (safety review 2026-11-12) which
-    /// chats lost a row on the way in: those get no mark from this backup.
+    /// Restore: files backup rows as they are. Rows without cid / id / created_at are skipped.
+    /// ⛔ NEVER OVER A LOCAL ROW (safety review 2026-11-12): a message already on this phone is newer
+    /// or equal to the backup's copy (an edit, a delete, an opened view-once), so it is kept
+    /// (`ON CONFLICT DO NOTHING`; such a row still counts as filed). Returns how many were filed,
+    /// and which chats lost a row on the way in: those get no mark from this backup.
     @discardableResult
     func insertRows(uid: String, rows: [RawRow]) -> (written: Int, lost: RowLoss) {
         insertRaw(uid: uid, table: "messages", columns: Self.messageColumns,
                   required: ["cid": .text, "id": .text, "created_at": .integer],
-                  defaults: ["deleted": NSNumber(value: 0)], rows: rows)
+                  defaults: ["deleted": NSNumber(value: 0)],
+                  conflict: "ON CONFLICT(cid, id) DO NOTHING", rows: rows)
     }
 
-    /// Restore: the chats rows (INSERT OR REPLACE). Rows without cid are skipped.
+    /// Restore: the chats rows. Rows without cid are skipped.
+    /// ⛔ MERGED WITH A LOCAL ROW (safety review 2026-11-12): `synced_up_to` and `delivered_up_to`
+    /// take the higher of the two (a missing one never lowers the other), `body` keeps the local read
+    /// mark (`readAt`) when it is newer, and the other columns keep the local value when there is one
+    /// (the list columns are worked out again below anyway).
     @discardableResult
     func insertChatRows(uid: String, rows: [RawRow]) -> Int {
+        let conflict = """
+            ON CONFLICT(cid) DO UPDATE SET
+              synced_up_to = CASE WHEN chats.synced_up_to IS NULL THEN excluded.synced_up_to
+                                  WHEN excluded.synced_up_to IS NULL THEN chats.synced_up_to
+                                  ELSE MAX(chats.synced_up_to, excluded.synced_up_to) END,
+              delivered_up_to = CASE WHEN chats.delivered_up_to IS NULL THEN excluded.delivered_up_to
+                                     WHEN excluded.delivered_up_to IS NULL THEN chats.delivered_up_to
+                                     ELSE MAX(chats.delivered_up_to, excluded.delivered_up_to) END,
+              last_id = COALESCE(chats.last_id, excluded.last_id),
+              last_at = COALESCE(chats.last_at, excluded.last_at),
+              unread = COALESCE(chats.unread, excluded.unread),
+              oldest_pulled = COALESCE(chats.oldest_pulled, excluded.oldest_pulled),
+              body = excluded.body
+            """
         let written = insertRaw(uid: uid, table: "chats", columns: Self.chatColumns,
-                                required: ["cid": .text], defaults: [:], rows: rows).written
+                                required: ["cid": .text], defaults: [:], conflict: conflict, rows: rows,
+                                merge: { db, row in self.mergedChatBody(db, row) }).written
         // D5 (owner 2026-11-12): the chats rows are the last thing a restore files; every chat's list
         // row is worked out again from the messages now here (a row written by the other app or an
         // older backup does not have to agree with this one).
@@ -581,8 +603,26 @@ extension LocalMessageDB {
 
     /// Every row that is skipped or not written, or a batch that does not commit, is reported in
     /// `lost` (safety review 2026-11-12).
+    /// A backup chats row with its body merged into the local one (on `queue` only): the backup's
+    /// body (or the local one when the backup has none) with the newer of the two `readAt`.
+    private func mergedChatBody(_ db: OpaquePointer, _ row: RawRow) -> RawRow {
+        guard let cid = row["cid"] as? String else { return row }
+        let local = chatRow(db, cid: cid)
+        guard local.exists else { return row }
+        let incoming = Self.jsonObject(row["body"] as? String)
+        var body = incoming.isEmpty ? local.body : incoming
+        let readAts = [local.body["readAt"], incoming["readAt"]].compactMap { ($0 as? NSNumber)?.int64Value }
+        if let newest = readAts.max() { body["readAt"] = NSNumber(value: newest) }
+        var out = row
+        if let s = Self.jsonString(body) { out["body"] = s }
+        return out
+    }
+
+    /// `conflict`: the ON CONFLICT clause of the table. `merge`: runs on the queue for each row
+    /// before it is bound (the chats body merge).
     private func insertRaw(uid: String, table: String, columns: [String], required: [String: RawKind],
-                           defaults: [String: Any], rows: [RawRow]) -> (written: Int, lost: RowLoss) {
+                           defaults: [String: Any], conflict: String, rows: [RawRow],
+                           merge: ((OpaquePointer, RawRow) -> RawRow)? = nil) -> (written: Int, lost: RowLoss) {
         guard !rows.isEmpty else { return (0, RowLoss()) }
         func allLost() -> (written: Int, lost: RowLoss) {
             var lost = RowLoss()
@@ -590,7 +630,7 @@ extension LocalMessageDB {
             return (0, lost)
         }
         guard !uid.isEmpty else { return allLost() }
-        let sql = "INSERT OR REPLACE INTO \(table) (\(columns.joined(separator: ", "))) VALUES (\(columns.map { _ in "?" }.joined(separator: ", ")))"
+        let sql = "INSERT INTO \(table) (\(columns.joined(separator: ", "))) VALUES (\(columns.map { _ in "?" }.joined(separator: ", "))) \(conflict)"
         return queue.sync {
             guard let db = self.handle(uid) else { return allLost() }
             var stmt: OpaquePointer?
@@ -610,10 +650,11 @@ extension LocalMessageDB {
                     }
                 }
                 guard ok else { lost.add(row); continue }
+                let bound = merge?(db, row) ?? row
                 sqlite3_reset(stmt)
                 sqlite3_clear_bindings(stmt)
                 for (i, col) in columns.enumerated() {
-                    var v = row[col]
+                    var v = bound[col]
                     if v == nil || v is NSNull { v = defaults[col] }
                     Self.bindRaw(stmt, Int32(i + 1), v)
                 }
