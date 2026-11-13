@@ -398,6 +398,9 @@ final class ChatListCardHeader {
         let target = fittedHeight(width)
         h.view.frame = CGRect(x: 0, y: 0, width: width, height: target)
         h.view.autoresizingMask = [.flexibleWidth]
+        // Not laid out yet (no width to measure against): put it in still, and the header's own
+        // width callback measures it once the table has a size.
+        guard width >= 1 else { setHeight(target, on: t); return }
         let visible = t.contentOffset.y + t.adjustedContentInset.top < 1
         guard visible else {
             setHeight(target, on: t)
@@ -412,6 +415,7 @@ final class ChatListCardHeader {
             h.view.alpha = 1
         } completion: { _ in
             self.animating = false
+            self.resize(animated: true)   // a width or text change that arrived mid-animation
             self.settle()
         }
     }
