@@ -2508,6 +2508,8 @@ struct GroupMemberSheet: View {
     // owner 2026-10-25: Transfer Ownership asks the server first, then for my password.
     @State private var showTransferPassword = false
     @State private var memberPhotoFrame: CGRect = .zero
+    /// While the photo is out, the circle is empty: the flying copy lands into it (no double, no flash).
+    @State private var memberPhotoOpen = false
     @State private var transferred = false
     @State private var noPasswordAlert = false
     @State private var showCreatePassword = false
@@ -2985,9 +2987,13 @@ struct GroupMemberSheet: View {
                 // Owner 2026-11-13: the photo opens full screen out of its circle, like the profile
                 // page, and lands back in it; the card stays open.
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { memberPhotoFrame = $0 }
+                .opacity(memberPhotoOpen ? 0 : 1)
                 .onTapGesture {
                     guard let url = gatedMemberPhoto, !url.isEmpty else { return }
-                    PhotoViewerDoor.show(name: member.name, photoUrl: url, from: memberPhotoFrame)
+                    memberPhotoOpen = true
+                    PhotoViewerDoor.show(name: member.name, photoUrl: url, from: memberPhotoFrame) {
+                        memberPhotoOpen = false
+                    }
                 }
                 .padding(.bottom, 6)
             HStack(spacing: 6) {
@@ -3631,7 +3637,9 @@ private struct HideMembersSection: View {
 @MainActor enum PhotoViewerDoor {
     private static var window: UIWindow?
 
-    static func show(name: String, photoUrl: String, from: CGRect) {
+    private static var onClosed: (() -> Void)?
+
+    static func show(name: String, photoUrl: String, from: CGRect, onClosed: (() -> Void)? = nil) {
         guard window == nil, let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }) else { return }
@@ -3643,9 +3651,12 @@ private struct HideMembersSection: View {
         w.rootViewController = host
         w.isHidden = false
         window = w
+        self.onClosed = onClosed
     }
 
     static func close() {
+        // The circle comes back in the same frame the flying copy goes, so nothing flashes.
+        onClosed?(); onClosed = nil
         window?.isHidden = true
         window = nil
     }
