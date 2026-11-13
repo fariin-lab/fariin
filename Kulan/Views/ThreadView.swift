@@ -3315,7 +3315,7 @@ struct ThreadView: View {
         // Every marker starts with this; the cheap prefix test keeps the regex below off plain text.
         guard m.text.hasPrefix("fariin-") else { return false }
         if m.pinNotice != nil { return true }
-        return m.isFeatureMarker && m.contactCard == nil && m.locationCard == nil && m.poll == nil
+        return m.isFeatureMarker && m.contactCard == nil && m.locationCard == nil && m.poll == nil && m.liveCard == nil
     }
 
     private var rowGeometry: [RowGeometry] {
@@ -3828,7 +3828,7 @@ struct ThreadView: View {
         if let pin = msg.pinNotice {
             // reference-style "X pinned …" notice: centered capsule, tap jumps to the pinned message.
             pinNoticeRow(msg, pin, jumpTo: jumpTo).id(msg.id)
-        } else if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil && msg.poll == nil {
+        } else if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil && msg.poll == nil && msg.liveCard == nil {
             // A reserved kulan-…: payload we can't render as a card — either a newer app version's
             // feature OR a malformed known marker. Either way show the system notice, NEVER the raw
             // marker text.

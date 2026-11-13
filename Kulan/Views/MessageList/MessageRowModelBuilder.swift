@@ -194,7 +194,8 @@ enum MessageRowModelBuilder {
             content = .notice(NoticeRow(text: "\(who) pinned \(pin.label)", symbol: nil, style: .pill,
                                         tapTargetId: pin.messageId,
                                         onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur))
-        } else if msg.isFeatureMarker, msg.contactCard == nil, msg.locationCard == nil, msg.poll == nil {
+        } else if msg.isFeatureMarker, msg.contactCard == nil, msg.locationCard == nil, msg.poll == nil,
+                  msg.liveCard == nil {
             content = .notice(NoticeRow(
                 text: "This message was sent using a newer version of the app. Update to the latest version to view it.",
                 symbol: nil, style: .unsupported, tapTargetId: nil,
