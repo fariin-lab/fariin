@@ -172,6 +172,9 @@ struct ThreadView: View {
     @HeapState private var quoting: QuoteDraft? = nil
     /// One send of a channel post's link as a plain link: its post could not be quoted (2026-11-08).
     @State private var postLinkPlainOnce = false
+    /// The quote being made for the post link in the composer (`prefetchPostLink`).
+    struct PostLinkPrefetch { let url: String; let token: Task<String?, Never> }
+    @State private var postLinkPrefetch: PostLinkPrefetch?
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
@@ -8445,13 +8448,19 @@ struct ThreadView: View {
         typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
         let members = isGroup ? groupMembers : nil
         let local = repo.items
+        // The quote started while the link sat in the field (`prefetchPostLink`), when it is this link.
+        let key = LinkPreviewService.firstURL(in: text)?.absoluteString
+        let early = postLinkPrefetch?.url == key ? postLinkPrefetch?.token : nil
+        postLinkPrefetch = nil
         Task { @MainActor in
             var qid: String?
-            if let pcid = await ChannelPostLink.cid(for: post),
+            var token = await early?.value
+            if token == nil,
+               let pcid = await ChannelPostLink.cid(for: post),
                let pmid = await ChannelPostLink.mid(for: post, cid: pcid, local: pcid == cid ? local : []) {
-                let token = QuoteStore.shared.start(cid: pcid, mid: pmid) { nil }
-                qid = (try? await QuoteStore.shared.made(token))?.qid
+                token = QuoteStore.shared.start(cid: pcid, mid: pmid) { nil }
             }
+            if let token { qid = (try? await QuoteStore.shared.made(token))?.qid }
             repo.setPendingQuote(clientId: clientId, qid: qid)
             do {
                 try await ChatService.sendText(cid: cid, text: text, clientId: clientId, group: members,
@@ -11097,9 +11106,32 @@ struct ThreadView: View {
         composer
     }
 
+    /// ⛔ A POST LINK'S QUOTE IS MADE WHILE IT SITS IN THE COMPOSER (owner 2026-11-13, his screenshot:
+    /// the sent post link showed loading bars for seconds). The quote used to start only at Send,
+    /// and making it (channel, post, then `createQuote`, often a cold start) is that wait. Now it
+    /// starts the moment the link is in the field; `sendPostLink` takes the ready token, so the card
+    /// is usually filled at the tap. A link removed unsent leaves one unused quote on the server.
+    private func prefetchPostLink(_ text: String) {
+        guard Flags.groupsEnabled, replyingTo == nil, editingMessage == nil,
+              !DemoMode.isDemoConversation(cid),
+              let post = ChannelPostLink.first(in: text),
+              let key = LinkPreviewService.firstURL(in: text)?.absoluteString else { return }
+        if postLinkPrefetch?.url == key { return }
+        let local = repo.items
+        let here = cid
+        let task = Task { @MainActor () -> String? in
+            guard let pcid = await ChannelPostLink.cid(for: post),
+                  let pmid = await ChannelPostLink.mid(for: post, cid: pcid, local: pcid == here ? local : [])
+            else { return nil }
+            return QuoteStore.shared.start(cid: pcid, mid: pmid) { nil }
+        }
+        postLinkPrefetch = PostLinkPrefetch(url: key, token: task)
+    }
+
     // LINK DETECTION while typing (debounced): resolve the first https link into a draft
     // preview card. Cleared when the text no longer holds a link; the X suppresses one URL.
     private func linkDetectOnInput(_ old: String, _ text: String) {
+        prefetchPostLink(text)
         linkDetectTask?.cancel()
         // 2026-09-24 feature-audit: a spinner for a link no longer in the text goes with it.
         if let l = linkLoadingUrl, l != LinkPreviewService.firstURL(in: text) { linkLoadingUrl = nil }
