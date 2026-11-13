@@ -2777,20 +2777,28 @@ enum ChatService {
     /// the transcode and this upload.
     static func attachVideo(cid: String, messageId: String, video: Data,
                             clientId: String? = nil, group: [String]? = nil) async throws {
+        // VIDEO# timings (owner 2026-11-13: "uploading takes more time"). Telemetry showed a 3.1 MB
+        // clip taking 5.7 s while a 68 MB one moved at ~6 MB/s, so a fixed cost hides in one step.
+        // Times only, never content or keys.
+        let t0 = Date(), trace = UploadTrace()
+        func ms(_ d: Date?) -> String { d.map { String(Int($0.timeIntervalSince(t0) * 1000)) } ?? "-" }
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
+        let tMembers = Date()
         let msgRef = db.collection("conversations").document(cid).collection("messages").document(messageId)
         // Mailman model: the SENDER's copy lives on their own device from day one — the server object
         // exists only to deliver, and the recipient deletes it on pickup. Stored before the upload so
         // it survives a send that never completes. If it did not land, stop here: delivering a clip
         // the recipient will delete on pickup, with no copy on this phone, loses it for good.
         guard VideoCache.store(video, for: messageId) else { throw VideoCache.NoRoomError() }
+        let tStored = Date()
         let cipher: Data, meta: EncMeta
         if let members {
             (cipher, meta) = try await Crypto.shared.sealBytesForGroup(video, members: members, cid: cid)
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, video)
         }
+        let tSealed = Date()
         let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(messageId).mp4.enc",
                                             progressId: clientId,
                                             // ⚠️ `enc` RIDES ALONG HERE and nowhere else: a video's
@@ -2798,13 +2806,23 @@ enum ChatService {
                                             // one had nothing to write. A resume must carry both or
                                             // the clip arrives undecryptable.
                                             attach: .init(cid: cid, messageId: messageId,
-                                                          urlField: "videoUrl", enc: meta))
+                                                          urlField: "videoUrl", enc: meta),
+                                            trace: trace)
         // The clip has landed — the ring comes off here rather than when the message commits, the
         // same reasoning the photo path spells out.
         if let clientId { await MediaSend.shared.markItemDone(clientId) }
         // `enc` rides along because phase one had no clip to seal. The rules' finish-an-upload branch
         // names both fields.
+        let tUploaded = Date()
         try await attachMedia(["videoUrl": url, "enc": meta.asDict], to: msgRef)
+        let m = trace.snapshot
+        let steps = ["members": ms(tMembers), "stored": ms(tStored), "sealed": ms(tSealed),
+                     "bytes100": ms(m.bytes100), "putOK": ms(m.putOK), "url": ms(tUploaded),
+                     "written": ms(Date()), "tries": String(m.attempts),
+                     "mb": String(format: "%.1f", Double(video.count) / 1_048_576),
+                     "group": members == nil ? "0" : "1"]
+        DiagLog.add("VIDEO# " + steps.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+        Telemetry.event(.info, component: "media", code: "video_steps", detail: steps)
     }
 
     /// A video announced but never delivered — the transcode failed, the clip was over the limit, the
