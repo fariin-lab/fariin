@@ -277,6 +277,10 @@ struct ThreadView: View {
     /// Live location (2026-11-13): the duration sheet, and the live map page.
     @State private var showLiveShare = false
     @State private var liveMapOpen = false
+    /// This chat's live docs (by sharer), listened while the chat is open: a card ends the moment
+    /// its sharer stops.
+    @State private var liveDocs: [String: LiveDocState] = [:]
+    @State private var liveListener: ListenerRegistration?
     /// The GIF picker as a layer inside the attach sheet, as Location (owner 2026-10-15).
     @State private var attachGif = false
     /// The Add files page as a layer inside the attach sheet, as Location (owner 2026-10-15).
@@ -1694,7 +1698,9 @@ struct ThreadView: View {
         .navigationBarBackButtonHidden(selecting)
         // Leaving the chat (swipe-back to the list, or any pop) closes the keyboard so it never
         // lingers over the chat list.
+        .onAppear { listenLive() }
         .onDisappear {
+            liveListener?.remove(); liveListener = nil
             inputFocused = false
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             // owner audit 2026-10-06 chat #44: the chat list shows the draft the moment you are back.
@@ -4458,6 +4464,7 @@ struct ThreadView: View {
             onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
             otherLastReadMillis: repo.otherLastReadMillis,
             otherDeliveredMillis: repo.otherDeliveredMillis, iBlocked: repo.iBlocked,
+            liveDocs: liveDocs,
             searchTerm: searchActive ? searchTerm : "",
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
@@ -7690,6 +7697,19 @@ struct ThreadView: View {
 
     /// A location share, from the sheet or from the attach sheet's own page. The chat glides to the
     /// bottom as for any send (see the note at the picker sheet); `sendMarker` is the optimistic row.
+    private func listenLive() {
+        guard liveListener == nil, !cid.isEmpty else { return }
+        liveListener = Firestore.firestore().collection("conversations").document(cid).collection("live")
+            .addSnapshotListener { snap, _ in
+                var next: [String: LiveDocState] = [:]
+                for d in snap?.documents ?? [] {
+                    guard let u = (d.data()["until"] as? Timestamp)?.dateValue() else { continue }
+                    next[d.documentID] = LiveDocState(until: u, ended: (d.data()["ended"] as? Bool) == true)
+                }
+                if next != liveDocs { liveDocs = next }
+            }
+    }
+
     /// Live location (2026-11-13): the card message (a marker that never changes), then this phone
     /// starts writing its position to conversations/{cid}/live/{me} until the end.
     private func startLiveShare(minutes: Int, note: String?, here: CLLocation) {

@@ -19,6 +19,22 @@ struct LiveSpot: Identifiable, Equatable {
     var id: String { uid }
 }
 
+/// What a chat's card needs from a live doc. One rule with Android (2026-11-13): a card runs while its
+/// own end is ahead AND (no doc; or the doc is not ended and is this share, ends within 2 s of the
+/// card; or the doc belongs to an older share).
+struct LiveDocState: Equatable {
+    let until: Date
+    let ended: Bool
+
+    static func running(card until: Date, doc: LiveDocState?) -> Bool {
+        guard until > Date() else { return false }
+        guard let doc else { return true }
+        if doc.ended { return false }
+        if abs(doc.until.timeIntervalSince(until)) < 2 { return true }
+        return doc.until < until
+    }
+}
+
 enum LiveDocs {
     static func ref(cid: String, uid: String) -> DocumentReference {
         Firestore.firestore().collection("conversations").document(cid).collection("live").document(uid)
@@ -96,9 +112,10 @@ final class LiveLocationSharer: NSObject, CLLocationManagerDelegate {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         for c in gone {
             let msgId = shares[c]?.msgId ?? ""
+            let end = shares[c]?.until ?? Date()   // the share's own end, as Android writes it
             shares[c] = nil
             LiveDocs.ref(cid: c, uid: uid).setData([
-                "msgId": msgId, "until": Timestamp(date: Date()), "ended": true,
+                "msgId": msgId, "until": Timestamp(date: end), "ended": true,
                 "updatedAt": FieldValue.serverTimestamp(),
             ])
         }

@@ -58,6 +58,8 @@ struct MessageRowContext {
     /// 2026-09-25: when my messages reached the other phone (1:1). 0 = not known / group.
     var otherDeliveredMillis: Double = 0
     var iBlocked: Bool
+    /// Live location docs of this chat, by sharer uid (until, ended), while the chat is open.
+    var liveDocs: [String: LiveDocState] = [:]
     var searchTerm: String
     var nameFor: (String) -> String
     var avatarFor: (String) -> String?
@@ -287,7 +289,7 @@ enum MessageRowModelBuilder {
         } else if let live = msg.liveCard {
             // LIVE LOCATION (2026-11-13): the same map card, its line says how long it runs; the
             // live page (tap) follows where the person is now.
-            let over = live.until <= Date()
+            let over = !LiveDocState.running(card: live.until, doc: ctx.liveDocs[msg.authorId])
             body = .location(BubbleBody.LocationBody(
                 lat: live.lat, lon: live.lon,
                 label: over ? "Live location ended"
