@@ -22,6 +22,8 @@ struct ChatCard: Equatable, Identifiable {
     var subtitle: String
     /// "https://..." opens the in-app browser, "fariin://..." routes inside the app; nil = text only.
     var link: String?
+    /// An https picture on the card's left (owner 2026-11-13); nil = no picture.
+    var image: String?
     var platforms: [String] = []
     var minBuild = 0
     var maxBuild = 0
@@ -60,6 +62,7 @@ struct ChatCard: Equatable, Identifiable {
         self.subtitle = String(((m["subtitle"] as? String) ?? "").prefix(140))
         if let l = m["link"] as? String, let u = URL(string: l),
            ["https", "fariin"].contains(u.scheme?.lowercased() ?? "") { link = l }
+        if let i = m["image"] as? String, URL(string: i)?.scheme?.lowercased() == "https" { image = i }
         platforms = ((m["platforms"] as? [Any]) ?? []).compactMap { ($0 as? String)?.lowercased() }
         minBuild = (m["minBuild"] as? NSNumber)?.intValue ?? 0
         maxBuild = (m["maxBuild"] as? NSNumber)?.intValue ?? 0
@@ -85,6 +88,7 @@ struct ChatCard: Equatable, Identifiable {
                                 "minBuild": minBuild, "maxBuild": maxBuild, "countries": countries,
                                 "ppm": ppm, "dismissible": dismissible, "priority": priority]
         if let link { m["link"] = link }
+        if let image { m["image"] = image }
         if let startsAt { m["startsAt"] = startsAt }
         if let endsAt { m["endsAt"] = endsAt }
         return m
@@ -215,18 +219,24 @@ enum ChatCards {
             }
         case nil:
             guard let s = card.link, let url = URL(string: s) else { return }
-            switch url.scheme?.lowercased() {
-            case "https":
-                WebLink.open(url)
-            case "fariin":
-                // The app's registered scheme is kulan://, and the deep-link handler already reads
-                // every in-app route from it, so a fariin:// link is the same route under that scheme.
-                var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                c?.scheme = "kulan"
-                if let u = c?.url { UIApplication.shared.open(u) }
-            default:
-                return
-            }
+            open(url)
+        }
+    }
+
+    /// A card's link, or a link inside its text (owner 2026-11-13): https in the in-app browser,
+    /// fariin:// inside the app. Any other scheme does nothing.
+    @MainActor static func open(_ url: URL) {
+        switch url.scheme?.lowercased() {
+        case "https":
+            WebLink.open(url)
+        case "fariin":
+            // The app's registered scheme is kulan://, and the deep-link handler already reads
+            // every in-app route from it, so a fariin:// link is the same route under that scheme.
+            var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            c?.scheme = "kulan"
+            if let u = c?.url { UIApplication.shared.open(u) }
+        default:
+            return
         }
     }
 
@@ -243,57 +253,6 @@ private struct ChatCardUsernameSheet: View {
     @State private var handle = ProfileStore.shared.me?.handle ?? ""
     var body: some View {
         NavigationStack { UsernameEditView(handle: $handle) }
-    }
-}
-
-/// The card itself: the app's liquid glass, inset 16 each side, radius 20 (a capsule when it is one
-/// line tall), title over up to three lines of subtitle, X on the right.
-struct ChatCardView: View {
-    let card: ChatCard
-    let onTap: () -> Void
-    let onClose: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(card.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                if !card.subtitle.isEmpty {
-                    Text(card.subtitle)
-                        .font(.system(size: 15))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 16)
-            .padding(.trailing, 40)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .overlay(alignment: .trailing) { if card.dismissible { closeButton } }
-        .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
-    }
-
-    private var closeButton: some View {
-        Button(action: onClose) {
-            Image(systemName: "xmark")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 20, height: 20)
-                .padding(8)   // the extra hit area around the glyph
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.trailing, 4)
-        .accessibilityLabel("Close")
     }
 }
 
@@ -361,6 +320,9 @@ final class ChatListCardHeader {
             ChatCards.perform(card, from: vc)
         }, onClose: {
             ChatCardsStore.shared.dismiss(card.id, uid: AuthService.shared.uid ?? "")
+        }, onResize: { [weak self] in
+            // The picture failed and its slot left: measure the card again.
+            DispatchQueue.main.async { self?.resize(animated: true) }
         })
     }
 
