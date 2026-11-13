@@ -3658,7 +3658,8 @@ private struct PhotoViewerHost: View {
     @State private var shown = true
 
     var body: some View {
-        ProfilePhotoViewer(name: name, photoUrl: photoUrl, sourceFrame: from, isPresented: $shown)
+        // The whole photo, square corners, back into the round avatar (owner 2026-11-13, like Settings).
+        ProfilePhotoViewer(name: name, photoUrl: photoUrl, sourceFrame: from, landsSquare: true, isPresented: $shown)
             .ignoresSafeArea()
             .onChange(of: shown) { _, now in if !now { PhotoViewerDoor.close() } }
     }

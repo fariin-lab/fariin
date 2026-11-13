@@ -514,6 +514,8 @@ struct ContactInfoView: View {
                                        photoUrl: (useModernHeader ? gatedPosterUrl : gatedPhotoUrl) ?? "",
                                        sourceFrame: useModernHeader ? posterFlightRect : avatarFrame,
                                        poster: useModernHeader,
+                                       // The classic circle opens as the whole, square photo (owner 2026-11-13).
+                                       landsSquare: !useModernHeader,
                                        closeSignal: photoCloseTick,
                                        // The chrome comes back WITH the collapse, not after it.
                                        onClosingBegan: {
