@@ -95,12 +95,22 @@ struct WallpaperPickerSheet: View {
         let col = ChatColorStore.shared.chosenColor(for: cid)
         _selectedColor = State(initialValue: col)
         _originalColor = State(initialValue: col)
+        _originalStyleId = State(initialValue: UserDefaults.standard.string(forKey: BubbleStyles.chatKey(cid)) ?? "")
     }
 
+    /// ⛔ A BUBBLE STYLE WAITS FOR APPLY TOO (owner 2026-11-13: picking a bubble style showed no
+    /// Apply button). A tap on the strip wrote the chat's style at once, so nothing looked pending
+    /// and the bottom stayed "Choose Wallpaper from Photos". The pick still previews live on the
+    /// chat behind; it now counts as a pending change, Apply keeps it, and closing without Apply
+    /// puts the style that was on when the sheet opened back, as the wallpaper and colour do.
+    @State private var originalStyleId: String
+    private var styleChanged: Bool { !globalOnly && !sharedGroup && chatStyleId != originalStyleId }
+
     private var dark: Bool { scheme == .dark }
-    // A pending change if EITHER the wallpaper or the bubble colour differs from what was in use on open.
+    // A pending change if the wallpaper, the bubble colour or the bubble style differs from what was
+    // in use on open.
     private var hasPendingChange: Bool {
-        selected != original || selectedColor?.stored != originalColor?.stored || clearsStyle
+        selected != original || selectedColor?.stored != originalColor?.stored || clearsStyle || styleChanged
     }
 
     /// Apply's half for the bubble style: a colour was picked, so the style goes back to Default.
@@ -312,6 +322,7 @@ struct WallpaperPickerSheet: View {
                 BubbleStylesPage(cid: cid) { spec in
                     colourTapped = false
                     selectedColor = spec; originalColor = spec
+                    originalStyleId = chatStyleId   // the full page's Save keeps its style too
                 }
             }
                 .presentationDetents([.fraction(BubbleStylesPage.sheetFraction)])
@@ -333,6 +344,7 @@ struct WallpaperPickerSheet: View {
                 if hadOwnWallpaper { store.set(original, for: cid) }
                 else { store.clearOverride(for: cid) }
                 colorStore.set(originalColor, for: cid)
+                if styleChanged { chatStyleId = originalStyleId }   // the strip's pick was a preview
             }
         }
         .onChange(of: photoItem) { _, item in
@@ -585,12 +597,15 @@ struct WallpaperPickerSheet: View {
                         committed = true                  // keep the live-previewed wallpaper + colour
                         // A colour-only change in a group sends nothing to the group.
                         if sharedGroup { if selected != original { store.publishGroupWallpaper(selected, for: cid) } }
-                        else { store.set(selected, for: cid) }
+                        // A style-only Apply must not turn an inherited wallpaper into this chat's own copy.
+                        else if selected != original || hadOwnWallpaper { store.set(selected, for: cid) }
                         colorStore.set(selectedColor, for: cid)
                         clearStyleIfColourPicked()
                         dismiss()
                     } label: {
-                        Text(globalOnly ? "Apply For All Chats" : "Apply Wallpaper")
+                        Text(globalOnly ? "Apply For All Chats"
+                             : (styleChanged && selected == original && selectedColor?.stored == originalColor?.stored
+                                ? "Apply Bubble Style" : "Apply Wallpaper"))
                             .fontWeight(.semibold).font(.system(size: 17))
                             .foregroundStyle(selected == .none && selectedColor == nil ? Color.primary : Color.white)
                             .frame(maxWidth: .infinity).frame(height: 50)
