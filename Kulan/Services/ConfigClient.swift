@@ -70,7 +70,7 @@ final class ConfigClient {
         static let voicePrefetchAhead = IntKey(name: "voicePrefetchAhead", def: 3, min: 0, max: 10)
         // Stories
         static let storyExpiryHours = IntKey(name: "storyExpiryHours", def: 24, min: 1, max: 48)
-        static let storyUploadMB = IntKey(name: "storyUploadMB", def: 50, min: 1, max: 50)
+        static let storyUploadMB = IntKey(name: "storyUploadMB", def: 50, min: 5, max: 50)
         static let storyVideoSeconds = IntKey(name: "storyVideoSeconds", def: 90, min: 10, max: 180)
         static let storyVideoPickSeconds = IntKey(name: "storyVideoPickSeconds", def: 600, min: 60, max: 1800)
         static let storyCaptionChars = IntKey(name: "storyCaptionChars", def: 200, min: 50, max: 2048)
@@ -120,6 +120,8 @@ final class ConfigClient {
     private let lock = NSLock()
     /// What the cache held for the account signed in when the app started. Never changes after.
     private var launch: [String: Any] = [:]
+    /// True once any nextLaunch switch was read this run; after that `launch` may not be filled.
+    private var launchRead = false
     /// The newest values for the signed-in account.
     private var live: [String: Any] = [:]
 
@@ -131,6 +133,8 @@ final class ConfigClient {
     private var knownEpoch = 0
     private var fetching = false
     private var again = false
+    /// Bumped by each fetch and by stop(): only the newest request may clear `fetching`.
+    private var fetchSeq = 0
     private var epochWait: Task<Void, Never>?
     private var listener: ListenerRegistration?
     private var observers: [NSObjectProtocol] = []
@@ -139,7 +143,8 @@ final class ConfigClient {
 
     private func raw(_ key: String) -> Any? {
         lock.lock(); defer { lock.unlock() }
-        return Self.nextLaunchKeys.contains(key) ? launch[key] : live[key]
+        if Self.nextLaunchKeys.contains(key) { launchRead = true; return launch[key] }
+        return live[key]
     }
 
     private func bool(_ key: String) -> Bool? {
@@ -199,7 +204,13 @@ final class ConfigClient {
         guard !uid.isEmpty else { return }
         if self.uid != uid {
             let c = Self.readCache(uid)
-            lock.lock(); live = c?.values ?? [:]; lock.unlock()
+            lock.lock()
+            live = c?.values ?? [:]
+            // No snapshot yet (signed out at launch, keychain locked before first unlock, or a
+            // sign-out cleared it) and no nextLaunch switch read so far: this account's cache is
+            // still a launch value, nothing on screen has used the old one.
+            if launch.isEmpty, !launchRead { launch = c?.values ?? [:] }
+            lock.unlock()
             hash = c?.hash
             replyV = c?.v ?? 0
             lastFetchAt = nil
@@ -222,7 +233,12 @@ final class ConfigClient {
         replyV = 0
         knownEpoch = 0
         lastFetchAt = nil
-        lock.lock(); live = [:]; lock.unlock()
+        fetching = false
+        again = false
+        fetchSeq += 1
+        // The launch snapshot belonged to the account that signed out: the nextLaunch switches fall
+        // back to the account-free config/features snapshot for the rest of this run.
+        lock.lock(); live = [:]; launch = [:]; lock.unlock()
         publishLive()
     }
 
@@ -278,6 +294,8 @@ final class ConfigClient {
         guard let uid else { return }
         if fetching { again = true; return }
         fetching = true
+        fetchSeq += 1
+        let mine = fetchSeq
         var req: [String: Any] = ["build": AppUpdateGate.build, "platform": "ios"]
         if let hash { req["have"] = hash }
         let asked = epoch ?? (knownEpoch > 0 ? knownEpoch : nil)
@@ -291,9 +309,13 @@ final class ConfigClient {
                 reply = nil
             }
             guard let self else { return }
-            self.fetching = false
-            // Signed out or another account while it was out: drop the answer.
-            guard self.uid == uid else { return }
+            if mine == self.fetchSeq { self.fetching = false }
+            // Signed out or another account while it was out: drop the answer, and run an ask that
+            // queued behind it for the account signed in now.
+            guard self.uid == uid else {
+                if !self.fetching, self.again, self.uid != nil { self.again = false; self.fetch(epoch: nil) }
+                return
+            }
             let v = (reply?["v"] as? NSNumber)?.intValue ?? 0
             if let reply {
                 self.apply(reply, uid: uid, v: v)
@@ -301,9 +323,12 @@ final class ConfigClient {
             // The answer is older than the epoch it was asked for (the server's bundle had not caught
             // up yet): ask once more a little later.
             if let asked, reply != nil, (reply?["notReady"] as? Bool) != true, v < asked, !retried {
+                // A queued ask is folded into the retry: it asks for the newest epoch known by then.
+                self.again = false
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(nanoseconds: 1_200_000_000)
-                    self?.fetch(epoch: asked, retried: true)
+                    guard let self else { return }
+                    self.fetch(epoch: max(asked, self.knownEpoch), retried: true)
                 }
                 return
             }
