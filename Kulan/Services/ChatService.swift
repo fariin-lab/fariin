@@ -3484,7 +3484,8 @@ enum ChatService {
             var members = await freshGroupMembers(targetCid, nil)
             if members == nil, !targetCid.contains("_") { members = try await groupDocMembers(targetCid) }
             if members == nil, !targetCid.contains("_") { return false }
-            let targetPlain = members != nil && !GroupCrypto.sealNewMessages && (await groupIsPlain(targetCid))
+            let listedPlain = members != nil ? await groupIsPlain(targetCid) : false
+            let targetPlain = listedPlain && !GroupCrypto.sealNewMessages
 
             // Keys first: a key this phone cannot re-wrap costs the server nothing.
             var newMeta: [String: EncMeta] = [:]
