@@ -2016,8 +2016,15 @@ enum MessageRowLayout {
                     .font: UIFont.systemFont(ofSize: 11, weight: .semibold),
                     .foregroundColor: UIColor.white])
                 let s = BubbleText.size(attr, width: box.width)
-                plan.duration = CGRect(x: mediaRect.minX + 5, y: mediaRect.minY + 5,
-                                       width: s.width + 12, height: s.height + 4)
+                let w = s.width + 12, h = s.height + 4
+                // ⛔ BOTTOM RIGHT WHEN THERE IS A CAPTION (owner 2026-11-13, his red circles): the
+                // time and ticks then sit in the caption row, so the picture's bottom-right corner is
+                // free. Without a caption that corner holds the time capsule, so it stays top left.
+                if plan.caption != nil {
+                    plan.duration = CGRect(x: mediaRect.maxX - 5 - w, y: mediaRect.maxY - 5 - h, width: w, height: h)
+                } else {
+                    plan.duration = CGRect(x: mediaRect.minX + 5, y: mediaRect.minY + 5, width: w, height: h)
+                }
             }
         }
         // 2026-10-17 (owner): a sticker shows no upload ring; it is small and goes up in a moment.

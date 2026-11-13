@@ -484,29 +484,21 @@ struct VideoPlayerScreen: View {
             .liquidGlass(Capsule(), interactive: true)
             Spacer(minLength: 8)
             // Theirs: Save and Delete live in the menu; Share and Forward are the bottom row's buttons.
-            Menu {
-                Menu {
-                    ForEach([Float(0.5), 1, 1.25, 1.5, 2], id: \.self) { s in
-                        Button { setSpeed(s) } label: {
-                            if s == speed { Label(Self.speedLabel(s), systemImage: "checkmark") }
-                            else { Text(Self.speedLabel(s)) }
-                        }
-                    }
-                } label: { Label("Speed  \(Self.speedLabel(speed))", systemImage: "gauge.with.dots.needle.67percent") }
-                if !savingLocked {
-                    Button { save() } label: { Label("Save Video", systemImage: "square.and.arrow.down") }
-                }
+            // ⛔ ITS OWN EQUATABLE VIEW (owner 2026-11-13, build 1187: "Speed button is not working").
+            // The playback clock writes `current`/`progress` about 20 times a second, which re-ran this
+            // whole body; an inline Menu was rebuilt on every tick and iOS closed the Speed submenu
+            // before a speed could be picked. Built from plain values only, it redraws only when one
+            // of them changes.
+            PlayerMoreMenu(
+                speed: speed,
+                canSave: !savingLocked,
                 // In a group Delete leads somewhere only when it can go for everyone (no Delete for Me).
-                if !ChatService.deletesOnlyForEveryone(cid: cid)
-                    || (isMine && ChatService.ownDeleteForEveryoneOpen(message, cid: cid)) {
-                    Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
-                }
-            } label: {
-                Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                    .frame(width: 44, height: 44)
-                    .liquidGlass(Circle(), interactive: true)
-                    .contentShape(Circle())
-            }
+                canDelete: !ChatService.deletesOnlyForEveryone(cid: cid)
+                    || (isMine && ChatService.ownDeleteForEveryoneOpen(message, cid: cid)),
+                actions: PlayerMoreMenu.Actions(setSpeed: { setSpeed($0) }, save: { save() },
+                                                delete: { confirmDelete = true })
+            )
+            .equatable()
         }
         .padding(.horizontal, 12).padding(.top, 4)
         .transition(.opacity)
@@ -932,4 +924,51 @@ private final class PlayerLayerUIView: UIView {
     }
     required init?(coder: NSCoder) { fatalError("not implemented") }
     func setPlayer(_ p: AVPlayer) { if playerLayer.player !== p { playerLayer.player = p } }
+}
+
+/// The player's ••• menu (Speed, Save Video, Delete). Equatable on its plain values, so the playback
+/// clock re-running the screen's body does not rebuild it: an open Speed submenu stays open until a
+/// speed is picked (owner 2026-11-13, build 1187).
+private struct PlayerMoreMenu: View, Equatable {
+    let speed: Float
+    let canSave: Bool
+    let canDelete: Bool
+    let actions: Actions
+
+    /// Closures are not compared: they always do the same thing for one open player.
+    struct Actions {
+        let setSpeed: (Float) -> Void
+        let save: () -> Void
+        let delete: () -> Void
+    }
+
+    static func == (a: PlayerMoreMenu, b: PlayerMoreMenu) -> Bool {
+        a.speed == b.speed && a.canSave == b.canSave && a.canDelete == b.canDelete
+    }
+
+    var body: some View {
+        Menu {
+            // A Picker in .menu style is the system's own submenu with a checkmark on the current
+            // choice; it hands the pick straight to the player.
+            Picker(selection: Binding(get: { speed }, set: { actions.setSpeed($0) })) {
+                ForEach([Float(0.5), 1, 1.25, 1.5, 2], id: \.self) { s in
+                    Text(VideoPlayerScreen.speedLabel(s)).tag(s)
+                }
+            } label: {
+                Label("Speed  \(VideoPlayerScreen.speedLabel(speed))", systemImage: "gauge.with.dots.needle.67percent")
+            }
+            .pickerStyle(.menu)
+            if canSave {
+                Button { actions.save() } label: { Label("Save Video", systemImage: "square.and.arrow.down") }
+            }
+            if canDelete {
+                Button(role: .destructive) { actions.delete() } label: { Label("Delete", systemImage: "trash") }
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
+        }
+    }
 }
