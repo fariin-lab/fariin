@@ -37,7 +37,7 @@ enum VoiceAutoDownload {
 
     private static let mb: Int64 = 1024 * 1024
     /// The voice floor in the reference: a voice note's ceiling is never below this.
-    static let floorBytes: Int64 = 2 * mb
+    static var floorBytes: Int64 { Int64(ConfigClient.int(ConfigClient.K.voiceAutoDownloadMB)) * mb }   // 2 MB
     /// The reference's default file ceilings: 1 MB on cellular (its medium preset), 3 MB on Wi-Fi
     /// (its high preset).
     static func fileLimit(_ n: Network) -> Int64 { n == .wifi ? 3 * mb : 1 * mb }
@@ -95,7 +95,7 @@ enum VoiceAutoDownload {
     }
 
     /// The reference asks for this many media items beyond the visible ones.
-    static let ahead = 3
+    static var ahead: Int { ConfigClient.int(ConfigClient.K.voicePrefetchAhead) }   // 3
 
     /// Which rows to consider, by index into the chat's rows (oldest first).
     ///
@@ -108,6 +108,7 @@ enum VoiceAutoDownload {
     static func window(count: Int, visible: ClosedRange<Int>?, followsNewest: Bool,
                        towardOlder: Bool, isVoice: (Int) -> Bool) -> [Int] {
         guard count > 0 else { return [] }
+        let ahead = Self.ahead   // read once per call, not per loop step
         var out: [Int] = []
         guard let v = visible else {
             // Nothing reported yet (the chat is still landing): the newest notes, the place a chat

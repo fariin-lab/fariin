@@ -21,7 +21,7 @@ struct StoryCaptionEditor: View {
         _text = State(initialValue: story.caption)
     }
 
-    private var limit: Int { Limits.storyCaptionChars }
+    @State private var limit = Limits.storyCaptionChars   // read once per editor, not per redraw
     private var changed: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines) != story.caption }
 
     var body: some View {

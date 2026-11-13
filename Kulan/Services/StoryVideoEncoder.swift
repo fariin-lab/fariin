@@ -26,7 +26,7 @@ enum StoryVideoEncoder {
 
     /// The upload ceiling this encoder sizes against. storage.rules `stories/` allows 50 MB; the
     /// margin covers the encoder overshooting its average a little.
-    static let budgetBytes: Double = Double(Limits.storyUploadBytes - 3 * 1024 * 1024)
+    static var budgetBytes: Double { Double(Limits.storyUploadBytes - 3 * 1024 * 1024) }
 
     /// What the editor handed over for this segment. All in the same units `VideoTranscoder.burnIn`
     /// has always used, so the posted frame is the one the editor showed.

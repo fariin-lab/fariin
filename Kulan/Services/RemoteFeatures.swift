@@ -29,13 +29,15 @@ final class RemoteFeatures {
     }()
 
     /// A finished feature: the server's value wins either way.
+    /// 2026-11-13 flags: ConfigClient's launch snapshot (getAppConfig) first; this doc's snapshot is
+    /// the fallback for an old server or a notReady reply.
     static func value(_ key: String, default shipped: Bool) -> Bool {
-        snapshot[key] ?? shipped
+        ConfigClient.switchValue(key) ?? snapshot[key] ?? shipped
     }
 
     /// An unfinished feature: the server can only take it away.
     static func offOnly(_ key: String, default shipped: Bool) -> Bool {
-        shipped && snapshot[key] != false
+        shipped && (ConfigClient.switchValue(key) ?? snapshot[key]) != false
     }
 
     private var listener: ListenerRegistration?
@@ -123,6 +125,10 @@ final class RemoteFeatures {
     var bubblesHidden: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "remoteFeatures.bubblesHidden.v1") ?? [])
     /// The panel's chat list cards (owner 2026-11-13), in the panel's order; see `ChatCard`.
     var chatCards: [ChatCard] = ChatCard.parse(UserDefaults.standard.array(forKey: ChatCard.storeKey))
+    /// The live switches as getAppConfig resolved them for this account (2026-11-13 flags); set by
+    /// ConfigClient. Read through `bool(_:)`, which falls back to `values` (config/features).
+    var config: [String: Bool] = ConfigClient.shared.liveBools()
+    func bool(_ key: String) -> Bool? { config[key] ?? values[key] }
     private init() {}
 }
 

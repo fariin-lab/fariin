@@ -37,13 +37,13 @@ enum PhotoQuality: Equatable, Sendable {
     /// Longest side of the sent photo, in pixels.
     var maxSide: CGFloat {
         switch self {
-        case .standard: return 1280
-        case .high:     return 2560
+        case .standard: return CGFloat(ConfigClient.int(ConfigClient.K.photoMaxSideStandard))   // 1280
+        case .high:     return CGFloat(ConfigClient.int(ConfigClient.K.photoMaxSideHigh))       // 2560
         }
     }
 
     /// JPEG compression quality (UIKit/ImageIO scale, 0...1).
-    var jpegQuality: CGFloat { 0.6 }
+    var jpegQuality: CGFloat { CGFloat(ConfigClient.int(ConfigClient.K.photoJpegQualityPct)) / 100 }   // 0.6
 
     /// Above this the photo is redrawn smaller.
     var maxBytes: Int {
@@ -54,7 +54,7 @@ enum PhotoQuality: Equatable, Sendable {
     }
 
     /// Never shrink below this while chasing the byte ceiling; send what we have instead.
-    static let minSide: CGFloat = 640
+    static var minSide: CGFloat { CGFloat(ConfigClient.int(ConfigClient.K.photoMinSide)) }   // 640
 
     /// The pixel size a photo of `pixels` is drawn at for this level, before any byte-ceiling retry.
     /// Never enlarges. Aspect kept; each side rounded and at least 1.

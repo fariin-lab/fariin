@@ -162,6 +162,7 @@ enum SessionWipe {
         AppLimits.shared.stop()
         MsgPolicy.shared.stop()   // owner 2026-10-18: my override goes with the account
         RemoteFeatures.shared.stop()   // saved switches stay: they describe the app, not the person
+        ConfigClient.shared.stop()     // per-account cache stays on disk; live values back to defaults
         // The story audiences are a list of the last person's friends by name, mirrored to disk so
         // the share sheet can open instantly. Left behind, the next account's Share Story sheet
         // would open holding a stranger's custom lists.

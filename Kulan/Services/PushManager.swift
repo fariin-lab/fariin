@@ -61,6 +61,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         PerfTrace.start()   // owner 2026-10-21: the phone's own speed numbers (PERF# lines)
         StoryTraceBridge.install()   // the story player's timeline into the same log (2026-10-14)
         FirebaseApp.configure()
+        // Feature flags (2026-11-13): the launch snapshot of the signed-in account's cached values,
+        // taken now so nextLaunch switches never move during this run. See ConfigClient.
+        ConfigClient.shared.takeLaunchSnapshot()
         // Production monitoring (owner 2026-10-21): Crashlytics keys, Telemetry, MetricKit reports.
         Telemetry.start()
         HealthReports.shared.start()

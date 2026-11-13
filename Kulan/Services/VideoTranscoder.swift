@@ -209,7 +209,7 @@ enum VideoTranscoder {
         // and the few bytes encryption adds.
         // `rate` overrides both caps for a caller that must not lose a generation of quality: a repost
         // re-encodes media that was already compressed once (reference app: 3.7-5.8 Mbps for stories).
-        let bytesPerSecond: Double = rate ?? (hd ? 500_000 : 250_000)        // ≈ 4 Mbps / 2 Mbps, audio included
+        let bytesPerSecond: Double = rate ?? Double(ConfigClient.int(hd ? ConfigClient.K.videoHdBytesPerSec : ConfigClient.K.videoSdBytesPerSec))        // ≈ 4 Mbps / 2 Mbps, audio included
         let ceiling = Int64(Limits.videoExportTargetBytes)   // unchanged 62 MB (owner 2026-11-13)
         let wanted = Int64(max(1, duration) * bytesPerSecond)
         session.fileLengthLimit = min(ceiling, wanted)

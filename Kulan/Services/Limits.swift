@@ -23,22 +23,22 @@ enum Limits {
     /// and send more, but each bubble is 2,500; up to 6,400 is about 3 bubbles"). His newer word
     /// replaces the 08-27 one (65,536) and the same day's flat 2,500. `ThreadView.send` splits.
     /// owner 2026-11-10: 4,096 (was 6,400), the size big messengers use.
-    static let messageMaxChars = 4_096
+    static var messageMaxChars: Int { ConfigClient.int(ConfigClient.K.messageMaxChars) }   // 4,096
     /// A photo's or video's caption (owner 2026-11-10): 1,024, shorter than a message.
-    static let captionMaxChars = 1_024
-    static let messageBubbleChars = 2_500
-    static let pinnedMessagesPerChat = 3
+    static var captionMaxChars: Int { ConfigClient.int(ConfigClient.K.captionMaxChars) }   // 1,024
+    static var messageBubbleChars: Int { ConfigClient.int(ConfigClient.K.messageBubbleChars) }   // 2,500
+    static var pinnedMessagesPerChat: Int { ConfigClient.int(ConfigClient.K.pinnedMessagesPerChat) }   // 3
     /// Photos or videos in one album message. Picking more starts another album rather than hiding the
     /// remainder behind a "+N" badge — 12 pictures ship as 10 + 2. Matches the ceiling the mosaic layout
     /// draws, so a sent album is always fully visible.
-    static let albumMaxItems = 10
+    static var albumMaxItems: Int { ConfigClient.int(ConfigClient.K.albumMaxItems) }   // 10
     static let pinnedChats = 3
-    static let forwardChatsAtOnce = 5
+    static var forwardChatsAtOnce: Int { ConfigClient.int(ConfigClient.K.forwardChatsAtOnce) }   // 5
     /// Messages that can be ticked and forwarded in one go, the reference's `maxForwardCount`. Past
     /// this the Forward button in the selection bar switches off rather than handing the picker a
     /// list the send path will not carry.
-    static let maxForwardSelection = 32
-    static let mediaPerMessage = 32   // raised for parity with standard messengers (user request; was 30)
+    static var maxForwardSelection: Int { ConfigClient.int(ConfigClient.K.forwardSelectionMax) }   // 32
+    static var mediaPerMessage: Int { ConfigClient.int(ConfigClient.K.mediaPerMessage) }   // 32, raised for parity with standard messengers (user request; was 30)
     // ALL FOUR OF THESE NOW MATCH THE STORAGE RULES, and every one of them used to lie.
     //
     // The app accepted a file, spent time compressing it, uploaded the whole thing, and only THEN
@@ -54,7 +54,7 @@ enum Limits {
     //
     // If one of these changes, change storage.rules with it. A limit the client believes and the
     // server does not is worse than either number alone.
-    static let fileUploadBytes = 25 * 1024 * 1024                  // 25 MB — deliberately BELOW the rule
+    static var fileUploadBytes: Int { ConfigClient.int(ConfigClient.K.fileUploadMB) * 1024 * 1024 }                 // 25 MB, deliberately BELOW the rule
     /// ⛔ 100 MB (owner, 2026-08-25). The old 25 was doing two jobs and failing the second: it capped
     /// storage AND, through `VideoTranscoder`'s flat `fileLengthLimit`, it decided quality — every
     /// clip was squeezed to fit it, so a long one came out at roughly 300 kbps. The exporter targets
@@ -80,38 +80,38 @@ enum Limits {
     /// 62 MB), so no clip is encoded differently; only the cap that refused it moved. Live storage
     /// rule chat/ is < 102 MB (100 + room for the encryption bytes). Memory peak for a 100 MB clip
     /// is about 300 MB (the three copies above), his decision.
-    static let videoMessageBytes = 100 * 1024 * 1024               // 100 MB — storage.rules chat/ < 102 MB
+    static var videoMessageBytes: Int { ConfigClient.int(ConfigClient.K.videoMessageMB) * 1024 * 1024 }              // 100 MB, storage.rules chat/ < 102 MB
     /// What the exporter aims for at most (unchanged since 64 MB was the cap: 64 - 2).
-    static let videoExportTargetBytes = 62 * 1024 * 1024
+    static var videoExportTargetBytes: Int { ConfigClient.int(ConfigClient.K.videoExportTargetMB) * 1024 * 1024 }   // 62 MB
     /// The recording ceiling, and `AudioRecorder.maxDuration` IS this value rather than a copy of it.
     /// It used to be neither: this constant was referenced nowhere in the app and the recorder
     /// enforced its own 600, so the documented cap was three times the real one and anybody building
     /// against this file would have built against a number nothing honoured.
-    static let voiceNoteSeconds: TimeInterval = 30 * 60           // 30 min
+    static var voiceNoteSeconds: TimeInterval { TimeInterval(ConfigClient.int(ConfigClient.K.voiceNoteMinutes) * 60) }          // 30 min
     static let editWindowSeconds: TimeInterval = 15 * 60          // 15 min
-    static let deleteForEveryoneSeconds: TimeInterval = 48 * 3600 // 48 h
-    static let blockedUsers = 1000
+    static var deleteForEveryoneSeconds: TimeInterval { TimeInterval(ConfigClient.int(ConfigClient.K.deleteForEveryoneHours) * 3600) } // 48 h
+    static var blockedUsers: Int { ConfigClient.int(ConfigClient.K.blockedUsersMax) }   // 1000
 
     // Stories
     static let storiesPer24h = 50
-    static let storyExpiryHours = 24
-    static let storyUploadBytes = 50 * 1024 * 1024               // 50 MB — storage.rules stories/ (StoryVideoEncoder sizes under it)
+    static var storyExpiryHours: Int { ConfigClient.int(ConfigClient.K.storyExpiryHours) }   // 24
+    static var storyUploadBytes: Int { ConfigClient.int(ConfigClient.K.storyUploadMB) * 1024 * 1024 }              // 50 MB, storage.rules stories/ (StoryVideoEncoder sizes under it)
     /// How long ONE story can be. 90s is the reference app's status-feature number and the owner's spec (2026-08-04).
     /// A longer pick is no longer truncated to this — it is SPLIT into consecutive segments, each its
     /// own story, so nothing the user chose is thrown away.
-    static let storyVideoSeconds = 90
+    static var storyVideoSeconds: Int { ConfigClient.int(ConfigClient.K.storyVideoSeconds) }   // 90
     /// How long a pick may be before we refuse it outright: ten minutes, which at 90s a segment is
     /// seven stories. Past that the split stops being a story and starts being a film.
-    static let storyVideoPickSeconds = 600
-    static let storyCaptionChars = 200   // owner 2026-11-10 (was 700)
+    static var storyVideoPickSeconds: Int { ConfigClient.int(ConfigClient.K.storyVideoPickSeconds) }   // 600
+    static var storyCaptionChars: Int { ConfigClient.int(ConfigClient.K.storyCaptionChars) }   // 200, owner 2026-11-10 (was 700)
 
     // Groups
     static let groupMembers = 1024
-    static let groupAdmins = 20
-    static let groupNameChars = 100
+    static var groupAdmins: Int { ConfigClient.int(ConfigClient.K.groupAdminsMax) }   // 20
+    static var groupNameChars: Int { ConfigClient.int(ConfigClient.K.groupNameChars) }   // 100
     static let groupDescChars = 512
     /// A channel's description (owner 2026-11-10): 255. A group's comes from the panel (group_desc_max).
-    static let channelDescChars = 255
+    static var channelDescChars: Int { ConfigClient.int(ConfigClient.K.channelDescChars) }   // 255
 
     // Profile
     /// ⚠️ MUST MATCH `USERNAME_MIN` in functions-username. The server is the one that counts; this
@@ -126,8 +126,8 @@ enum Limits {
     /// admins only. Mirrors `USERNAME_MIN` on the server, which is the one that counts.
     static let usernameMinChars = 5
     static let usernameMaxChars = 30
-    static let bioChars = 140
-    static let profilePhotoBytes = 8 * 1024 * 1024              // 8 MB — storage.rules profiles/
+    static var bioChars: Int { ConfigClient.int(ConfigClient.K.bioChars) }   // 140
+    static var profilePhotoBytes: Int { ConfigClient.int(ConfigClient.K.profilePhotoMB) * 1024 * 1024 }             // 8 MB, storage.rules profiles/
     // Username changes: 3 per 24 hours, counted by the server (functions-username MAX_CLAIMS_PER_DAY,
     // owner 2026-11-10). No copy here: the server's refusal says when to try again.
 

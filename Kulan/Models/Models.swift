@@ -21,9 +21,9 @@ enum Flags {
     static var groupsEnabled: Bool { RemoteFeatures.offOnly("groups", default: true) }
     /// "Create new groups" (owner 2026-10-18, admin panel): OFF hides every way to MAKE a group and
     /// the rules refuse one; groups that exist keep working. Live (`LiveFeatures`), on unless set.
-    static var groupCreateEnabled: Bool { groupsEnabled && LiveFeatures.shared.values["groupCreate"] != false }
+    static var groupCreateEnabled: Bool { groupsEnabled && LiveFeatures.shared.bool("groupCreate") != false }
     /// Group Statistics page (owner 2026-10-26, admin panel Features switch). Live; on unless set.
-    static var groupStatsEnabled: Bool { LiveFeatures.shared.values["groupStats"] != false }
+    static var groupStatsEnabled: Bool { LiveFeatures.shared.bool("groupStats") != false }
     /// The "All Members" bubble cloud on a group's page (owner 2026-10-19): off, every group, or
     /// the groups the admin panel picks (config/features memberCloud). Live; off unless set.
     static func memberCloud(for cid: String) -> Bool { LiveFeatures.shared.memberCloud.isOn(for: cid) }
