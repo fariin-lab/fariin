@@ -1109,15 +1109,6 @@ enum ChatService {
         // these (the rules want Remove members for them); for anyone else they stay, harmlessly,
         // since admins are exempt (audit 2026-10-20: a delegated admin's promote was refused).
         let conv = await MainActor.run { ConversationsRepository.shared.conversations.first { $0.id == cid } }
-        // Remote limit (flags 2026-11-13, groupAdminsMax, default 0 = no limit): a group with that many admins
-        // takes no new one. The owner is not counted. Every promote door shows this sentence.
-        if let conv, !conv.isChannel, !conv.admins.contains(promoted) {
-            let most = Limits.groupAdmins   // 0 (the default, owner 2026-11-13) = no limit
-            if most > 0, conv.admins.filter({ !conv.isOwner($0) }).count >= most {
-                throw NSError(domain: "ChatService", code: 41,
-                              userInfo: [NSLocalizedDescriptionKey: "A group can have at most \(most) admins."])
-            }
-        }
         let me = uid
         if conv?.isOwner(me) == true || conv?.adminCan(me, .banUsers) == true {
             data["restrictedFlags.\(promoted)"] = FieldValue.delete()
