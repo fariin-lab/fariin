@@ -80,6 +80,9 @@ struct MediaGalleryView: View {
     @State private var confirmDelete = false
     @State private var deleteFailed = false   // 2026-09-24 fix-all #233
     @State private var shareFailed = false    // 2026-10-06: nothing in the selection could be prepared
+    /// The file being downloaded to open (owner 2026-11-13: a tap opens the file, not the chat).
+    @State private var openingFile: String?
+    @State private var fileOpenFailed = false
 
     @Environment(\.colorScheme) private var scheme
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
@@ -410,6 +413,11 @@ struct MediaGalleryView: View {
         }
         .alert("Sharing is turned off in this chat", isPresented: $sharingBlocked) {
             Button("OK", role: .cancel) {}
+        }
+        .alert("Couldn't open the file", isPresented: $fileOpenFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("It may be damaged, or in a format this phone can't open.")
         }
         .alert("Couldn't share", isPresented: $shareFailed) {
             Button("OK", role: .cancel) {}
@@ -940,7 +948,11 @@ struct MediaGalleryView: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .contentShape(Rectangle())
-        .onTapGesture { if selecting { toggle(m) } else { goToChat(m) } }
+        // ⛔ A TAP OPENS THE LINK (owner 2026-11-13): the browser, not the chat. Long-press keeps
+        // Show in Chat. A row with no readable link still goes to its message.
+        .onTapGesture {
+            if selecting { toggle(m) } else if let url { WebLink.open(url) } else { goToChat(m) }
+        }
         .contextMenu {
             if !selecting {
                 Button { goToChat(m) } label: { goToChatLabel }
@@ -986,15 +998,40 @@ struct MediaGalleryView: View {
                 Text(fileMeta(m)).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Text(m.createdAt.formatted(date: .abbreviated, time: .omitted))
-                .font(.caption).foregroundStyle(.secondary)
+            if openingFile == m.id {
+                ProgressView()
+            } else {
+                Text(m.createdAt.formatted(date: .abbreviated, time: .omitted))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .contentShape(Rectangle())
-        .onTapGesture { if selecting { toggle(m) } else { goToChat(m) } }
+        // ⛔ A TAP OPENS THE FILE (owner 2026-11-13): downloaded first if this phone does not have it
+        // yet (spinner on the row), then Apple's file page, as in the chat. Long-press: Show in Chat.
+        .onTapGesture { if selecting { toggle(m) } else { openFile(m) } }
         .contextMenu {
             if !selecting {
                 Button { goToChat(m) } label: { goToChatLabel }
+            }
+        }
+    }
+
+    /// The kept copy if there is one (the Documents auto-download, or one opened before), else
+    /// downloaded and decrypted, then shown in the same file page the chat uses. One at a time.
+    private func openFile(_ m: Message) {
+        guard openingFile == nil else { return }
+        openingFile = m.id
+        Task {
+            let url = await Self.shareFile(m, cid: cid)
+            // Kept where the chat's own open looks first, so the next tap opens at once.
+            if let url, DocumentPrefetch.cached(id: m.id, fileName: m.fileName) == nil,
+               let data = try? Data(contentsOf: url) {
+                DocumentPrefetch.write(data, to: DocumentPrefetch.localURL(id: m.id, fileName: m.fileName))
+            }
+            await MainActor.run {
+                openingFile = nil
+                if let url { SingleFilePreviewController.present(url) } else { fileOpenFailed = true }
             }
         }
     }
