@@ -1094,11 +1094,11 @@ enum ChatService {
         // these (the rules want Remove members for them); for anyone else they stay, harmlessly,
         // since admins are exempt (audit 2026-10-20: a delegated admin's promote was refused).
         let conv = await MainActor.run { ConversationsRepository.shared.conversations.first { $0.id == cid } }
-        // Remote limit (flags 2026-11-13, groupAdminsMax, default 20): a group with that many admins
+        // Remote limit (flags 2026-11-13, groupAdminsMax, default 0 = no limit): a group with that many admins
         // takes no new one. The owner is not counted. Every promote door shows this sentence.
         if let conv, !conv.isChannel, !conv.admins.contains(promoted) {
-            let most = Limits.groupAdmins
-            if conv.admins.filter({ !conv.isOwner($0) }).count >= most {
+            let most = Limits.groupAdmins   // 0 (the default, owner 2026-11-13) = no limit
+            if most > 0, conv.admins.filter({ !conv.isOwner($0) }).count >= most {
                 throw NSError(domain: "ChatService", code: 41,
                               userInfo: [NSLocalizedDescriptionKey: "A group can have at most \(most) admins."])
             }
@@ -3726,12 +3726,14 @@ enum ChatService {
         return String(format: "%d:%02d", d / 60, d % 60)
     }
 
-    /// Remote limit (flags 2026-11-13, deleteForEveryoneHours, default 48): whether MY OWN message
+    /// Remote limit (flags 2026-11-13, deleteForEveryoneHours, default 0 = no window): whether MY OWN message
     /// `m` in `cid` may still go for everyone. Inside the window always; past it only in a channel
     /// (no window there, as with Edit) or as a group admin who may remove messages. The same answer
     /// ThreadView.canDeleteForEveryone gives the bubble, for the photo viewer, video screen and gallery.
     static func ownDeleteForEveryoneOpen(_ m: Message, cid: String) -> Bool {
-        if Date().timeIntervalSince(m.createdAt) < Limits.deleteForEveryoneSeconds { return true }
+        // 0 (the default, owner 2026-11-13) = no window: always open, as before the limit existed.
+        let window = Limits.deleteForEveryoneSeconds
+        if window <= 0 || Date().timeIntervalSince(m.createdAt) < window { return true }
         guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return false }
         return c.isChannel || (c.isGroup && c.adminCan(uid, .deleteMessages))
     }

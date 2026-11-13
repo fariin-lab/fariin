@@ -33,7 +33,7 @@ enum Limits {
     /// draws, so a sent album is always fully visible.
     static var albumMaxItems: Int { ConfigClient.int(ConfigClient.K.albumMaxItems) }   // 10
     static let pinnedChats = 3
-    static var forwardChatsAtOnce: Int { ConfigClient.int(ConfigClient.K.forwardChatsAtOnce) }   // 5
+    static var forwardChatsAtOnce: Int { ConfigClient.int(ConfigClient.K.forwardChatsAtOnce) }   // 0 = no limit (owner 2026-11-13)
     /// Messages that can be ticked and forwarded in one go, the reference's `maxForwardCount`. Past
     /// this the Forward button in the selection bar switches off rather than handing the picker a
     /// list the send path will not carry.
@@ -89,7 +89,7 @@ enum Limits {
     /// against this file would have built against a number nothing honoured.
     static var voiceNoteSeconds: TimeInterval { TimeInterval(ConfigClient.int(ConfigClient.K.voiceNoteMinutes) * 60) }          // 30 min
     static let editWindowSeconds: TimeInterval = 15 * 60          // 15 min
-    static var deleteForEveryoneSeconds: TimeInterval { TimeInterval(ConfigClient.int(ConfigClient.K.deleteForEveryoneHours) * 3600) } // 48 h
+    static var deleteForEveryoneSeconds: TimeInterval { TimeInterval(ConfigClient.int(ConfigClient.K.deleteForEveryoneHours) * 3600) } // 0 = no limit (owner 2026-11-13)
     static var blockedUsers: Int { ConfigClient.int(ConfigClient.K.blockedUsersMax) }   // 1000
 
     // Stories
@@ -107,7 +107,7 @@ enum Limits {
 
     // Groups
     static let groupMembers = 1024
-    static var groupAdmins: Int { ConfigClient.int(ConfigClient.K.groupAdminsMax) }   // 20
+    static var groupAdmins: Int { ConfigClient.int(ConfigClient.K.groupAdminsMax) }   // 0 = no limit (owner 2026-11-13)
     static var groupNameChars: Int { ConfigClient.int(ConfigClient.K.groupNameChars) }   // 100
     static let groupDescChars = 512
     /// A channel's description (owner 2026-11-10): 255. A group's comes from the panel (group_desc_max).
