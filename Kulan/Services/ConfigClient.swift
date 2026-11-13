@@ -44,9 +44,9 @@ final class ConfigClient {
         static let pinnedMessagesPerChat = IntKey(name: "pinnedMessagesPerChat", def: 3, min: 1, max: 10)
         static let albumMaxItems = IntKey(name: "albumMaxItems", def: 10, min: 1, max: 10)
         static let mediaPerMessage = IntKey(name: "mediaPerMessage", def: 32, min: 1, max: 32)
-        static let forwardChatsAtOnce = IntKey(name: "forwardChatsAtOnce", def: 5, min: 1, max: 20)
+        static let forwardChatsAtOnce = IntKey(name: "forwardChatsAtOnce", def: 0, min: 0, max: 20)   // 0 = no limit
         static let forwardSelectionMax = IntKey(name: "forwardSelectionMax", def: 32, min: 1, max: 100)
-        static let deleteForEveryoneHours = IntKey(name: "deleteForEveryoneHours", def: 48, min: 1, max: 168)
+        static let deleteForEveryoneHours = IntKey(name: "deleteForEveryoneHours", def: 0, min: 0, max: 168)   // 0 = no limit
         static let linkPreviews = BoolKey(name: "linkPreviews", def: true)
         static let linkPreviewImageSide = IntKey(name: "linkPreviewImageSide", def: 800, min: 200, max: 1600)
         // Accounts
@@ -75,7 +75,7 @@ final class ConfigClient {
         static let storyVideoPickSeconds = IntKey(name: "storyVideoPickSeconds", def: 600, min: 60, max: 1800)
         static let storyCaptionChars = IntKey(name: "storyCaptionChars", def: 200, min: 50, max: 2048)
         // Groups and channels
-        static let groupAdminsMax = IntKey(name: "groupAdminsMax", def: 20, min: 1, max: 50)
+        static let groupAdminsMax = IntKey(name: "groupAdminsMax", def: 0, min: 0, max: 50)   // 0 = no limit
         static let groupNameChars = IntKey(name: "groupNameChars", def: 100, min: 16, max: 255)
         static let channelDescChars = IntKey(name: "channelDescChars", def: 255, min: 50, max: 2000)
         // Calls

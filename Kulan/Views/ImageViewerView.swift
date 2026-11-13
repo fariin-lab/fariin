@@ -169,6 +169,14 @@ struct ImageViewerView: View {
 
     private var message: Message { gallery.first { $0.id == current } ?? gallery[0] }
     private var isMine: Bool { message.authorId == (AuthService.shared.uid ?? "") }
+    /// Remote limit (flags 2026-11-13, deleteForEveryoneHours): the same window as the bubble's
+    /// Delete for Everyone (ThreadView.canDeleteForEveryone). No window in a channel, nor for a group
+    /// admin who may remove messages.
+    private var mayDeleteForEveryone: Bool { isMine && ChatService.ownDeleteForEveryoneOpen(message, cid: cid) }
+    /// ⛔ A group has no Delete for Me (owner 2026-10-26), as in the bubble's menu.
+    private var inGroup: Bool { ChatService.deletesOnlyForEveryone(cid: cid) }
+    /// Whether Delete leads anywhere: in a group only when it can go for everyone.
+    private var mayDelete: Bool { !inGroup || mayDeleteForEveryone }
 
     // Header title: "You" for my own photo, else the other person's name.
     private var senderName: String {
@@ -310,7 +318,7 @@ struct ImageViewerView: View {
         .alert("Delete this photo?", isPresented: $confirmDelete) {
             // Same options as the message bubble's delete (user report: the photo delete offered only
             // one option). Own photo → Everyone + Me; Delete for Me hides locally via the conversation.
-            if isMine {
+            if mayDeleteForEveryone {
                 Button("Delete for Everyone", role: .destructive) {
                     // deleteMessage routes album pages (synthetic "<parentId>-<i>" ids) to a real
                     // album-item removal — the raw id used to target a nonexistent doc, which the
@@ -325,10 +333,12 @@ struct ImageViewerView: View {
                     }
                 }
             }
-            if let onDeleteForMe {
+            if inGroup {
+                // No Delete for Me in a group (owner 2026-10-26).
+            } else if let onDeleteForMe {
                 Button("Delete for Me", role: .destructive) { onDeleteForMe(message); dismiss() }
-            } else if !isMine {
-                // Fallback (no repo wired): received photo hides locally.
+            } else if !mayDeleteForEveryone {
+                // Fallback (no repo wired): a received photo, or my own past the window, hides locally.
                 Button("Delete for Me", role: .destructive) {
                     HiddenMessages.hide(message.id); dismiss()
                 }
@@ -631,7 +641,9 @@ struct ImageViewerView: View {
                         Button { save() } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
                     }
                 }
-                Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+                if mayDelete {
+                    Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+                }
             } label: {
                 Image(systemName: "ellipsis").font(.title3.weight(.semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
@@ -776,7 +788,7 @@ struct ImageViewerView: View {
                 }
             }
             Spacer()
-            if isMine {
+            if isMine && mayDelete {
                 barButton("trash", tint: .red) { confirmDelete = true }
             } else if !savingLocked {
                 if albumSiblings.count > 1 {

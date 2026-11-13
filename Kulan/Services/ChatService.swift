@@ -222,8 +222,9 @@ enum ChatService {
         let ref = db.collection("conversations").document()
         var data: [String: Any] = [
             "type": "group",
-            // The same 100 the rename keeps to, and no name made of line breaks (audit 2026-10-20).
-            "title": String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100)),
+            // The same cap the rename keeps to (remote limit groupNameChars, default 100), and no
+            // name made of line breaks (audit 2026-10-20).
+            "title": String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Limits.groupNameChars)),
             "users": users,
             "admins": [uid],
             "createdBy": uid,
@@ -1067,7 +1068,7 @@ enum ChatService {
 
     /// Rename a group (admin) + system message.
     static func renameGroup(cid: String, title: String) async throws {
-        let t = String(title.trimmingCharacters(in: .whitespaces).prefix(100))
+        let t = String(title.trimmingCharacters(in: .whitespaces).prefix(Limits.groupNameChars))   // remote limit groupNameChars
         guard !t.isEmpty else { return }
         let convRef = db.collection("conversations").document(cid)
         try await convRef.updateData(["title": t, "updatedAt": FieldValue.serverTimestamp()])
@@ -1094,7 +1095,8 @@ enum ChatService {
             // 0 = no limit (owner 2026-11-13: keep today's behaviour unless the Controls page sets one).
             if Limits.groupAdmins > 0, !admins.contains(promoted),
                admins.filter({ $0 != owner }).count >= Limits.groupAdmins {
-                throw LimitReached(message: "A group can have up to \(Limits.groupAdmins) admins.")
+                let noun = Conversation.Right.isChannel(cid) ? "channel" : "group"
+                throw LimitReached(message: "A \(noun) can have at most \(Limits.groupAdmins) admins.")
             }
         }
         var data: [String: Any] = [
@@ -3729,6 +3731,24 @@ enum ChatService {
     static func voiceDurationLabel(_ seconds: Double) -> String {
         let d = MediaDuration.whole(seconds, rounded: true)
         return String(format: "%d:%02d", d / 60, d % 60)
+    }
+
+    /// Remote limit (flags 2026-11-13, deleteForEveryoneHours, default 0 = no window): whether MY OWN message
+    /// `m` in `cid` may still go for everyone. Inside the window always; past it only in a channel
+    /// (no window there, as with Edit) or as a group admin who may remove messages. The same answer
+    /// ThreadView.canDeleteForEveryone gives the bubble, for the photo viewer, video screen and gallery.
+    /// A group chat, the way the bubble's delete menu decides it (ThreadView: `conversation?.isGroup
+    /// ?? !cid.contains("_")`). ⛔ A group has no Delete for Me (owner 2026-10-26).
+    static func deletesOnlyForEveryone(cid: String) -> Bool {
+        ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.isGroup ?? !cid.contains("_")
+    }
+
+    static func ownDeleteForEveryoneOpen(_ m: Message, cid: String) -> Bool {
+        // 0 (the default, owner 2026-11-13) = no window: always open, as before the limit existed.
+        let window = Limits.deleteForEveryoneSeconds
+        if window <= 0 || Date().timeIntervalSince(m.createdAt) < window { return true }
+        guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return false }
+        return c.isChannel || (c.isGroup && c.adminCan(uid, .deleteMessages))
     }
 
     /// Delete for Everyone. Returns false when the server refused, so the caller can say so.

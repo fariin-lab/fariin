@@ -57,6 +57,8 @@ struct ForwardPicker: View {
     @State private var selected = Set<String>()
     @State private var comment = ""
     @State private var refusedNote: String?
+    /// The alert's title for refusedNote: "Can't send here" unless the chat-count limit set it.
+    @State private var refusedTitle = "Can't send here"
 
     private var me: String { AuthService.shared.uid ?? "" }
 
@@ -233,7 +235,7 @@ struct ForwardPicker: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
             }
-            .alert("Can't send here", isPresented: Binding(get: { refusedNote != nil },
+            .alert(refusedTitle, isPresented: Binding(get: { refusedNote != nil },
                                                           set: { if !$0 { refusedNote = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(refusedNote ?? "") }
@@ -299,12 +301,21 @@ struct ForwardPicker: View {
         // A group that would refuse what is being sent says so here, instead of a bubble that
         // fails after the sheet is gone (audit 2026-10-20).
         if let c = repo.conversations.first(where: { $0.id == id }), let why = refusal(in: c) {
+            refusedTitle = "Can't send here"
             refusedNote = why
             return
         }
         if let onPick, let c = repo.conversations.first(where: { $0.id == id }) {
             dismiss()
             onPick(c)
+            return
+        }
+        // Remote limit (flags 2026-11-13, forwardChatsAtOnce): how many chats one forward may go to.
+        // 0 (the default, owner 2026-11-13) = no limit. Said here, at the tick that would pass it.
+        let most = Limits.forwardChatsAtOnce
+        if most > 0, selected.count >= most {
+            refusedTitle = "Too many chats"
+            refusedNote = "You can forward to up to \(most) chats at once."
             return
         }
         selected.insert(id)
@@ -361,7 +372,16 @@ struct ForwardPicker: View {
         let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         // A note is a second message: a slowed group would remove one of the two.
         if !note.isEmpty, let slow = repo.conversations.first(where: { targets.contains($0.id) && $0.slowsMember(me) }) {
+            refusedTitle = "Can't send here"
             refusedNote = "Slow mode is on in \(slow.displayName(me)). Send without a comment, or send the comment later."
+            return
+        }
+        // Remote limit forwardChatsAtOnce (0 = no limit): the last door, for a limit lowered while
+        // the sheet was open with more chats ticked.
+        let most = Limits.forwardChatsAtOnce
+        if most > 0, targets.count > most {
+            refusedTitle = "Too many chats"
+            refusedNote = "You can forward to up to \(most) chats at once."
             return
         }
         // Oldest first so forwarded messages land in the same order they were sent.

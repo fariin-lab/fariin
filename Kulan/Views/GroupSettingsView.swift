@@ -1684,7 +1684,9 @@ struct EditGroupView: View {
                 }
                 // Name and description in ONE card (owner 2026-10-20), a line between them.
                 Section {
-                    TextField(ChannelWords.forChat(cid, "Group Name"), text: $name)
+                    // Remote limit groupNameChars (default 100): the field stops at the cap.
+                    TextField(ChannelWords.forChat(cid, "Group Name"),
+                              text: Binding(get: { name }, set: { name = String($0.prefix(Limits.groupNameChars)) }))
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
                         .focused($nameFocused)

@@ -1184,12 +1184,17 @@ struct MediaGalleryView: View {
         let picked = expandedAll.filter { selection.contains($0.id) }
         // My own album photos picked one by one are hidden here like anyone else's: the server
         // knows only the album message, and a delete by the tile's id was refused (audit 2026-10-20).
-        let mine = Set(picked.filter { $0.authorId == me && $0.id == parentMessageId($0.id) }.map(\.id))
-        let theirs = Set(picked.map(\.id)).subtracting(mine)
+        // Past the delete-for-everyone window (remote limit deleteForEveryoneHours) my own goes the
+        // same way as theirs: hidden on this phone only.
+        let mine = Set(picked.filter { $0.authorId == me && $0.id == parentMessageId($0.id)
+                                       && ChatService.ownDeleteForEveryoneOpen($0, cid: cid) }.map(\.id))
+        // ⛔ A group has no Delete for Me (owner 2026-10-26): there, only what can go for everyone goes.
+        let theirs = ChatService.deletesOnlyForEveryone(cid: cid) ? Set<String>() : Set(picked.map(\.id)).subtracting(mine)
         // Hidden BEFORE the awaits, so the grid can drop everything in one pass below rather than
         // theirs vanishing a beat ahead of mine.
         for id in theirs { HiddenMessages.hide(id) }
         let ids = mine.union(theirs)
+        let kept = Set(picked.map(\.id)).subtracting(ids).count
         Task {
             // 2026-09-24 fix-all #233: the result was thrown away, so a refused delete vanished
             // from the grid as if it had worked and came back on the next open. A refused item
@@ -1206,6 +1211,8 @@ struct MediaGalleryView: View {
                 GalleryDiskCache.shared.store(cid, Self.galleryRelevant(all))   // and the relaunch copy
                 exitSelection()
                 if !refused.isEmpty { deleteFailed = true }
+                // In a group what cannot go for everyone stays; say so rather than nothing.
+                else if kept > 0 { ToastNotice.show(kept == 1 ? "1 item can't be deleted for everyone" : "\(kept) items can't be deleted for everyone") }
             }
         }
     }
