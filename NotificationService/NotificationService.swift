@@ -147,6 +147,9 @@ final class NotificationService: UNNotificationServiceExtension {
         // 1:1: the name this phone shows (a saved contact name wins). Group: the server's sender name,
         // unless I have them saved under another.
         let shownSender = (direct[NotifShared.Chat.name] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? senderName
+        // A card message carries a marker, never words to show (owner 2026-11-13: a live location
+        // read "fariin-live:47.93|-97.02|…" on the lock screen). The app's own names for them.
+        if let t = text, t.hasPrefix("fariin-") { text = Self.cardWord(t) }
         if let text, !text.isEmpty {
             let line = prefix(for: kind) + text
             copy.body = isGroup ? "\(shownSender): \(line)" : line
@@ -209,6 +212,15 @@ final class NotificationService: UNNotificationServiceExtension {
                   let out = done.mutableCopy() as? UNMutableNotificationContent else { completion(done); return }
             attachPreview(url, to: out) { completion($0) }
         }
+    }
+
+    static func cardWord(_ t: String) -> String {
+        if t.hasPrefix("fariin-live:") { return "📍 Live location" }
+        if t.hasPrefix("fariin-location:") { return "📍 Location" }
+        if t.hasPrefix("fariin-contact:") { return "👤 Contact" }
+        if t.hasPrefix("fariin-poll:") { return "📊 Poll" }
+        if t.hasPrefix("fariin-pinned:") { return "📌 Pinned a message" }
+        return "Message"
     }
 
     /// Downloads the story's picture with a short limit and hangs it on the banner as an attachment.

@@ -143,6 +143,13 @@ final class InAppBannerCenter {
             ? Crypto.shared.decryptCached(raw, cid: cid)
             : Crypto.shared.decryptGroupCached(raw, cid: cid, authorId: sender)
         guard !text.isEmpty, text != "…", text != "🔒" else { return nil }
+        // A card's marker is never shown as words (2026-11-13, the live location banner).
+        if text.hasPrefix(Message.liveMarker) { return "📍 Live location" }
+        if text.hasPrefix(Message.locationMarker) { return "📍 Location" }
+        if text.hasPrefix(Message.contactMarker) { return "👤 Contact" }
+        if text.hasPrefix(Message.pollMarker) { return "📊 Poll" }
+        if text.hasPrefix(Message.pinMarker) { return "📌 Pinned a message" }
+        if text.hasPrefix("fariin-") { return "Message" }
         return text
     }
 
