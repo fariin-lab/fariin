@@ -66,6 +66,10 @@ final class RemoteFeatures {
                 UserDefaults.standard.set(Array(wpHidden), forKey: "remoteFeatures.wallpapersHidden.v1")
                 let bsHidden = Set((snap.data()?["bubblesHidden"] as? [String]) ?? [])
                 UserDefaults.standard.set(Array(bsHidden), forKey: "remoteFeatures.bubblesHidden.v1")
+                // The chat list card (owner 2026-11-13): applied live like newBadges. Kept as plain
+                // values only, so a malformed entry can never reach UserDefaults.
+                let cards = ChatCard.parse(snap.data()?["chatCards"])
+                UserDefaults.standard.set(cards.map(\.stored), forKey: ChatCard.storeKey)
                 DispatchQueue.main.async {
                     LiveFeatures.shared.values = out
                     LiveFeatures.shared.memberCloud = cloud
@@ -74,6 +78,7 @@ final class RemoteFeatures {
                     if LiveFeatures.shared.customEmojiHidden != hidden { LiveFeatures.shared.customEmojiHidden = hidden }
                     if LiveFeatures.shared.wallpapersHidden != wpHidden { LiveFeatures.shared.wallpapersHidden = wpHidden }
                     if LiveFeatures.shared.bubblesHidden != bsHidden { LiveFeatures.shared.bubblesHidden = bsHidden }
+                    if LiveFeatures.shared.chatCards != cards { LiveFeatures.shared.chatCards = cards }
                 }
             }
     }
@@ -116,6 +121,8 @@ final class RemoteFeatures {
     var wallpapersHidden: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "remoteFeatures.wallpapersHidden.v1") ?? [])
     /// Bubble style ids hidden in the admin panel; pickers leave them out.
     var bubblesHidden: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "remoteFeatures.bubblesHidden.v1") ?? [])
+    /// The panel's chat list cards (owner 2026-11-13), in the panel's order; see `ChatCard`.
+    var chatCards: [ChatCard] = ChatCard.parse(UserDefaults.standard.array(forKey: ChatCard.storeKey))
     private init() {}
 }
 

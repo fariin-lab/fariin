@@ -417,6 +417,8 @@ struct ChatListTable: UIViewControllerRepresentable {
     /// Pinned on this phone (owner 2026-11-09): the row then heads the Pinned section.
     var activityPinned: Bool = false
     var onToggleActivityPin: () -> Void = {}
+    /// The card at the top of the list (owner 2026-11-13, `ChatListCards.swift`); nil = none.
+    var topCard: ChatCard? = nil
     /// ⛔ THE VOICE BAR'S ROOM IS GIVEN HERE, EXPLICITLY — owner, 2026-09-29, the THIRD report of the
     /// playing-note bar over "Pinned". The page mounts this table with
     /// `.ignoresSafeArea(.container, edges: [.top, .bottom])` (rows run under the header's soft
@@ -463,6 +465,8 @@ struct ChatListTable: UIViewControllerRepresentable {
         // restores it from the id, which is the only thing that survives a re-sort.
         vc.syncTicks(selected: selection)
         vc.setChatOpen(chatOpen)
+        // Not in Select mode or while searching (owner 2026-11-13).
+        vc.setTopCard(selecting || context.environment.isSearching ? nil : topCard, dark: dark)
         // ⛔ THE `.update` CASE MOVED INSIDE `apply`, AND THE CALL THAT USED TO BE HERE IS GONE.
         //
         // ⚠️ THIS LINE WAS THE LAST PIECE OF HIS PIN REPORT. It ran after EVERY apply, including
@@ -2260,6 +2264,12 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     /// Safety net only (2026-10-08): no row is held selected any more (see `didSelectRowAt`), so with
     /// no chat open anything grey that is not under a finger is a leftover and goes.
+    /// The chat list card lives in the table header (owner 2026-11-13); see `ChatListCardHeader`.
+    private let topCardHeader = ChatListCardHeader()
+    func setTopCard(_ card: ChatCard?, dark: Bool) {
+        topCardHeader.update(card, table: tableView, presenter: self, dark: dark)
+    }
+
     func setChatOpen(_ open: Bool) {
         defer { chatWasOpen = open }
         guard !open else { return }
