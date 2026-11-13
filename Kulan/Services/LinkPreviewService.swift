@@ -522,6 +522,8 @@ actor LinkPreviewService {
     }
 
     private static func fetch(_ url: URL) async -> LinkDraft? {
+        // Panel switch linkPreviews (2026-11-13 flags): off = no fetch, the link goes plain.
+        guard ConfigClient.bool(ConfigClient.K.linkPreviews) else { return nil }
         guard url.scheme == "https", !isPrivateHost(url) else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue(Self.browserUA, forHTTPHeaderField: "User-Agent")
@@ -630,7 +632,7 @@ actor LinkPreviewService {
               data.count <= 3 * 1024 * 1024,
               let raw = UIImage(data: data) else { return nil }
         // Downscale to a card-sized image so the message payload stays small.
-        let maxSide: CGFloat = 800
+        let maxSide = CGFloat(ConfigClient.int(ConfigClient.K.linkPreviewImageSide))   // 800
         let scale = min(1, maxSide / max(raw.size.width, raw.size.height))
         guard scale < 1 else { return raw }
         let size = CGSize(width: raw.size.width * scale, height: raw.size.height * scale)

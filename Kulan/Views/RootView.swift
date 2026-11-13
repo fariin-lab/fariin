@@ -822,6 +822,8 @@ struct RootView: View {
         MsgPolicy.shared.start(uid: AuthService.shared.uid ?? "")
         // The owner's feature switches (config/features). Saved for the NEXT launch; see RemoteFeatures.
         RemoteFeatures.shared.start()
+        // This account's flags and limits from getAppConfig, plus the config/epoch listener.
+        ConfigClient.shared.start(uid: AuthService.shared.uid ?? "")
         // The story audiences, for the same reason: the share sheet opens on a tap and must already
         // know what to draw. It starts from its own disk mirror, so this listener is a correction
         // rather than a load — see StoryAudienceStore.

@@ -1845,7 +1845,7 @@ final class GroupCallService: ObservableObject {
     // MARK: - Ringing, as the caller hears and sees it
 
     /// How long an invitation to a multi-person call rings (the people list's "Ringing…" minute).
-    static let ringWindow: TimeInterval = 60
+    static var ringWindow: TimeInterval { TimeInterval(ConfigClient.int(ConfigClient.K.groupRingSeconds)) }   // 60
     /// Invited people who said no, or whose phone answered "busy" (`groupRingAnswer` writes both on
     /// the call's doc). They stop counting as ringing at once.
     @Published private(set) var declinedUids: Set<String> = []

@@ -106,7 +106,7 @@ enum AutoDownloadPrefs {
 // Prefetches a chat's media into the local caches per policy, so tapping plays
 // instantly. Files over 200 MB never auto-download (reference rule).
 enum MediaAutoDownloader {
-    static let maxAutoBytes: Int64 = 200 * 1024 * 1024
+    static var maxAutoBytes: Int64 { Int64(ConfigClient.int(ConfigClient.K.autoDownloadMaxMB)) * 1024 * 1024 }   // 200 MB
 
     /// ⛔ THE CEILING FOR AUTO-DOWNLOADING A PHOTO, his instruction 2026-08-27: "between 1 and 10 MB".
     ///
@@ -123,7 +123,7 @@ enum MediaAutoDownloader {
     ///
     /// ⚠️ MEASURED ON THE CIPHERTEXT, because that is what the response reports and what actually
     /// crosses the network. The padding over plaintext is small and always in the safe direction.
-    static let photoAutoBytes: Int64 = 8 * 1024 * 1024
+    static var photoAutoBytes: Int64 { Int64(ConfigClient.int(ConfigClient.K.autoDownloadPhotoMB)) * 1024 * 1024 }   // 8 MB
 
     /// ⛔ VOICE NOTES FETCH AT ONCE, AHEAD OF EVERYTHING ELSE — his report, 2026-08-27: a received
     /// voice message takes too long to become playable, and the reference app he named is instant.
