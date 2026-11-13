@@ -781,6 +781,10 @@ final class ProfileStore {
     // that only `ProfilePhotoURLProtocol` can fetch, through the rules. `v` is the upload time, so a
     // new photo is a new name and misses every cache.
     private func putJPEG(_ data: Data, path: String) async throws -> String {
+        // profilePhotoMB (owner 2026-11-13, same words as Android): checked before the upload.
+        guard data.count <= Limits.profilePhotoBytes else {
+            throw ChatService.LimitReached(message: "That photo is too large. Choose a smaller one.")
+        }
         let ref = Storage.storage().reference().child(path)
         let meta = StorageMetadata(); meta.contentType = "image/jpeg"
         meta.customMetadata = [Self.audienceKey: await photoAudienceTag()]

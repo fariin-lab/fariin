@@ -268,6 +268,16 @@ final class BlockList {
     /// Calls for the same person run one after another, in the order they were made.
     @discardableResult
     func setBlocked(_ other: String, _ value: Bool) async -> Bool {
+        // blockedUsersMax (owner 2026-11-13, same words as Android): a new block past the cap is refused.
+        if value {
+            let full = await MainActor.run { self.entries[other] == nil && self.entries.count >= Limits.blockedUsers }
+            if full {
+                await MainActor.run {
+                    ToastNotice.show("You can block up to \(Limits.blockedUsers) people. Unblock someone first.")
+                }
+                return false
+            }
+        }
         // The queue is only touched on the main thread, so two taps cannot both find it empty.
         let task: Task<Bool, Never> = await MainActor.run {
             let prior = self.inFlight[other]
