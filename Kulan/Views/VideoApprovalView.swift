@@ -170,6 +170,15 @@ struct VideoApprovalView: View {
     }
     @State private var controlsH: CGFloat = VideoApprovalView.lastControlsH
 
+    /// The video area's height at rest (keyboard down): the safe box minus the top row and the bottom
+    /// controls, as `restRect` measures it. nil when there is no window to measure.
+    private var restVideoHeight: CGFloat? {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return nil }
+        let inset = window.safeAreaInsets
+        return max(0, window.bounds.height - inset.top - inset.bottom - Self.topChromeH - controlsH)
+    }
+
     /// No zoom-out first (owner 2026-10-14, as the photo editor): a zoomed X lifts off the zoomed
     /// rect (`zoomedRect`). The keyboard still goes down first, or the close is refused.
     private func close() {
@@ -266,8 +275,16 @@ struct VideoApprovalView: View {
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: pan.width + drag.width, y: pan.height + drag.height)
                 .opacity(dismissing || !arrived ? 0 : 1)   // the flying still stands in for it
+                // ⛔ THE VIDEO STAYS PUT WHILE THE CAPTION IS TYPED (owner 2026-11-13: "when I open the
+                // keyboard the video jumps to the bottom"). The video fitted the space above the
+                // caption bar, which the keyboard shrinks, so it shrank and moved down. With the
+                // keyboard up it keeps its rest height, anchored at the top, and the keyboard covers
+                // its lower part. Zoom (pinch) is unchanged.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(height: captionFocused ? restVideoHeight : nil)   // fixed at rest size while typing
                 .padding(.top, Self.topChromeH)   // below the top row, as the photo editor
+                .frame(maxHeight: .infinity, alignment: .top)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
                 .contentShape(Rectangle())   // NO rounded corners on the frame (user request)
                 .gesture(
                     MagnificationGesture()
