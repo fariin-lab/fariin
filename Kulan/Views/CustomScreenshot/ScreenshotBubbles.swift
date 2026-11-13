@@ -106,7 +106,7 @@ struct ShotBubble: View {
         }
         .padding(.horizontal, BubbleMetrics.hPad)
         .padding(.vertical, BubbleMetrics.vPad - 2)
-        .background(fill)
+        .background { fill }
         .frame(maxWidth: maxWidth, alignment: message.isMe ? .trailing : .leading)
     }
 
