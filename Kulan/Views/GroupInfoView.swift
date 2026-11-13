@@ -1177,6 +1177,13 @@ struct GroupInfoView: View {
                 Button { showQR = true } label: {
                     Label { Text("QR Code") } icon: { MenuIcon("ic_qr") }
                 }
+            } else if !isChannel, let name = conv?.publicName, !name.isEmpty {
+                // ⛔ A PUBLIC GROUP IS SHAREABLE BY ANY MEMBER (owner 2026-11-13: "members have no way
+                // to share the group"). Its fariin.com/<name> link is public anyway; only a private
+                // group's invite link stays with the admins (or "Share the group link").
+                Button {
+                    shareGroupText = "Join " + (conv?.title ?? "this group") + " on Fariin: https://fariin.com/" + name
+                } label: { Label { Text("Share Group") } icon: { MenuIcon("ic_link_share") } }
             }
         }
     }
