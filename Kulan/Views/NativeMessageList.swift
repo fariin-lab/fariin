@@ -246,6 +246,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// `itemsVersion`, so one reason is spent on the one update it came with. Declared last, as above.
     var updateReason: MessageListUpdateReason = .live
     var updateReasonVersion: Int = -1
+    /// Customize screenshot (owner 2026-11-13): the rows that were really on screen when the phone
+    /// took a screenshot, top to bottom. nil = this list does not offer it (peek, channels).
+    /// Declared last, as above.
+    var onScreenshotRows: (([String]) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -348,6 +352,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.setVoiceControl(voiceControl)
         vc.onReadingPosition = onReadingPosition
         vc.onViewportRows = onViewportRows
+        vc.onScreenshotRows = onScreenshotRows
         vc.initialScrollOffset = initialScrollOffset
         vc.setTopOverlayHeight(topOverlayHeight)
         // (`noteSendTick` is at the top of this method — it has to precede `applyComposer`.)
@@ -693,6 +698,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var initialScrollTopInset: CGFloat?       // and the top inset that offset was measured against
     var onReadingPosition: (ChatReadingPosition?) -> Void = { _ in }
     var onViewportRows: ([String]) -> Void = { _ in }
+    var onScreenshotRows: (([String]) -> Void)? = nil
     /// See the SwiftUI side's `holdFirstLand`. Read by `performFirstLandIfReady` only, so it means
     /// nothing once the first land has happened.
     private var holdFirstLand = false
@@ -1505,6 +1511,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // legitimately ride the load.
         NotificationCenter.default.addObserver(self, selector: #selector(jumpToNewestRequested),
                                                name: .chatListJumpToNewest, object: nil)
+        // Customize screenshot (owner 2026-11-13). Only this controller knows which rows were on
+        // screen at the moment of the screenshot, so it answers the system notification itself.
+        NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
+                                               name: UIApplication.userDidTakeScreenshotNotification, object: nil)
 
         // The chat's text follows the phone's text size (see BubbleMetrics). Read before the first
         // plan is made; a change re-measures every row exactly as a width change does.
@@ -1540,6 +1550,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     /// One live list at a time answers this. A pushed-then-popped thread leaves its controller alive
     /// until ARC catches up, and a controller with no window has no reader to move.
+    /// The rows a person could actually see when the screenshot was taken, top to bottom. Not
+    /// `indexPathsForVisibleItems` alone: the list keeps extra pre-rendered cells alive above and
+    /// below the viewport, and those were never in the picture. Skipped for a chat whose content is
+    /// protected (the screenshot came out blank there anyway) and for a list that is not on screen.
+    @objc private func screenshotTaken() {
+        guard let report = onScreenshotRows, collectionView.window != nil,
+              didFirstLand, !isDisappearing, !captureOn else { return }
+        let viewport = collectionView.bounds
+        let ids = collectionView.indexPathsForVisibleItems
+            .compactMap { ip -> (String, CGFloat)? in
+                guard let frame = collectionView.layoutAttributesForItem(at: ip)?.frame,
+                      frame.intersects(viewport),
+                      let id = dataSource.itemIdentifier(for: ip) else { return nil }
+                return (id, frame.minY)
+            }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
+        guard !ids.isEmpty else { return }
+        report(ids)
+    }
+
     @objc private func jumpToNewestRequested() {
         guard collectionView.window != nil else { return }
         // Only the down-arrow posts this (see the observer above), so it is user-initiated by

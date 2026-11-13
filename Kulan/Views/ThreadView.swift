@@ -1246,6 +1246,8 @@ struct ThreadView: View {
                     .allowsHitTesting(false)
                 }
             }
+            // Customize screenshot (owner 2026-11-13): offered for five seconds after a screenshot.
+            .overlay(alignment: .bottom) { screenshotOfferOverlay }
     }
 
     // Floating jump-to-bottom button — appears when scrolled up, with a count of messages that arrived
@@ -2226,6 +2228,7 @@ struct ThreadView: View {
             Button("OK", role: .cancel) {}
         }
         .fullScreenCover(item: $pdfDoc) { PDFViewerSheet(url: $0.url, title: $0.title) }
+        .fullScreenCover(item: $screenshotEditor) { ScreenshotEditorView(snapshot: $0) }   // owner 2026-11-13
     }
 
     private var threadContent: some View {
@@ -6053,7 +6056,9 @@ struct ThreadView: View {
             // owner 2026-10-21 (the open jump): why these rows changed, keyed by the version that
             // produced them, so the list holds the reader still for a cache-to-server swap.
             updateReason: repo.itemsUpdateReason,
-            updateReasonVersion: repo.itemsVersion
+            updateReasonVersion: repo.itemsVersion,
+            // Customize screenshot (owner 2026-11-13): the list reports the rows on screen.
+            onScreenshotRows: offersCustomScreenshot ? { ids in offerCustomScreenshot(ids) } : nil
         )
         // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
         // build 681, GIF and "+" with the keyboard up: "the chat/message list jumps downward during
@@ -6086,6 +6091,52 @@ struct ThreadView: View {
         withAnimation(.easeOut(duration: 0.2)) { jumpToast = msg }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
             withAnimation(.easeIn(duration: 0.25)) { if jumpToast == msg { jumpToast = nil } }
+        }
+    }
+
+    // MARK: Customize screenshot (owner 2026-11-13)
+
+    /// The rows caught by the last screenshot, while the pill offers to redo them.
+    @State private var screenshotOffer: ScreenshotSnapshot?
+    /// The editor, open over the chat.
+    @State private var screenshotEditor: ScreenshotSnapshot?
+
+    /// 1:1 chats and groups only. Not a channel, not the peek, not a visitor, and never a chat whose
+    /// content is protected: there the screenshot is blank and redoing it would undo the protection.
+    private var offersCustomScreenshot: Bool {
+        guard !preview, guest == nil, !OfficialChannel.isOfficial(cid) else { return false }
+        if conversation?.isChannel == true { return false }
+        if repo.noScreenshots || cachedConv?.noScreenshots == true || conversation?.isRestricted == true { return false }
+        return true
+    }
+
+    /// Called by the list with the rows that were on screen when the screenshot was taken. Only
+    /// messages already decrypted on this phone are copied; nothing is fetched or sent.
+    private func offerCustomScreenshot(_ rowIds: [String]) {
+        guard offersCustomScreenshot, screenshotEditor == nil else { return }
+        let messages = rowIds.compactMap { id in repo.indexById[id].map { repo.items[$0] } }
+        let snap = ScreenshotSnapshot.make(
+            cid: cid, messages: messages, me: me, isGroup: isGroup,
+            readMillis: repo.otherLastReadMillis, deliveredMillis: repo.otherDeliveredMillis,
+            iBlocked: repo.iBlocked, name: personName, dayLabel: dayLabel)
+        guard !snap.messages.isEmpty else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { screenshotOffer = snap }
+        let shown = snap.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            withAnimation(.easeIn(duration: 0.25)) { if screenshotOffer?.id == shown { screenshotOffer = nil } }
+        }
+    }
+
+    @ViewBuilder private var screenshotOfferOverlay: some View {
+        if let snap = screenshotOffer {
+            LiftReader(box: composerLift) { lift, _ in
+                ScreenshotOfferPill {
+                    screenshotOffer = nil
+                    screenshotEditor = snap
+                }
+                .padding(.bottom, lift + 12)
+            }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
