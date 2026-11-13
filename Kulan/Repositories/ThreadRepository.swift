@@ -900,6 +900,13 @@ final class ThreadRepository {
     }
 
     func addPending(_ m: Message) { pending.append(m); refreshItems() }
+    /// A post link's bubble shows at once with a loading card; its quote id lands here when the
+    /// server has made it (nil: the post could not be quoted, the bubble stays a plain link).
+    func setPendingQuote(clientId: String, qid: String?) {
+        guard let i = pending.firstIndex(where: { $0.clientId == clientId }) else { return }
+        pending[i].quoteId = qid
+        refreshItems()
+    }
 
     /// A quoted channel post going with media whose bubble the attach sheet already posted
     /// (owner 2026-11-07): the pending copy shows the card at once.

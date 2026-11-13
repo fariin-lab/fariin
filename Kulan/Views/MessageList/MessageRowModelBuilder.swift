@@ -888,8 +888,9 @@ enum MessageRowModelBuilder {
     private static func quoteBody(_ qid: String, cid: String, mid: String) -> BubbleBody.LinkPreview {
         // Where this card sits, so a reader of THIS chat sees a quote of a private channel's post
         // (owner 2026-11-08). The server checks the quote really was sent in this message.
-        QuoteStore.shared.noteHost(qid, cid: cid, mid: mid)
-        guard let c = QuoteStore.shared.card(qid) else {
+        // A post link's bubble before its quote exists (`sendPostLink`): loading bars, no lookup.
+        if !qid.isEmpty { QuoteStore.shared.noteHost(qid, cid: cid, mid: mid) }
+        guard !qid.isEmpty, let c = QuoteStore.shared.card(qid) else {
             // Drawn as skeleton bars, never as these words (owner 2026-11-10, `QuoteSkeleton`).
             return BubbleBody.LinkPreview(shape: .article, url: "fariin-quote://\(qid)", title: QuoteSkeleton.title,
                                           desc: QuoteSkeleton.desc, host: "Quoted post", imageUrl: nil, imageEnc: nil)

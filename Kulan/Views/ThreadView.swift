@@ -8348,23 +8348,45 @@ struct ThreadView: View {
         linkDraft = nil
         linkLoadingUrl = nil
         suppressedLinkUrl = nil
+        // ⛔ THE BUBBLE SHOWS AT THE TAP (owner 2026-11-13: "a post link is sent late, after I tap
+        // send it takes time"). It used to wait for three server answers first (which channel,
+        // which post, then the quote being made, a cold function on the first one) before anything
+        // appeared. Now my message is in the chat at once with the card's loading bars (an empty
+        // quote id draws the skeleton), and goes out the moment the quote exists, in the place the
+        // tap took (its send turn is taken now). A post that cannot be quoted goes as a plain link.
+        let mentions = resolveMentions(in: text).filter { groupMembers.contains($0) }
+        mentionMap = [:]
+        typingSent = false
+        let clientId = UUID().uuidString
+        let tapTs = Date().timeIntervalSince1970 * 1000
+        let turn = ChatService.SendTurn.take(cid)
+        var bubble = Message(localText: text, authorId: me, clientId: clientId, replyTo: nil, sendState: .sending)
+        bubble.quoteId = ""
+        let style = BubbleStyles.snapshotForSending(cid: cid)
+        bubble.bubbleStyle = style.id
+        bubble.bubbleDecor = style.decor
+        repo.addPending(bubble)
+        broadcastTyping(false)
+        typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
+        let members = isGroup ? groupMembers : nil
+        let local = repo.items
         Task { @MainActor in
-            var quoted: QuoteStore.Made?
+            var qid: String?
             if let pcid = await ChannelPostLink.cid(for: post),
-               let pmid = await ChannelPostLink.mid(for: post, cid: pcid, local: pcid == cid ? repo.items : []) {
+               let pmid = await ChannelPostLink.mid(for: post, cid: pcid, local: pcid == cid ? local : []) {
                 let token = QuoteStore.shared.start(cid: pcid, mid: pmid) { nil }
-                quoted = try? await QuoteStore.shared.made(token)
+                qid = (try? await QuoteStore.shared.made(token))?.qid
             }
-            guard let made = quoted else {
-                let typed = input
-                input = text
-                postLinkPlainOnce = true
-                send()
-                postLinkPlainOnce = false
-                input = input.isEmpty ? typed : input + typed
-                return
+            repo.setPendingQuote(clientId: clientId, qid: qid)
+            do {
+                try await ChatService.sendText(cid: cid, text: text, clientId: clientId, group: members,
+                                               mentions: mentions, tapTs: tapTs, turn: turn, quote: qid,
+                                               style: style)
+            } catch {
+                repo.removePending(clientId: clientId)
+                if input.isEmpty { input = text }
+                showJumpToast("Couldn't send the message. Try again.")
             }
-            sendQuote(QuoteDraft(qid: made.qid, card: made.card), text: text, composerCleared: true)
         }
     }
 
