@@ -94,6 +94,23 @@ extension Notification.Name {
     static let hiddenMessagesChanged = Notification.Name("hiddenMessagesChanged")
 }
 
+/// What the chat list shows after my newest message there was deleted for me: the line before it,
+/// tied to the conversation's `updatedAtMillis` at that moment, so any newer message replaces it.
+enum HiddenLast {
+    private static let key = "hiddenLastPreview"
+    private static var cache: [String: [String: Any]] =
+        (UserDefaults.standard.dictionary(forKey: key) as? [String: [String: Any]]) ?? [:]
+    static func set(cid: String, at: Double, text: String) {
+        cache[cid] = ["at": at, "text": text]
+        UserDefaults.standard.set(cache, forKey: key)
+    }
+    /// The line to show instead, while the conversation has not moved on.
+    static func text(cid: String, at: Double) -> String? {
+        guard let e = cache[cid], let t = e["at"] as? Double, t == at else { return nil }
+        return e["text"] as? String
+    }
+}
+
 enum HiddenMessages {
     private static var cache = Set<String>((UserDefaults.standard.string(forKey: "hiddenMessages") ?? "")
         .split(separator: " ").map(String.init))
@@ -954,7 +971,17 @@ final class ThreadRepository {
     }
     // "Delete for me" — hide a single message locally (the doc stays for the other person). Deleting
     // "for everyone" removes the Firestore doc instead (ChatService.deleteMessage).
-    func hideForMe(_ id: String) { HiddenMessages.hide(id); refreshItems() }
+    func hideForMe(_ id: String) {
+        // The chat list's line (owner 2026-11-13, same as Android): deleting the NEWEST message for
+        // me shows the one before it there, until a newer message arrives.
+        let visible = items.filter { !$0.deleted && !HiddenMessages.isHidden($0.id) }
+        if let last = visible.last, last.id == id,
+           let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) {
+            let before = visible.dropLast().last
+            HiddenLast.set(cid: cid, at: conv.updatedAtMillis, text: before?.text ?? "")
+        }
+        HiddenMessages.hide(id); refreshItems()
+    }
 
     /// Optimistic "Delete for Everyone": the bubble becomes a tombstone HERE, the moment the user
     /// taps, instead of after a doc read, a write and the listener echo — a full network round trip

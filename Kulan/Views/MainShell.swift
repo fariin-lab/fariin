@@ -4683,6 +4683,7 @@ struct ChatRow: View, Equatable {
         // Suspended or disabled by Fariin: the reason, never its last message (owner 2026-10-26).
         if conv.fariinLocked { return conv.isChannel ? "This channel is unavailable" : "This group is unavailable" }
         if conv.leaksBlocked(me) { return "" }   // don't leak a blocked person's message into the list
+        if let shown = HiddenLast.text(cid: conv.id, at: conv.updatedAtMillis) { return shown }   // newest deleted for me
         // Group last-message is sealed by its sender → decrypt with the sender's key, not the cid pair.
         if conv.isGroup {
             // 2026-09-26 block rebuild: a member I blocked is hidden in the group itself, so their
