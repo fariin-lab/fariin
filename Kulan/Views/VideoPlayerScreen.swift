@@ -39,6 +39,8 @@ struct VideoPlayerScreen: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
+    /// Playback speed (owner 2026-11-13: "add speed"). `defaultRate` makes every later play() keep it.
+    @State private var speed: Float = 1
     @State private var unavailable = false
     @State private var loadFailed = false   // transient (no network / server hiccup), retryable
     @State private var loadAttempt = 0
@@ -480,6 +482,14 @@ struct VideoPlayerScreen: View {
             Spacer(minLength: 8)
             // Theirs: Save and Delete live in the menu; Share and Forward are the bottom row's buttons.
             Menu {
+                Menu {
+                    ForEach([Float(0.5), 1, 1.25, 1.5, 2], id: \.self) { s in
+                        Button { setSpeed(s) } label: {
+                            if s == speed { Label(Self.speedLabel(s), systemImage: "checkmark") }
+                            else { Text(Self.speedLabel(s)) }
+                        }
+                    }
+                } label: { Label("Speed  \(Self.speedLabel(speed))", systemImage: "gauge.with.dots.needle.67percent") }
                 if !savingLocked {
                     Button { save() } label: { Label("Save Video", systemImage: "square.and.arrow.down") }
                 }
@@ -646,6 +656,17 @@ struct VideoPlayerScreen: View {
 
     // MARK: - Playback control
 
+    static func speedLabel(_ s: Float) -> String {
+        s == 1 ? "Normal" : (s == s.rounded() ? "\(Int(s))×" : "\(s)×")
+    }
+
+    /// The new speed now if playing, and for every later play().
+    private func setSpeed(_ s: Float) {
+        speed = s
+        player?.defaultRate = s
+        if isPlaying { player?.rate = s }
+    }
+
     private func togglePlay() {
         guard let player else { return }
         if isPlaying { player.pause(); isPlaying = false }
@@ -808,6 +829,7 @@ struct VideoPlayerScreen: View {
         // screen at once now, so its first frame decodes while the session comes up, and `play()`
         // waits for the session exactly as the voice player's does.
         let p = AVPlayer(playerItem: item)
+        p.defaultRate = speed   // a reload keeps the chosen speed
         player = p
         let life = lifetime
         Task.detached(priority: .userInitiated) {
