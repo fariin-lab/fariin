@@ -5774,7 +5774,14 @@ struct ThreadView: View {
                 if let m = repo.items.first(where: { $0.rowId == id }), let live = m.liveCard {
                     // Live location: my running share asks Stop / View; anything else opens the page.
                     if m.authorId == me, LiveDocState.running(card: live.until, doc: liveDocs[me]) {
-                        liveOwnAsk = true
+                        // The app's own glass alert in the middle of the screen (owner 2026-11-13: the
+                        // system dialog opened at the top, away from the card).
+                        GlassConfirmDoor.show(title: "Live location",
+                                              message: "Your location is being shared in this chat.",
+                                              confirm: "Stop Sharing",
+                                              second: "Open Live Map", onSecond: { liveMapOpen = true }) {
+                            LiveLocationSharer.shared.stop(cid: cid)
+                        }
                     } else {
                         liveMapOpen = true
                     }
