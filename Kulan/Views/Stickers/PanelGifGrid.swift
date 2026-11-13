@@ -39,6 +39,18 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         }
     }
     private var shelf: Shelf = .trending
+    /// "Powered by GIPHY" (Giphy's API terms, owner 2026-11-13): under the grid whenever its GIFs
+    /// came from GIPHY (Trending, a mood, a search), not on Recent / Favorites from this phone.
+    private let giphyCredit: UILabel = {
+        let l = UILabel()
+        l.text = "Powered by GIPHY"
+        l.font = .systemFont(ofSize: 11, weight: .medium)
+        l.textColor = .tertiaryLabel
+        l.textAlignment = .center
+        l.isUserInteractionEnabled = false
+        return l
+    }()
+    private var showsGiphy: Bool { searching || (shelf != .recent && shelf != .favorites) }
     /// Each mood's GIFs once fetched, for this panel's life.
     private var moodGifs: [Shelf: [GiphyService.Gif]] = [:]
     private var moodTask: Task<Void, Never>?
@@ -256,9 +268,15 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         searchIcon.frame = CGRect(x: 14, y: (ph - 18) / 2, width: 18, height: 18)
         searchField.frame = CGRect(x: 40, y: 0, width: max(0, searchPill.bounds.width - 48), height: ph)
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
-        grid.contentInset.bottom = barAtFoot && !searching
+        let creditH: CGFloat = showsGiphy ? 18 : 0
+        let footInset = barAtFoot && !searching
             ? footGap + bottomRoom
             : max(safeAreaInsets.bottom, 8) + bottomRoom
+        grid.contentInset.bottom = footInset + creditH
+        if giphyCredit.superview == nil { addSubview(giphyCredit) }
+        bringSubviewToFront(giphyCredit)
+        giphyCredit.isHidden = !showsGiphy
+        giphyCredit.frame = CGRect(x: 0, y: bounds.height - footInset - creditH, width: w, height: creditH)
         emptyLabel.frame = CGRect(x: 32, y: gridTop + 28, width: max(0, w - 64), height: 60)
         if lastGridWidth != w {
             lastGridWidth = w
@@ -322,6 +340,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         guard let s = Shelf(rawValue: b.tag), s != shelf else { return }
         UISelectionFeedbackGenerator().selectionChanged()
         shelf = s
+        setNeedsLayout()   // the GIPHY credit shows or hides with the shelf
         UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.layoutStrip()
         }

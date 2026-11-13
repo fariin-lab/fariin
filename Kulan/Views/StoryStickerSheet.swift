@@ -193,6 +193,14 @@ struct StoryStickerSheet: View {
                         // stickers is only in front of the results.
                         if !searching { actions }
                         grid
+                        // Giphy's API terms (owner 2026-11-13): shown while GIPHY results are on
+                        // screen, not on Recent or the built-in pack.
+                        if showsGiphy && !stickers.isEmpty {
+                            Text("Powered by GIPHY")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                                .frame(maxWidth: .infinity)
+                        }
                     }
                     .padding(.top, 4)
                     .padding(.bottom, 12)
@@ -447,6 +455,12 @@ struct StoryStickerSheet: View {
     private static let selectionID = "sticker.tab.selection"
 
     // MARK: Loading
+
+    private var showsGiphy: Bool {
+        if !query.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        if case .term = tab { return true }
+        return false
+    }
 
     private func load() async {
         let q = query.trimmingCharacters(in: .whitespaces)
