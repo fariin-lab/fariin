@@ -3655,10 +3655,12 @@ private struct HideMembersSection: View {
     }
 
     static func close() {
-        // The circle comes back in the same frame the flying copy goes, so nothing flashes.
+        // The real avatar comes back FIRST; the flying copy goes two frames later, so for that moment
+        // both are on screen and never neither (owner 2026-11-13: a one-frame blink on landing).
         onClosed?(); onClosed = nil
-        window?.isHidden = true
+        let w = window
         window = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.034) { w?.isHidden = true }
     }
 }
 
