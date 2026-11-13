@@ -414,11 +414,6 @@ struct MediaGalleryView: View {
         .alert("Sharing is turned off in this chat", isPresented: $sharingBlocked) {
             Button("OK", role: .cancel) {}
         }
-        .alert("Couldn't open the file", isPresented: $fileOpenFailed) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("It may be damaged, or in a format this phone can't open.")
-        }
         .alert("Couldn't share", isPresented: $shareFailed) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -983,6 +978,13 @@ struct MediaGalleryView: View {
         }
         .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
         // (No bottom margin for the selection bar: the system bottom toolbar is in the safe area.)
+        // On the files list, not the screen's body: one more modifier there was past what the type
+        // checker can do in time (build 1173).
+        .alert("Couldn't open the file", isPresented: $fileOpenFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("It may be damaged, or in a format this phone can't open.")
+        }
     }
 
     private func fileRow(_ m: Message) -> some View {
