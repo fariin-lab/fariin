@@ -782,7 +782,7 @@ final class ProfileStore {
     // new photo is a new name and misses every cache.
     private func putJPEG(_ data: Data, path: String) async throws -> String {
         // profilePhotoMB (owner 2026-11-13, same words as Android): checked before the upload.
-        guard data.count <= Limits.profilePhotoBytes else {
+        guard Limits.profilePhotoBytes <= 0 || data.count <= Limits.profilePhotoBytes else {
             throw ChatService.LimitReached(message: "That photo is too large. Choose a smaller one.")
         }
         let ref = Storage.storage().reference().child(path)
