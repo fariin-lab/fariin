@@ -329,9 +329,24 @@ struct VideoPlayerScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
+                // ⛔ NO FADE (owner 2026-11-13, his recording IMG_1982: "when I open a video it is
+                // flashing"). The poster left with a fade while the player layer had only just said
+                // it was ready, so for a frame or two both were half transparent over black: a dark
+                // flash. It now goes in one step, after the layer has really drawn (see below).
+                .transition(.identity)
         }
         if let player {
-            PlayerLayerView(player: player, onFirstFrame: { firstFrameShown = true; noteFirstFrame() })
+            PlayerLayerView(player: player, onFirstFrame: {
+                noteFirstFrame()
+                // isReadyForDisplay can arrive a frame before the picture is composited, so the poster
+                // stays a quarter second longer under the (clear-backed, same aspect-fit) player, then
+                // goes with animations off. While zoomed it goes at once, as before.
+                let delay: Double = zoomed ? 0 : 0.25
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { firstFrameShown = true }
+                }
+            })
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: shownPan.width, y: shownPan.height)
                 .ignoresSafeArea()
