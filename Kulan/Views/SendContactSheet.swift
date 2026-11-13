@@ -29,6 +29,13 @@ struct SendContactSheet: View {
     /// so the bubble shows the post: channel photo and name, its words and picture. A quote that
     /// cannot be made (Quotes off, offline) sends the link with its plain card instead.
     var postQuote: (() -> String)? = nil
+    /// Customize screenshot (owner 2026-11-13): pictures sent as photo messages instead of a link
+    /// (several go as one album). With pictures, the empty-selection button saves them to Photos and
+    /// the round share button opens the system sheet with them.
+    var pictures: [UIImage] = []
+    /// Called as the sheet closes on Send, before the uploads finish, so the page that opened it
+    /// can close too. The result still arrives through `onSent`.
+    var onDispatched: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
@@ -136,7 +143,7 @@ struct SendContactSheet: View {
         //
         // `sending` still guards the button and the drag-to-dismiss, so a double tap cannot send
         // twice; it simply no longer draws anything.
-        .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: [link]) }
+        .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: pictures.isEmpty ? [link] : pictures) }
         .alert("Slow mode", isPresented: Binding(get: { slowNote != nil }, set: { if !$0 { slowNote = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(slowNote ?? "") }
@@ -155,7 +162,7 @@ struct SendContactSheet: View {
             HStack {
                 circleButton("magnifyingglass") { openSearch() }
                 Spacer()
-                circleButton("ic_link_share") { showSystemShare = true }
+                circleButton(pictures.isEmpty ? "ic_link_share" : "ic_share_up") { showSystemShare = true }
             }
         }
         .padding(.horizontal, 16)
@@ -367,9 +374,11 @@ struct SendContactSheet: View {
     /// silently changed its mind.
     private var bottomButton: some View {
         Button {
-            if selected.isEmpty { copyLink() } else { Task { await sendAll() } }
+            if !selected.isEmpty { Task { await sendAll() } }
+            else if pictures.isEmpty { copyLink() }
+            else { savePictures() }
         } label: {
-            Text(selected.isEmpty ? "Copy Link"
+            Text(selected.isEmpty ? (pictures.isEmpty ? "Copy Link" : "Save to Photos")
                                   : "Send to \(selected.count)")
                 .font(.system(size: 17, weight: .semibold))
                 // ⛔ WHITE IN BOTH STATES (his order, 2026-08-21). It was the accent colour while
@@ -422,6 +431,14 @@ struct SendContactSheet: View {
         onSent("Link copied.")
     }
 
+    /// Customize screenshot (owner 2026-11-13): nothing picked, so the button keeps the pictures.
+    /// The sheet closes; the editor under it stays open, and the Photos result is its own toast.
+    private func savePictures() {
+        let images = pictures
+        dismiss()
+        Task { await ScreenshotExporter.save(images) }
+    }
+
     /// Just the url. `contactText` is the sentence that goes into a CHAT bubble; a clipboard or
     /// another app wants the link on its own, or whoever pastes it gets our sentence too.
     private var link: String {
@@ -467,6 +484,9 @@ struct SendContactSheet: View {
         // the sending is the app's problem and the confirmation is read on the page he lands back
         // on; this makes the sheet behave that way. The toast still reports what really arrived.
         dismiss()
+        onDispatched()
+        // Pictures (owner 2026-11-13): encoded once here, then the same bytes go to every chat.
+        let photos = pictures.compactMap { $0.jpegData(compressionQuality: 0.92) }
         // The profile card travels with the message, as it does when the same link is typed in a
         // chat (owner, 2026-09-30). Built when the sheet opened, so this is normally a cache read.
         var qid: String? = nil
@@ -481,7 +501,12 @@ struct SendContactSheet: View {
             for target in targets {
                 tasks.addTask {
                     do {
-                        if !forwards.isEmpty {
+                        if photos.count == 1 {
+                            try await ChatService.sendImage(cid: target.cid, data: photos[0], group: target.group)
+                        } else if photos.count > 1 {
+                            try await ChatService.sendAlbum(cid: target.cid, images: photos, caption: "",
+                                                            group: target.group)
+                        } else if !forwards.isEmpty {
                             for m in forwards {
                                 try await ChatService.forwardMessage(m, from: src, to: target.cid)
                             }
@@ -504,7 +529,8 @@ struct SendContactSheet: View {
             onSent("Couldn't send. Check your connection and try again.")
         } else {
             let firstName = order.first { reached.contains($0.id) }.map { $0.displayName(me) } ?? "chat"
-            onSent(Self.sentMessage(first: firstName, count: reached.count))
+            onSent(photos.isEmpty ? Self.sentMessage(first: firstName, count: reached.count)
+                                  : Self.screenshotSent(first: firstName, count: reached.count))
         }
     }
 
@@ -521,6 +547,11 @@ struct SendContactSheet: View {
     /// Singular and plural both spelled out rather than an "s" glued on a number: one other chat is
     /// a sentence people read, and "1 other chats" is the kind of thing that makes an app look
     /// unfinished for the sake of one branch.
+    /// Customize screenshot (owner 2026-11-13).
+    static func screenshotSent(first: String, count: Int) -> String {
+        count <= 1 ? "Screenshot sent to \(first)" : "Screenshot sent to \(count) chats"
+    }
+
     static func sentMessage(first: String, count: Int) -> String {
         switch count {
         case ..<1:  return "Link sent."

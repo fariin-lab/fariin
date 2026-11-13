@@ -92,6 +92,12 @@ struct ShotLook {
         onWallpaper ? Color.black.opacity(dark ? 0.35 : 0.22)
                     : (dark ? Color(hex: 0x26262B) : Color(hex: 0xEBEBF0))
     }
+    /// The footer's "Fariin" and logo: the incoming bubble's colour on a wallpaper, a quiet grey on
+    /// the plain background (where that colour would vanish).
+    var footerInk: Color {
+        onWallpaper ? Color.white.opacity(dark ? 0.75 : 0.95) : receivedMeta
+    }
+
     var chipText: Color { onWallpaper ? .white : (dark ? Color.white.opacity(0.8) : Color.black.opacity(0.6)) }
 }
 

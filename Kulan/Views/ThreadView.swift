@@ -2228,7 +2228,8 @@ struct ThreadView: View {
             Button("OK", role: .cancel) {}
         }
         .fullScreenCover(item: $pdfDoc) { PDFViewerSheet(url: $0.url, title: $0.title) }
-        .fullScreenCover(item: $screenshotEditor) { ScreenshotEditorView(snapshot: $0) }   // owner 2026-11-13
+        // Customize screenshot (owner 2026-11-13): a sheet over the chat; a send reports back here.
+        .sheet(item: $screenshotEditor) { ScreenshotEditorView(snapshot: $0, onSent: { showJumpToast($0) }) }
     }
 
     private var threadContent: some View {
@@ -6130,11 +6131,14 @@ struct ThreadView: View {
     @ViewBuilder private var screenshotOfferOverlay: some View {
         if let snap = screenshotOffer {
             LiftReader(box: composerLift) { lift, _ in
-                ScreenshotOfferPill {
+                // A dark bar the width of the composer, just above it (owner's reference video).
+                ShotNoticeBar(title: "Screenshot saved", detail: "Remove messages or hide text",
+                              action: "Edit") {
                     screenshotOffer = nil
                     screenshotEditor = snap
                 }
-                .padding(.bottom, lift + 12)
+                .padding(.horizontal, composerSide)
+                .padding(.bottom, lift + 8)
             }
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }

@@ -1,27 +1,39 @@
 import SwiftUI
 import UIKit
 
-// Customize screenshot (owner 2026-11-13): the editor that opens from the pill after a screenshot.
+// Customize screenshot (owner 2026-11-13): the editor sheet that opens from the notice after a
+// screenshot. Layout after his reference video: a header with close, title and day/night; a
+// rounded card with the chat on the chosen background; round theme swatches; one Share button.
 //
-// The picture is edited in place: swipe a message left to take it out, touch and hold to hide its
-// text, pick a background under it, flip day and night at the top. Save and Share render the same
-// views offscreen (`ScreenshotExporter`), so what is on screen is what is saved.
+// Swipe a message left to take it out (a small Undo bar comes up for a moment). Touch and hold a
+// message's words to hide them. Share renders the same views offscreen (`ScreenshotExporter`) and
+// opens the app's own Share with sheet to send them as photos, or save them.
+
+/// The rendered pictures, handed to the Share with sheet.
+private struct ShotOutgoing: Identifiable {
+    let id = UUID()
+    let images: [UIImage]
+}
 
 struct ScreenshotEditorView: View {
     let snapshot: ScreenshotSnapshot
+    /// The result line once pictures were sent ("Screenshot sent to …"), for the chat to show.
+    var onSent: (String) -> Void = { _ in }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
 
     /// Removed message ids, newest last, so Undo brings back the last one taken out.
     @State private var removed: [String] = []
-    @State private var hiddenIds: Set<String> = []
+    @State private var covers: [String: ShotCover] = [:]
     @State private var theme: ShotTheme = .current
     /// nil until the person flips it: the picture starts in the appearance the chat was in.
     @State private var darkChoice: Bool?
-    /// ⛔ ALWAYS ON (owner 2026-11-13: "the user can't remove my logo and name"). Every saved or
-    /// shared picture carries the Fariin logo and name; there is no switch for it.
-    private let showLogo = true
-    @State private var busy = false
+    @State private var plan = ShotPlan()
+    @State private var undoFor: String?
+    @State private var outgoing: ShotOutgoing?
+
+    static let side: CGFloat = 16
 
     private var dark: Bool { darkChoice ?? (scheme == .dark) }
     private var look: ShotLook { ShotLook.resolve(theme, cid: snapshot.cid, dark: dark) }
@@ -29,153 +41,170 @@ struct ScreenshotEditorView: View {
         let gone = Set(removed)
         return snapshot.messages.filter { !gone.contains($0.id) }
     }
+    private var planKey: String { "\(removed.count)|\(theme.id)|\(dark)" }
 
     var body: some View {
         let look = self.look
-        canvas(look)
-            .safeAreaInset(edge: .top, spacing: 0) { header }
-            .safeAreaInset(edge: .bottom, spacing: 0) { panel(look) }
-            .background { ShotBackgroundView(look: look).ignoresSafeArea() }
-            .environment(\.colorScheme, dark ? .dark : .light)
-            .animation(.easeInOut(duration: 0.2), value: removed)
-            .animation(.easeInOut(duration: 0.2), value: hiddenIds)
-    }
-
-    // MARK: Picture
-
-    private func canvas(_ look: ShotLook) -> some View {
-        let rows = self.rows
-        // Keyed by message id, not position, so a removed row animates out and its swipe state
-        // does not pass to the row that takes its place.
-        let items = zip(rows, ShotPlacement.of(rows)).map { ShotItem(m: $0.0, place: $0.1) }
-        return ScrollView {
-            VStack(spacing: 0) {
-                if rows.isEmpty {
-                    Text("No messages left. Tap Undo to bring one back.")
-                        .font(.subheadline)
-                        .foregroundStyle(look.chipText)
-                        .padding(.top, 80)
-                }
-                ForEach(items) { item in
-                    ShotEditableRow(message: item.m, look: look, place: item.place,
-                                    hidden: hiddenIds.contains(item.id),
-                                    onRemove: { remove(item.id) },
-                                    onToggleHidden: { toggleHidden(item.id) })
-                }
-                if showLogo && !rows.isEmpty {
-                    ShotBranding(look: look).padding(.top, 10)
-                }
-            }
-            .padding(.vertical, ScreenshotExporter.pageTop)
+        VStack(spacing: 0) {
+            header
+            ShotCard(rows: rows, look: look, covers: $covers, onRemove: remove)
+                .padding(.top, 22)
+            ShotThemeRow(cid: snapshot.cid, dark: dark, selected: $theme)
+                .padding(.top, 20)
+            Divider().padding(.horizontal, Self.side).padding(.top, 16)
+            shareButton(look).padding(.top, 20)
+            Spacer(minLength: 0)
         }
-        .defaultScrollAnchor(.bottom)
-        .scrollIndicators(.hidden)
+        .overlay(alignment: .bottom) { undoBar }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .task(id: planKey) { plan = ScreenshotExporter.plan(rows: rows, look: look) }
+        .sheet(item: $outgoing) { out in
+            SendContactSheet(contactText: "", pictures: out.images,
+                             onDispatched: { dismiss() }, onSent: onSent)
+        }
     }
 
     private func remove(_ id: String) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        removed.append(id)
+        withAnimation(.easeInOut(duration: 0.22)) { removed.append(id); undoFor = id }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            withAnimation(.easeOut(duration: 0.2)) { if undoFor == id { undoFor = nil } }
+        }
     }
 
-    private func toggleHidden(_ id: String) {
-        if hiddenIds.contains(id) { hiddenIds.remove(id) } else { hiddenIds.insert(id) }
+    private func undo() {
+        withAnimation(.easeInOut(duration: 0.22)) {
+            _ = removed.popLast()
+            undoFor = nil
+        }
     }
 
     // MARK: Header
 
     private var header: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 44, height: 44)
+        ZStack {
+            VStack(spacing: 2) {
+                Text("Share your chat").font(.system(size: 17, weight: .semibold))
+                Text(countLine).font(.system(size: 13)).foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
             }
-            .glassEffect(.regular.interactive(), in: Circle())
-            .accessibilityLabel("Close")
-            Spacer()
-            Text("Screenshot")
-                .font(.headline)
-                .padding(.horizontal, 16).frame(height: 44)
-                .glassEffect(.regular, in: Capsule())
-            Spacer()
-            Button { darkChoice = !dark } label: {
-                Image(systemName: dark ? "sun.max" : "moon")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 44, height: 44)
+            HStack {
+                ShotRoundButton(symbol: "xmark", label: "Close") { dismiss() }
+                Spacer()
+                ShotRoundButton(symbol: dark ? "sun.max" : "moon.stars", label: dark ? "Day" : "Night") {
+                    withAnimation(.easeInOut(duration: 0.25)) { darkChoice = !dark }
+                }
             }
-            .glassEffect(.regular.interactive(), in: Circle())
-            .accessibilityLabel(dark ? "Day" : "Night")
         }
-        .foregroundStyle(.primary)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
+        .padding(.horizontal, Self.side)
+        .padding(.top, 16)
     }
 
-    // MARK: Bottom panel
-
-    private func panel(_ look: ShotLook) -> some View {
-        VStack(spacing: 12) {
-            hintRow
-            ShotThemeRow(cid: snapshot.cid, dark: dark, selected: $theme)
-            actions(look)
-        }
-        .padding(16)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .padding(.horizontal, 12)
-        .padding(.bottom, 4)
+    private var countLine: String {
+        let n = rows.count, p = plan.pictureCount
+        let pictures = p == 1 ? "1 picture" : "\(p) pictures"
+        let messages = n == 1 ? "1 message" : "\(n) messages"
+        return "\(pictures) · \(messages)"
     }
 
-    @ViewBuilder private var hintRow: some View {
-        HStack(spacing: 10) {
-            Text("Swipe left to remove a message. Touch and hold to hide its text.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-            if !removed.isEmpty {
-                Button("Undo") { _ = removed.popLast() }
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 14).padding(.vertical, 7)
-                    .glassEffect(.regular.interactive(), in: Capsule())
+    // MARK: Share
+
+    private func shareButton(_ look: ShotLook) -> some View {
+        let p = plan.pictureCount
+        return Button {
+            let images = ScreenshotExporter.render(rows: rows, look: look, covers: covers)
+            if !images.isEmpty { outgoing = ShotOutgoing(images: images) }
+        } label: {
+            Text(p == 1 ? "Share Picture" : "Share \(p) Pictures")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .background(Theme.defaultBubble(scheme == .dark), in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(rows.isEmpty)
+        .opacity(rows.isEmpty ? 0.5 : 1)
+        .padding(.horizontal, 30)
+    }
+
+    @ViewBuilder private var undoBar: some View {
+        if undoFor != nil {
+            ShotNoticeBar(title: "Message removed", detail: nil, action: "Undo", onAction: undo)
+                .padding(.horizontal, Self.side)
+                .padding(.bottom, 92)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+}
+
+/// The rounded card with the chat in it. It scrolls when the messages do not fit; the footer
+/// stays at its bottom edge, as it sits at the bottom of every saved picture.
+private struct ShotCard: View {
+    let rows: [ShotMessage]
+    let look: ShotLook
+    @Binding var covers: [String: ShotCover]
+    let onRemove: (String) -> Void
+
+    private static let corner: CGFloat = 32
+    private var width: CGFloat { UIScreen.main.bounds.width - ScreenshotEditorView.side * 2 }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+        messages
+            .frame(width: width, height: width + 40)
+            .overlay(alignment: .bottom) {
+                ShotFooter(look: look).padding(.bottom, ScreenshotExporter.footerBottom)
             }
+            .background { ShotBackgroundView(look: look) }
+            .clipShape(shape)
+            .animation(.easeInOut(duration: 0.22), value: rows.map(\.id))
+    }
+
+    private var messages: some View {
+        let items = zip(rows, ShotPlacement.of(rows)).map { ShotItem(m: $0.0, place: $0.1) }
+        return ScrollView {
+            VStack(spacing: 0) {
+                if rows.isEmpty { emptyLine }
+                ForEach(items) { item in
+                    ShotEditableRow(message: item.m, look: look, place: item.place, rowWidth: width,
+                                    cover: covers[item.id] ?? ShotCover(),
+                                    edit: edit(item.id))
+                }
+            }
+            .padding(.top, ScreenshotExporter.pageTop)
+            .padding(.bottom, ScreenshotExporter.footerHeight + ScreenshotExporter.footerSpacing
+                     + ScreenshotExporter.footerBottom)
+        }
+        .defaultScrollAnchor(.bottom)
+        .scrollIndicators(.hidden)
+        .mask { edgeFade }
+    }
+
+    private var emptyLine: some View {
+        Text("No messages left").font(.subheadline).foregroundStyle(look.chipText)
+            .padding(.top, 120)
+    }
+
+    /// Soft top and bottom edges, so a cut-off message reads as "there is more". Only on screen:
+    /// the saved pictures are drawn without them.
+    private var edgeFade: some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 18)
+            Color.black
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 40)
         }
     }
 
-    private func actions(_ look: ShotLook) -> some View {
-        HStack(spacing: 12) {
-            Button { export(look, share: false) } label: {
-                Label("Save", systemImage: "square.and.arrow.down")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 48)
-            }
-            .glassEffect(.regular.interactive(), in: Capsule())
-            Button { export(look, share: true) } label: {
-                Label("Share", systemImage: "square.and.arrow.up")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-            }
-            .glassEffect(.regular.tint(Color.fariinAction).interactive(), in: Capsule())
-        }
-        .foregroundStyle(.primary)
-        .disabled(busy || rows.isEmpty)
-        .opacity(busy || rows.isEmpty ? 0.5 : 1)
-    }
-
-    private func export(_ look: ShotLook, share: Bool) {
-        guard !busy else { return }
-        busy = true
-        let images = ScreenshotExporter.render(rows: rows, look: look,
-                                               hiddenIds: hiddenIds, showLogo: showLogo)
-        if share {
-            ScreenshotExporter.share(images)
-            busy = false
-        } else {
-            Task {
-                await ScreenshotExporter.save(images)
-                busy = false
-            }
-        }
+    private func edit(_ id: String) -> ShotRowEdit {
+        ShotRowEdit(
+            text: ShotTextActions(
+                cover: { r in covers[id, default: ShotCover()].cover(r) },
+                coverWhole: { covers[id, default: ShotCover()].whole = true },
+                reveal: { i in covers[id, default: ShotCover()].reveal(at: i) },
+                remove: { onRemove(id) }),
+            toggleWhole: { covers[id, default: ShotCover()].whole.toggle() })
     }
 }
 
@@ -185,48 +214,74 @@ private struct ShotItem: Identifiable {
     var id: String { m.id }
 }
 
-/// A message in the editor: the same row the picture draws, plus the swipe and the hold menu.
+/// Everything one row in the editor can change.
+private struct ShotRowEdit {
+    let text: ShotTextActions
+    let toggleWhole: () -> Void
+}
+
+/// A message in the editor: the same row the picture draws, plus the left swipe that removes it.
+/// Text rows select words on a long press (see `ShotSelectableText`); a picture or an event line
+/// has a small menu instead, since it has no words to pick.
 private struct ShotEditableRow: View {
     let message: ShotMessage
     let look: ShotLook
     let place: ShotPlacement
-    let hidden: Bool
-    let onRemove: () -> Void
-    let onToggleHidden: () -> Void
+    let rowWidth: CGFloat
+    let cover: ShotCover
+    let edit: ShotRowEdit
 
     @State private var dragX: CGFloat = 0
-    private static let removeAt: CGFloat = 90
+    private static let removeAt: CGFloat = 80
+
+    private var isText: Bool { message.kind == .text }
 
     var body: some View {
-        ShotRowView(message: message, look: look, place: place, hidden: hidden)
+        ShotRowView(message: message, look: look, place: place, rowWidth: rowWidth,
+                    cover: cover, actions: isText ? edit.text : nil)
             .offset(x: dragX)
-            .opacity(1 - Double(min(1, -dragX / 220)))
+            .overlay(alignment: .trailing) { swipeMark }
             .contentShape(Rectangle())
-            .onTapGesture { if hidden { onToggleHidden() } }
-            .contextMenu { menu }
+            .onTapGesture { if cover.whole { edit.toggleWhole() } }
+            .contextMenu { if !isText { menu } }
             .simultaneousGesture(swipe)
-            .transition(.move(edge: .leading).combined(with: .opacity))
+            .transition(.asymmetric(insertion: .opacity, removal: .move(edge: .leading).combined(with: .opacity)))
     }
 
     @ViewBuilder private var menu: some View {
-        Button(hidden ? "Show Text" : "Hide Text", systemImage: hidden ? "eye" : "eye.slash") {
-            onToggleHidden()
+        Button(cover.whole ? "Show" : "Hide", systemImage: cover.whole ? "eye" : "eye.slash") {
+            edit.toggleWhole()
         }
-        Button("Remove from Picture", systemImage: "trash", role: .destructive) { onRemove() }
+        Button("Remove", systemImage: "trash", role: .destructive) { edit.text.remove() }
+    }
+
+    /// A crossed-out eye that grows in from the right edge as the row is pulled.
+    @ViewBuilder private var swipeMark: some View {
+        if dragX < -8 {
+            let progress = min(1, -dragX / Self.removeAt)
+            Image(systemName: "eye.slash.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(look.chipText)
+                .frame(width: 32, height: 32)
+                .background(look.chipFill, in: Circle())
+                .scaleEffect(0.6 + 0.4 * progress)
+                .opacity(progress)
+                .padding(.trailing, 14)
+        }
     }
 
     /// A left swipe only: a mostly vertical drag belongs to the scroll view.
     private var swipe: some Gesture {
-        DragGesture(minimumDistance: 20)
+        DragGesture(minimumDistance: 18)
             .onChanged { v in
                 let dx = v.translation.width, dy = v.translation.height
-                guard abs(dx) > abs(dy) * 1.5 || dragX != 0 else { return }
-                dragX = min(0, dx)
+                guard abs(dx) > abs(dy) * 1.4 || dragX != 0 else { return }
+                dragX = min(0, dx * 0.85)
             }
-            .onEnded { v in
-                if v.translation.width < -Self.removeAt && dragX != 0 {
-                    onRemove()
+            .onEnded { _ in
+                if dragX <= -Self.removeAt {
                     dragX = 0
+                    edit.text.remove()
                 } else {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { dragX = 0 }
                 }
@@ -234,7 +289,7 @@ private struct ShotEditableRow: View {
     }
 }
 
-/// The background choices: the chat's own look first, then the app's built-in wallpapers.
+/// Round swatches under the card: this chat's own look first, then the built-in wallpapers.
 private struct ShotThemeRow: View {
     let cid: String
     let dark: Bool
@@ -242,17 +297,16 @@ private struct ShotThemeRow: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 10) {
+            HStack(spacing: 4) {
                 ForEach(ShotTheme.all()) { theme in
-                    Button { selected = theme } label: {
-                        ShotThemeThumb(look: ShotLook.resolve(theme, cid: cid, dark: dark),
-                                       isCurrent: theme == .current, selected: theme == selected)
+                    Button { withAnimation(.easeInOut(duration: 0.2)) { selected = theme } } label: {
+                        ShotSwatch(look: ShotLook.resolve(theme, cid: cid, dark: dark), selected: theme == selected)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(label(theme))
                 }
             }
-            .padding(.horizontal, 2).padding(.vertical, 3)
+            .padding(.horizontal, ScreenshotEditorView.side - 2)
         }
         .scrollIndicators(.hidden)
     }
@@ -265,50 +319,74 @@ private struct ShotThemeRow: View {
     }
 }
 
-/// A small preview of one look: its background with one bubble from each side.
-private struct ShotThemeThumb: View {
+/// One swatch: the background in a circle, with a ring when it is the chosen one.
+private struct ShotSwatch: View {
     let look: ShotLook
-    let isCurrent: Bool
     let selected: Bool
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        VStack(alignment: .leading, spacing: 4) {
-            Capsule().fill(look.receivedFill).frame(width: 24, height: 9)
-            Capsule().fill(look.sentFill).frame(width: 24, height: 9)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-        .padding(7)
-        .frame(width: 54, height: 72, alignment: .bottom)
-        .background { ShotBackgroundView(look: look) }
-        .clipShape(shape)
-        .overlay(alignment: .topLeading) {
-            if isCurrent {
-                Image(systemName: "bubble.left.fill")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(look.chipText)
-                    .padding(5)
+        ShotBackgroundView(look: look)
+            .clipShape(Circle())
+            .overlay { Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5) }
+            .padding(selected ? 4 : 2)
+            .overlay {
+                if selected {
+                    Circle().strokeBorder(Theme.defaultBubble(scheme == .dark), lineWidth: 2)
+                }
             }
-        }
-        .overlay { shape.strokeBorder(selected ? Color.primary : Color.primary.opacity(0.12),
-                                      lineWidth: selected ? 2.5 : 1) }
+            .frame(width: 40, height: 40)
     }
 }
 
-/// The pill that offers the editor for a few seconds after a screenshot.
-struct ScreenshotOfferPill: View {
-    let onOpen: () -> Void
+/// A 44 pt round glass button for the sheet's header.
+private struct ShotRoundButton: View {
+    let symbol: String
+    let label: String
+    let action: () -> Void
 
     var body: some View {
-        Button(action: onOpen) {
-            HStack(spacing: 8) {
-                Image(systemName: "wand.and.stars")
-                Text("Customize screenshot")
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 18).padding(.vertical, 12)
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .contentTransition(.symbolEffect(.replace))
         }
-        .foregroundStyle(.primary)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .accessibilityLabel(label)
+    }
+}
+
+/// The dark rounded bar used for the screenshot notice in the chat and for Undo in the editor:
+/// a bold line, an optional grey line, and a text button on the right.
+struct ShotNoticeBar: View {
+    let title: String
+    let detail: String?
+    let action: String
+    let onAction: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                if let detail {
+                    Text(detail).font(.system(size: 14)).foregroundStyle(.white.opacity(0.6))
+                }
+            }
+            Spacer(minLength: 8)
+            Button(action: onAction) {
+                Text(action).font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color(hex: 0x4DA3FF))
+                    .padding(.vertical, 8).padding(.leading, 8)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, detail == nil ? 10 : 9)
+        .frame(minHeight: 50)
+        .background(Color(white: 0.11).opacity(0.94), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .environment(\.colorScheme, .dark)
     }
 }

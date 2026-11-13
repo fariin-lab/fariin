@@ -41,13 +41,16 @@ struct ShotRowView: View {
     let message: ShotMessage
     let look: ShotLook
     let place: ShotPlacement
-    /// The text is covered by the dust overlay.
-    var hidden = false
+    /// The width the row is laid out in: the screen for a saved picture, the card in the editor.
+    let rowWidth: CGFloat
+    var cover = ShotCover()
+    /// Set in the editor only: the text becomes selectable and its menu hides words.
+    var actions: ShotTextActions? = nil
 
     var body: some View {
         VStack(spacing: 6) {
             if place.showDay {
-                ShotChip(text: message.day, look: look).padding(.vertical, 6)
+                ShotChip(text: message.day, look: look).padding(.vertical, 4)
             }
             content
         }
@@ -57,12 +60,14 @@ struct ShotRowView: View {
 
     @ViewBuilder private var content: some View {
         if message.kind == .system {
-            ShotChip(text: message.text, look: look, hidden: hidden)
+            ShotChip(text: message.text, look: look, hidden: cover.whole)
                 .frame(maxWidth: .infinity)
         } else {
             HStack(spacing: 0) {
                 if message.isMe { Spacer(minLength: 0) }
-                ShotBubble(message: message, look: look, place: place, hidden: hidden)
+                ShotBubble(message: message, look: look, place: place,
+                           maxWidth: BubbleMetrics.maxBubbleWidth(in: rowWidth),
+                           cover: cover, actions: actions)
                 if !message.isMe { Spacer(minLength: 0) }
             }
         }
@@ -81,8 +86,8 @@ struct ShotChip: View {
             .foregroundStyle(look.chipText)
             .multilineTextAlignment(.center)
             .opacity(hidden ? 0 : 1)
-            .padding(.horizontal, 12).padding(.vertical, 5)
-            .overlay { if hidden { ShotDust(color: look.chipText) } }
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .overlay { if hidden { ShotDustView(color: look.chipText) } }
             .background(look.chipFill, in: Capsule())
     }
 }
@@ -92,9 +97,10 @@ struct ShotBubble: View {
     let message: ShotMessage
     let look: ShotLook
     let place: ShotPlacement
-    let hidden: Bool
+    let maxWidth: CGFloat
+    let cover: ShotCover
+    let actions: ShotTextActions?
 
-    private var maxWidth: CGFloat { BubbleMetrics.maxBubbleWidth(in: UIScreen.main.bounds.width) }
     private var textColor: Color { message.isMe ? .white : look.receivedText }
     private var metaColor: Color { message.isMe ? look.sentMeta : look.receivedMeta }
 
@@ -104,8 +110,8 @@ struct ShotBubble: View {
             if let image = message.image { picture(image) }
             mainLine
         }
-        .padding(.horizontal, BubbleMetrics.hPad)
-        .padding(.vertical, BubbleMetrics.vPad - 2)
+        .padding(.horizontal, BubbleMetrics.hPad - 3)
+        .padding(.vertical, BubbleMetrics.vPad - 3)
         .background { fill }
         .frame(maxWidth: maxWidth, alignment: message.isMe ? .trailing : .leading)
     }
@@ -142,7 +148,7 @@ struct ShotBubble: View {
         }
         if let replyText = message.replyText {
             ShotQuote(name: message.replyName ?? "", text: replyText, isMe: message.isMe,
-                      look: look, hidden: hidden)
+                      look: look, hidden: cover.whole)
         }
     }
 
@@ -154,8 +160,7 @@ struct ShotBubble: View {
             .scaledToFill()
             .frame(width: w, height: min(max(w * ratio, 80), 320))
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .opacity(hidden ? 0 : 1)
-            .overlay { if hidden { ShotDust(color: textColor) } }
+            .wholeCover(cover.whole, color: textColor)
     }
 
     /// The text (or a media chip) with the time and ticks on the same line, as the chat does it.
@@ -169,23 +174,33 @@ struct ShotBubble: View {
     @ViewBuilder private var bodyText: some View {
         switch message.kind {
         case .media(let symbol, let label):
-            let caption = message.text.isEmpty ? label : message.text
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if message.image == nil || !message.text.isEmpty {
-                    if message.text.isEmpty { Image(systemName: symbol) }
-                    Text(caption)
-                }
-            }
-            .font(Font(BubbleMetrics.bodyFont as CTFont))
-            .foregroundStyle(textColor)
-            .hiddenText(hidden, color: textColor)
+            mediaLabel(symbol: symbol, label: label)
         default:
-            Text(message.text)
-                .font(Font(BubbleMetrics.bodyFont as CTFont))
-                .foregroundStyle(textColor)
-                .fixedSize(horizontal: false, vertical: true)
-                .hiddenText(hidden, color: textColor)
+            if let actions, !cover.whole {
+                ShotSelectableText(text: message.text, color: UIColor(textColor),
+                                   dustColor: UIColor(textColor), cover: cover, actions: actions)
+            } else {
+                cover.text(message.text)
+                    .font(Font(BubbleMetrics.bodyFont as CTFont))
+                    .foregroundStyle(textColor)
+                    .textRenderer(ShotDustRenderer(color: textColor))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .wholeCover(cover.whole, color: textColor)
+            }
         }
+    }
+
+    private func mediaLabel(symbol: String, label: String) -> some View {
+        let caption = message.text.isEmpty ? label : message.text
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            if message.image == nil || !message.text.isEmpty {
+                if message.text.isEmpty { Image(systemName: symbol) }
+                Text(caption)
+            }
+        }
+        .font(Font(BubbleMetrics.bodyFont as CTFont))
+        .foregroundStyle(textColor)
+        .wholeCover(cover.whole, color: textColor)
     }
 
     private var meta: some View {
@@ -220,7 +235,7 @@ private struct ShotQuote: View {
                 Text(text).font(.system(size: 13)).lineLimit(2).opacity(0.85)
             }
             .foregroundStyle(ink)
-            .hiddenText(hidden, color: ink)
+            .wholeCover(hidden, color: ink)
             Spacer(minLength: 0)
         }
         .padding(6)
@@ -229,42 +244,17 @@ private struct ShotQuote: View {
     }
 }
 
-/// The cover over hidden text: the words are made invisible (so nothing can be read back out of
-/// the picture, even zoomed in), and a fine dust of dots is drawn where they were.
-struct ShotDust: View {
-    let color: Color
-
-    var body: some View {
-        Canvas { ctx, size in
-            // Fixed pseudo-random dots so the same message looks the same in the editor and in the
-            // saved picture. Roughly one dot per 14 square points.
-            var seed: UInt64 = 0x9E3779B97F4A7C15
-            let count = Int(size.width * size.height / 14)
-            for _ in 0..<max(count, 12) {
-                seed = seed &* 6364136223846793005 &+ 1442695040888963407
-                let x = CGFloat(seed >> 40 & 0xFFFF) / 65535 * size.width
-                seed = seed &* 6364136223846793005 &+ 1442695040888963407
-                let y = CGFloat(seed >> 40 & 0xFFFF) / 65535 * size.height
-                let r: CGFloat = (seed >> 20) & 1 == 0 ? 0.7 : 1.0
-                let alpha = 0.35 + Double((seed >> 30) & 0xFF) / 255 * 0.55
-                ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
-                         with: .color(color.opacity(alpha)))
-            }
-        }
-        .allowsHitTesting(false)
-    }
-}
-
 private extension View {
-    /// Keeps the text's size (so the bubble keeps its shape) but draws dust instead of the words.
-    func hiddenText(_ hidden: Bool, color: Color) -> some View {
-        self.opacity(hidden ? 0 : 1)
-            .overlay { if hidden { ShotDust(color: color) } }
+    /// Keeps the size (so the bubble keeps its shape) but draws dots instead of the content.
+    func wholeCover(_ on: Bool, color: Color) -> some View {
+        self.opacity(on ? 0 : 1)
+            .overlay { if on { ShotDustView(color: color) } }
     }
 }
 
-/// The Fariin mark at the bottom of every picture.
-struct ShotBranding: View {
+/// The footer of every picture: "Fariin" on the left, the logo on the right, in the colour of the
+/// incoming bubbles so it sits quietly on any background (owner 2026-11-13: always on).
+struct ShotFooter: View {
     let look: ShotLook
 
     private var logo: UIImage? {
@@ -273,18 +263,19 @@ struct ShotBranding: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack {
+            Text("Fariin").font(.system(size: 16, weight: .bold))
+            Spacer(minLength: 0)
             if let logo {
                 Image(uiImage: logo)
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 16, height: 16)
+                    .frame(width: 22, height: 22)
             }
-            Text("Fariin").font(.system(size: 14, weight: .semibold))
         }
-        .foregroundStyle(look.chipText)
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(look.chipFill, in: Capsule())
+        .foregroundStyle(look.footerInk)
+        .frame(height: ScreenshotExporter.footerHeight)
+        .padding(.horizontal, 20)
     }
 }

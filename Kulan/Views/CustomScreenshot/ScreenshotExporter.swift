@@ -3,75 +3,82 @@ import UIKit
 import Photos
 
 // Customize screenshot (owner 2026-11-13): turning the edited chat into pictures, then saving or
-// sharing them. All of it runs on the phone; the pictures only leave it if the person shares them.
+// sharing them. All of it runs on the phone; the pictures only leave it if the person sends them.
 
-/// One finished page of the picture: the rows it holds, top to bottom.
+/// One finished picture: its rows top to bottom, then the footer.
 struct ShotPageView: View {
     let rows: [ShotMessage]
     let places: [ShotPlacement]
     let look: ShotLook
-    let hiddenIds: Set<String>
-    let showLogo: Bool
+    let covers: [String: ShotCover]
     let width: CGFloat
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(rows.indices, id: \.self) { i in
-                ShotRowView(message: rows[i], look: look, place: places[i],
-                            hidden: hiddenIds.contains(rows[i].id))
+                ShotRowView(message: rows[i], look: look, place: places[i], rowWidth: width,
+                            cover: covers[rows[i].id] ?? ShotCover())
             }
-            if showLogo {
-                ShotBranding(look: look).padding(.top, 10)
-            }
+            ShotFooter(look: look)
+                .padding(.top, ScreenshotExporter.footerSpacing)
+                .padding(.bottom, ScreenshotExporter.footerBottom)
         }
         .padding(.top, ScreenshotExporter.pageTop)
-        .padding(.bottom, ScreenshotExporter.pageBottom)
         .frame(width: width)
         .background { ShotBackgroundView(look: look) }
         .environment(\.colorScheme, look.dark ? .dark : .light)
     }
 }
 
+/// What the editor shows above the button: how many pictures, how many messages.
+struct ShotPlan: Equatable {
+    var pages: [[Int]] = []
+    var pictureCount: Int { max(1, pages.count) }
+}
+
 @MainActor enum ScreenshotExporter {
-    static let pageTop: CGFloat = 16
-    static let pageBottom: CGFloat = 16
-    /// Room kept at the bottom of each page for the logo badge.
-    static let brandingHeight: CGFloat = 42
+    static let pageTop: CGFloat = 12
+    static let footerHeight: CGFloat = 22
+    static let footerSpacing: CGFloat = 10
+    static let footerBottom: CGFloat = 12
 
-    /// The edited chat as pictures as wide as the screen. A chat taller than one screen is split
-    /// into several pictures, always between two messages, never through one.
-    static func render(rows: [ShotMessage], look: ShotLook,
-                       hiddenIds: Set<String>, showLogo: Bool) -> [UIImage] {
-        guard !rows.isEmpty else { return [] }
+    /// Splits the rows into pictures no taller than the screen, always between two messages.
+    /// Each picture starts with its own day pill, as a screenshot of that part of the chat would.
+    static func plan(rows: [ShotMessage], look: ShotLook) -> ShotPlan {
+        guard !rows.isEmpty else { return ShotPlan() }
         let screen = UIScreen.main.bounds.size
-        let scale = UIScreen.main.scale
-        let width = screen.width
-        let budget = screen.height - pageTop - pageBottom - (showLogo ? brandingHeight : 0)
+        let budget = screen.height - pageTop - footerHeight - footerSpacing - footerBottom
         let places = ShotPlacement.of(rows)
-
-        // Measure every row once at the page width, then fill pages greedily. Pages hold indices
-        // into `rows`, so each row keeps the placement it has in the whole picture.
         var pages: [[Int]] = [[]]
         var used: CGFloat = 0
         for i in rows.indices {
-            let h = height(of: ShotRowView(message: rows[i], look: look, place: places[i],
-                                           hidden: hiddenIds.contains(rows[i].id)),
-                           width: width)
+            var place = places[i]
+            if pages[pages.count - 1].isEmpty { place.showDay = true }
+            let h = height(of: ShotRowView(message: rows[i], look: look, place: place, rowWidth: screen.width),
+                           width: screen.width)
             if used + h > budget, !(pages.last?.isEmpty ?? true) {
                 pages.append([])
-                used = 0
+                used = height(of: ShotChip(text: rows[i].day, look: look), width: screen.width) + 14
             }
             pages[pages.count - 1].append(i)
             used += h
         }
+        return ShotPlan(pages: pages)
+    }
 
-        return pages.compactMap { page in
-            let renderer = ImageRenderer(content: ShotPageView(rows: page.map { rows[$0] },
-                                                               places: page.map { places[$0] },
-                                                               look: look,
-                                                               hiddenIds: hiddenIds, showLogo: showLogo,
-                                                               width: width))
-            renderer.scale = scale
+    /// The edited chat as pictures as wide as the screen, at the screen's scale.
+    static func render(rows: [ShotMessage], look: ShotLook, covers: [String: ShotCover]) -> [UIImage] {
+        let width = UIScreen.main.bounds.width
+        let places = ShotPlacement.of(rows)
+        return plan(rows: rows, look: look).pages.compactMap { page in
+            guard let first = page.first else { return nil }
+            var pagePlaces = page.map { places[$0] }
+            pagePlaces[0].showDay = true
+            pagePlaces[0].joinsPrev = false
+            pagePlaces[0].showName = rows[first].senderName != nil
+            let renderer = ImageRenderer(content: ShotPageView(rows: page.map { rows[$0] }, places: pagePlaces,
+                                                               look: look, covers: covers, width: width))
+            renderer.scale = UIScreen.main.scale
             renderer.isOpaque = true
             return renderer.uiImage
         }
@@ -83,10 +90,10 @@ struct ShotPageView: View {
         return ceil(size.height)
     }
 
-    // MARK: Save and share
+    // MARK: Save
 
-    /// Saves the pictures to Photos with add-only access, the same permission the app already asks
-    /// for when it saves photos from a chat. Reports the result in the app's own toast.
+    /// Saves the pictures to Photos with add-only access, the permission the app already asks for
+    /// when it saves photos from a chat. Reports the result in the app's own toast.
     static func save(_ images: [UIImage]) async {
         guard !images.isEmpty else { return }
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
@@ -102,19 +109,5 @@ struct ShotPageView: View {
         } catch {
             ToastNotice.show("Couldn't save to Photos. Try again.")
         }
-    }
-
-    /// The system share sheet, over whatever is on top (the editor itself).
-    static func share(_ images: [UIImage]) {
-        guard !images.isEmpty else { return }
-        var top = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
-        while let p = top?.presentedViewController { top = p }
-        guard let top else { return }
-        let vc = UIActivityViewController(activityItems: images, applicationActivities: nil)
-        vc.popoverPresentationController?.sourceView = top.view
-        vc.popoverPresentationController?.sourceRect = CGRect(x: top.view.bounds.midX,
-                                                             y: top.view.bounds.maxY - 80, width: 1, height: 1)
-        top.present(vc, animated: true)
     }
 }
