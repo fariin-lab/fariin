@@ -323,6 +323,7 @@ struct ChatTransferPage: View {
         problem = nil
         stopAll()
         stage = .preparing
+        UIApplication.shared.isIdleTimerDisabled = true   // awake from the first step, not only the QR
         let me = uid
         work = Task {
             do {
@@ -334,8 +335,10 @@ struct ChatTransferPage: View {
                 UIApplication.shared.isIdleTimerDisabled = true   // the screen stays on while the code waits
                 startWatching(code, made: made, uid: me)
             } catch is CancellationError {
+                UIApplication.shared.isIdleTimerDisabled = false
                 stage = .idle
             } catch {
+                UIApplication.shared.isIdleTimerDisabled = false
                 problem = ChatTransfer.plain(error).errorDescription
                 Haptics.notify(.error)
                 stage = .idle
@@ -426,7 +429,7 @@ struct ChatReceiveView: View {
             started = true
             if startScanning { scanning = true }
         }
-        .onDisappear { work?.cancel() }
+        .onDisappear { work?.cancel(); UIApplication.shared.isIdleTimerDisabled = false }
     }
 
     private var icon: String {
@@ -486,8 +489,10 @@ struct ChatReceiveView: View {
     private func receive(_ code: ChatTransfer.Code) {
         let me = uid
         stage = .working(0, code.files)
+        UIApplication.shared.isIdleTimerDisabled = true   // a sleeping phone would pause the move
         work?.cancel()
         work = Task {
+            defer { UIApplication.shared.isIdleTimerDisabled = false }
             do {
                 let n = try await ChatTransfer.receive(code, uid: me) { done, total in
                     stage = .working(done, total)
