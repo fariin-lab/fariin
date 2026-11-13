@@ -300,7 +300,9 @@ enum DeliveryCursor {
         }
         let hasFile = [m.videoUrl, m.audioUrl, m.fileUrl, m.type == "gif" ? nil : m.imageUrl]
             .contains { !($0 ?? "").isEmpty }
-        if m.viewOnce { return hasFile }   // unopened view-once: waits for the tap
+        // Unopened view-once waits for the tap; one I SENT never opens here, so it never holds my mark
+        // (with Android, 2026-11-13).
+        if m.viewOnce { return hasFile && m.authorId != Auth.auth().currentUser?.uid }
         if let v = m.videoUrl, !v.isEmpty { return VideoCache.url(for: m.id) == nil }
         if let a = m.audioUrl, !a.isEmpty {
             return AudioCache.url(for: m.id) == nil && (m.clientId.map { AudioCache.url(for: $0) == nil } ?? true)
