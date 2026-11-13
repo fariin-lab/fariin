@@ -16,10 +16,40 @@ struct LiveShareSheet: View {
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
     @AppStorage("liveLocation.explained") private var explained = false
 
+    private func durationTile(_ m: Int, _ title: String) -> some View {
+        let on = minutes == m
+        let ink: Color = on ? .onFariinAction : .primary
+        return Button { minutes = m } label: {
+            VStack(spacing: 8) {
+                ZStack {
+                    Circle().stroke(ink.opacity(0.22), lineWidth: 3)
+                    Circle().trim(from: 0, to: m == 15 ? 0.25 : 1)
+                        .stroke(ink, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    if m == 480 { Circle().fill(ink).frame(width: 3, height: 3) }
+                }
+                .frame(width: 30, height: 30)
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(ink)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 14)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(on ? Color.fariinAction : Color(.secondarySystemBackground)))
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.15), value: on)
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Map(position: $camera) { UserAnnotation() }
+                Map(position: $camera) {
+                    if let c = fetcher.location {
+                        Annotation("", coordinate: c) { LivePhotoPin(url: ProfileStore.shared.me?.photoUrl, live: true) }
+                    } else {
+                        UserAnnotation()
+                    }
+                }
                     .frame(height: 220)
                     .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 if !explained {
@@ -29,12 +59,15 @@ struct LiveShareSheet: View {
                 }
                 Text("For how long?").font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Picker("For how long?", selection: $minutes) {
-                    Text("15 min").tag(15)
-                    Text("1 hour").tag(60)
-                    Text("8 hours").tag(480)
+                // Three tiles, each with a small clock ring (owner 2026-11-13: "something cool, not cheap").
+                HStack(spacing: 10) {
+                    durationTile(15, "15 min")
+                    durationTile(60, "1 hour")
+                    durationTile(480, "8 hours")
                 }
-                .pickerStyle(.segmented)
+                Text("Until \(Date().addingTimeInterval(TimeInterval(minutes * 60)).formatted(date: .omitted, time: .shortened))")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
                 TextField("Add a note", text: $note)
                     .padding(.horizontal, 14).frame(height: 44)
                     .background(Color(.secondarySystemBackground), in: Capsule())
@@ -75,6 +108,7 @@ struct LiveMapPage: View {
     let me: String
     let title: String
     var name: (String) -> String
+    var photo: (String) -> String? = { _ in nil }
     var onShareMine: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var spots: [LiveSpot] = []
@@ -94,11 +128,7 @@ struct LiveMapPage: View {
                     ForEach(spots) { s in
                         Annotation(s.uid == me ? "You" : name(s.uid),
                                    coordinate: CLLocationCoordinate2D(latitude: s.lat, longitude: s.lon)) {
-                            Circle().fill(Color.fariinAction)
-                                .frame(width: 34, height: 34)
-                                .overlay(Text(initial(s.uid)).font(.headline).foregroundStyle(Color.onFariinAction))
-                                .overlay(Circle().stroke(.white, lineWidth: 3))
-                                .shadow(radius: 3)
+                            LivePhotoPin(url: photo(s.uid), live: true)
                         }
                     }
                 }
@@ -124,7 +154,8 @@ struct LiveMapPage: View {
                                 .overlay(Text(initial(s.uid)).font(.subheadline.weight(.semibold)))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(s.uid == me ? "You" : name(s.uid)).font(.body.weight(.semibold))
-                                Text(updatedWords(s.updatedAt)).font(.footnote).foregroundStyle(.secondary)
+                                Text("\(updatedWords(s.updatedAt)) · \(LiveDocState.left(until: s.until, now: tick))")
+                                    .font(.footnote).foregroundStyle(.secondary)
                             }
                             Spacer()
                         }
@@ -207,5 +238,39 @@ struct LiveMapPage: View {
         if s < 60 { return "Updated just now" }
         let m = Int(s / 60)
         return m == 1 ? "Updated 1 min ago" : "Updated \(m) min ago"
+    }
+}
+
+/// A person on a live map: their photo in a white ring, a green ring breathing out of it while live.
+struct LivePhotoPin: View {
+    let url: String?
+    var live: Bool = true
+    @State private var image: UIImage?
+    @State private var breathe = false
+
+    var body: some View {
+        ZStack {
+            if live {
+                Circle().fill(Color(red: 0x34/255, green: 0xC7/255, blue: 0x59/255))
+                    .frame(width: 44, height: 44)
+                    .scaleEffect(breathe ? 1.6 : 1)
+                    .opacity(breathe ? 0 : 0.5)
+                    .onAppear {
+                        withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { breathe = true }
+                    }
+            }
+            Group {
+                if let image { Image(uiImage: image).resizable().scaledToFill() } else { Color(.systemGray4) }
+            }
+            .frame(width: 44, height: 44)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(.white, lineWidth: 3))
+            .shadow(radius: 3)
+        }
+        .task(id: url) {
+            guard let url, !url.isEmpty else { return }
+            image = ProfilePhotoLoader.shared.cachedAvatar(url)
+            if image == nil { image = await ProfilePhotoLoader.shared.avatar(url) }
+        }
     }
 }

@@ -2181,6 +2181,7 @@ struct ThreadView: View {
         }
         .fullScreenCover(isPresented: $liveMapOpen) {
             LiveMapPage(cid: cid, me: me, title: "Live Location", name: { personName($0) },
+                        photo: { $0 == me ? ProfileStore.shared.me?.photoUrl : conversation?.photos[$0] },
                         onShareMine: {
                             liveMapOpen = false
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { showLiveShare = true }
