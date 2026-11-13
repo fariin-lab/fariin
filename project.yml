@@ -188,15 +188,10 @@ targets:
             INAlternativeAppNamePronunciationHint: fah reen
           - INAlternativeAppName: Farin
             INAlternativeAppNamePronunciationHint: fa rin
-          - INAlternativeAppName: Fariin
-            INAlternativeAppNamePronunciationHint: fa ree in
           - INAlternativeAppName: Fereen
             INAlternativeAppNamePronunciationHint: feh reen
-          # Arabic and Spanish (owner 2026-11-12): how Fariin is written / said there.
-          - INAlternativeAppName: فرين
-            INAlternativeAppNamePronunciationHint: فرين
-          - INAlternativeAppName: Farín
-            INAlternativeAppNamePronunciationHint: fa rín
+          # ⛔ AT MOST 3 (ITMS-90626, builds 1166-1170 refused 2026-11-12): Apple counts every entry
+          # here as an English synonym. Arabic / Spanish names need their own lproj (not shipped).
         BGTaskSchedulerPermittedIdentifiers: [com.kulan.messenger.native.refresh]
     settings:
       base:
