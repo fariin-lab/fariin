@@ -235,55 +235,53 @@ answering within a day is often the difference between a fix and a rejection.
 ### Notes
 
 ```
-Fariin is an end-to-end encrypted 1-to-1 messenger. The Somali word "fariin" means "message".
+Fariin is a messenger: 1-to-1 chats and calls (end-to-end encrypted), groups, channels and 24-hour stories. The Somali word "fariin" means "message".
 
 SIGNING IN
-The app requires an account. Three ways in are offered: Sign in with Apple, Google,
-or email and password. Please use the email and password in the Sign-In Information
-field above.
+The app requires an account. Sign in with Apple, Google, or email and password are offered. Please use the email and password in the Sign-In Information field above.
 
 HOW TO TEST A CONVERSATION
-Messaging needs two accounts, because this is a 1-to-1 messenger with no public
-timeline. A second account has been prepared for you:
+A second account has been prepared for you:
 
   Username: ________________
 
   1. Sign in with the credentials above.
   2. Tap the compose button, type that username in the search field, open the chat.
-  3. A conversation is already waiting there. You can send text, photos, voice
-     messages, reactions and replies.
+  3. A conversation is already waiting there. You can send text, photos, videos, voice messages, reactions and replies.
 
-Note: because messages are end-to-end encrypted, a person can only be messaged after
-they have opened the app at least once, so that their public key is published. Both
-prepared accounts have done this.
+Note: 1-to-1 messages are end-to-end encrypted, so a person can only be messaged after they have opened the app once (their public key is published then). Both prepared accounts have done this.
 
-CALLS
-Open a chat and use the phone or video button in the header.
+CALLS (CallKit / VoIP push)
+Open a chat and tap the phone or video button in the header. Incoming calls ring through CallKit using VoIP push; the app only receives a VoIP push for a real incoming call.
+
+GROUPS AND CHANNELS
+Chats tab, compose button, New Group or New Channel. Group and channel messages are NOT end-to-end encrypted; they stay on our server so new members can read the history, and the app says so in the group's info.
 
 STORIES
-On the Chats tab, tap "My Story +". Stories expire after 24 hours and the poster
-chooses the audience.
+Chats tab, "My Story +". Stories expire after 6 to 48 hours (24 by default); the poster chooses the audience.
+
+CHAT BACKUP (iCloud)
+Settings, Chat Backup, Back Up Now. 1-to-1 chats are saved to the reviewer's own iCloud (CloudKit private database), locked on the device with a key in iCloud Keychain and an optional backup password. We cannot read the backup.
+
+MOVE CHATS TO A NEW PHONE (QR)
+Settings, Chats, Transfer Chats. The old phone shows a QR code; the new phone scans it ("This is my new phone"). The chats are locked with a key that exists only in the QR code. Needs two devices.
+
+SIRI
+After making one Fariin call to a person, say "Call <name> on Fariin" or "Video call <name> on Fariin". Calls from the Phone app's Recents also open in Fariin.
 
 SAFETY AND USER-GENERATED CONTENT (Guideline 1.2)
-  · Agreement: the onboarding screen requires agreeing to the Terms, which state a
-    zero-tolerance policy for objectionable content and abusive users.
-    https://fariin.com/terms
-  · Block: from a contact's profile, or from the block bar inside a chat.
-  · Report content: long-press any incoming message, then Report, or Report and Block.
-  · Report users: open a contact's profile, then Report.
-  · Moderation: reports arrive in a server-side collection and are reviewed within 24
-    hours by a moderator using a private console. Offending stories are removed and
-    offending accounts are banned server-side, which stops them posting anything other
-    people can find.
-  · Published contact: support@fariin.com and abuse@fariin.com, shown on
-    https://fariin.com/support and in the app under Settings, Help and About.
+  - Agreement: sign-up requires agreeing to the Terms, which state a zero-tolerance policy for objectionable content and abusive users. https://fariin.com/terms
+  - Block: from a person's profile, or from the block bar inside a chat.
+  - Report content: long-press any incoming message, a group or channel post, or a story, then Report (or Report and Block).
+  - Report users, groups and channels: from their profile or info page, then Report.
+  - Moderation: reports reach a moderation queue reviewed within 24 hours. Offending content is removed and offending accounts, groups and channels are suspended server-side. Usernames of brands, countries and governments are reserved.
+  - Contact: the in-app Help (Settings, Help) and the contact form at https://fariin.com/help.
 
 ACCOUNT DELETION (Guideline 5.1.1(v))
 Settings, Account, Delete Account. It permanently deletes the account and its data.
 
 ENCRYPTION
-Standard published algorithms only, via libsodium (Curve25519, XSalsa20, ChaCha20,
-Poly1305). No proprietary cryptography.
+Standard published algorithms only, via libsodium (Curve25519, XSalsa20, ChaCha20, Poly1305, Argon2id for the optional backup password). No proprietary cryptography.
 ```
 
 ---
