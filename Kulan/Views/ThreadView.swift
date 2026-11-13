@@ -6161,6 +6161,10 @@ struct ThreadView: View {
         guard !preview, guest == nil, !OfficialChannel.isOfficial(cid) else { return false }
         if conversation?.isChannel == true { return false }
         if repo.noScreenshots || cachedConv?.noScreenshots == true || conversation?.isRestricted == true { return false }
+        // ⛔ ANY PROTECTION OFF-LIMITS (owner 2026-11-13: "Restricted chats, make sure it's safe").
+        // Restricted Chat already sets noScreenshots for both people; a group's Protect Content
+        // (no forwarding / no saving) is checked too, since the editor makes a shareable picture.
+        if repo.noForwarding || repo.noSaving || cachedConv?.noForwarding == true || cachedConv?.noSaving == true { return false }
         return true
     }
 
