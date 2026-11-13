@@ -934,6 +934,10 @@ struct ThreadView: View {
                     .animation(animated ? keyboard.systemAnimation : nil, value: lift)
                 }
             }
+            // Customize screenshot (owner 2026-11-13): offered for five seconds after a screenshot.
+            // On the same layer and lift as the jump arrow, so it sits above the composer and rides
+            // the keyboard with it (it was on the list's layer and came down over the bar).
+            .overlay(alignment: .bottom) { screenshotOfferOverlay }
             // owner 2026-10-27: no "recording" bubble over the list any more; the header says
             // "recording…" where it says "typing…" (presenceSubtitle).
             // In-chat search as a list ("Show as List"): over the conversation, under the bars.
@@ -1261,8 +1265,6 @@ struct ThreadView: View {
                     .allowsHitTesting(false)
                 }
             }
-            // Customize screenshot (owner 2026-11-13): offered for five seconds after a screenshot.
-            .overlay(alignment: .bottom) { screenshotOfferOverlay }
     }
 
     // Floating jump-to-bottom button — appears when scrolled up, with a count of messages that arrived
@@ -6176,7 +6178,8 @@ struct ThreadView: View {
         let snap = ScreenshotSnapshot.make(
             cid: cid, messages: messages, me: me, isGroup: isGroup,
             readMillis: repo.otherLastReadMillis, deliveredMillis: repo.otherDeliveredMillis,
-            iBlocked: repo.iBlocked, name: personName, dayLabel: dayLabel)
+            iBlocked: repo.iBlocked, name: personName, dayLabel: dayLabel,
+            rowModels: uikitModels)   // the chat's real rows, drawn as they are (owner 2026-11-13)
         guard !snap.messages.isEmpty else { return }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { screenshotOffer = snap }
         let shown = snap.id
@@ -6187,15 +6190,16 @@ struct ThreadView: View {
 
     @ViewBuilder private var screenshotOfferOverlay: some View {
         if let snap = screenshotOffer {
-            LiftReader(box: composerLift) { lift, _ in
-                // A dark bar the width of the composer, just above it (owner's reference video).
+            LiftReader(box: composerLift) { lift, animated in
+                // A glass bar the width of the composer, 8 pt above it (owner's reference video).
                 ShotNoticeBar(title: "Screenshot saved", detail: "Remove messages or hide text",
-                              action: "Edit") {
+                              action: "Customize") {
                     screenshotOffer = nil
                     screenshotEditor = snap
                 }
                 .padding(.horizontal, composerSide)
                 .padding(.bottom, lift + 8)
+                .animation(animated ? keyboard.systemAnimation : nil, value: lift)
             }
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
