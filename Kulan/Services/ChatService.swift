@@ -1091,7 +1091,9 @@ enum ChatService {
         if let snap = try? await convRef.getDocument(),
            let admins = snap.data()?["admins"] as? [String] {
             let owner = snap.data()?["createdBy"] as? String
-            if !admins.contains(promoted), admins.filter({ $0 != owner }).count >= Limits.groupAdmins {
+            // 0 = no limit (owner 2026-11-13: keep today's behaviour unless the Controls page sets one).
+            if Limits.groupAdmins > 0, !admins.contains(promoted),
+               admins.filter({ $0 != owner }).count >= Limits.groupAdmins {
                 throw LimitReached(message: "A group can have up to \(Limits.groupAdmins) admins.")
             }
         }
