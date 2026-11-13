@@ -1201,7 +1201,9 @@ final class StoriesService {
         inFlight.compactMap { p in
             guard p.image != nil, p.tag.groupId == nil else { return nil }   // a group post is the group's
             var s = Story(id: p.id, authorUid: uid, createdAt: p.startedAt,
-                         expiresAt: p.startedAt.addingTimeInterval(24 * 3600),
+                         // Remote limit storyExpiryHours (default 24): how long the phone shows
+                         // the posting card. The real document carries its own expiresAt.
+                         expiresAt: p.startedAt.addingTimeInterval(TimeInterval(Limits.storyExpiryHours) * 3600),
                          mediaUrl: p.url, allowsReplies: false,
                          caption: p.caption,
                          audienceLabel: p.tag.label, oneTime: p.tag.oneTime)

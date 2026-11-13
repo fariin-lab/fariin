@@ -169,6 +169,10 @@ struct ImageViewerView: View {
 
     private var message: Message { gallery.first { $0.id == current } ?? gallery[0] }
     private var isMine: Bool { message.authorId == (AuthService.shared.uid ?? "") }
+    /// Remote limit (flags 2026-11-13, deleteForEveryoneHours): the same window as the bubble's
+    /// Delete for Everyone (ThreadView.canDeleteForEveryone). No window in a channel, nor for a group
+    /// admin who may remove messages.
+    private var mayDeleteForEveryone: Bool { isMine && ChatService.ownDeleteForEveryoneOpen(message, cid: cid) }
 
     // Header title: "You" for my own photo, else the other person's name.
     private var senderName: String {
@@ -310,7 +314,7 @@ struct ImageViewerView: View {
         .alert("Delete this photo?", isPresented: $confirmDelete) {
             // Same options as the message bubble's delete (user report: the photo delete offered only
             // one option). Own photo → Everyone + Me; Delete for Me hides locally via the conversation.
-            if isMine {
+            if mayDeleteForEveryone {
                 Button("Delete for Everyone", role: .destructive) {
                     // deleteMessage routes album pages (synthetic "<parentId>-<i>" ids) to a real
                     // album-item removal — the raw id used to target a nonexistent doc, which the
@@ -327,8 +331,8 @@ struct ImageViewerView: View {
             }
             if let onDeleteForMe {
                 Button("Delete for Me", role: .destructive) { onDeleteForMe(message); dismiss() }
-            } else if !isMine {
-                // Fallback (no repo wired): received photo hides locally.
+            } else if !mayDeleteForEveryone {
+                // Fallback (no repo wired): a received photo, or my own past the window, hides locally.
                 Button("Delete for Me", role: .destructive) {
                     HiddenMessages.hide(message.id); dismiss()
                 }

@@ -6423,7 +6423,10 @@ struct ThreadView: View {
 
     private func canDeleteForEveryone(_ m: Message) -> Bool {
         guard m.sendState == nil, !m.deleted, !m.isCall else { return false }
-        if m.authorId == me { return true }
+        // Remote limit (flags 2026-11-13, deleteForEveryoneHours, default 48): my own message goes
+        // for everyone only inside the window (no window in a channel or for a group admin who may
+        // remove messages; see ChatService.ownDeleteForEveryoneOpen).
+        if m.authorId == me { return ChatService.ownDeleteForEveryoneOpen(m, cid: cid) }
         guard let c = conversation, c.isGroup, c.adminCan(me, .deleteMessages),
               !isSyntheticAlbumChild(m) else { return false }
         return c.isOwner(me) || !c.isOwner(m.authorId)

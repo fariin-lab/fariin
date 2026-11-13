@@ -307,6 +307,13 @@ struct ForwardPicker: View {
             onPick(c)
             return
         }
+        // Remote limit (flags 2026-11-13, forwardChatsAtOnce, default 5): how many chats one forward
+        // may go to. Said here, at the tick that would pass it, like the refusals above.
+        let most = Limits.forwardChatsAtOnce
+        if selected.count >= most {
+            refusedNote = "You can forward to up to \(most) chats at once."
+            return
+        }
         selected.insert(id)
     }
 

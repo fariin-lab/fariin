@@ -222,8 +222,9 @@ enum ChatService {
         let ref = db.collection("conversations").document()
         var data: [String: Any] = [
             "type": "group",
-            // The same 100 the rename keeps to, and no name made of line breaks (audit 2026-10-20).
-            "title": String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100)),
+            // The same cap the rename keeps to (remote limit groupNameChars, default 100), and no
+            // name made of line breaks (audit 2026-10-20).
+            "title": String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Limits.groupNameChars)),
             "users": users,
             "admins": [uid],
             "createdBy": uid,
@@ -1067,7 +1068,7 @@ enum ChatService {
 
     /// Rename a group (admin) + system message.
     static func renameGroup(cid: String, title: String) async throws {
-        let t = String(title.trimmingCharacters(in: .whitespaces).prefix(100))
+        let t = String(title.trimmingCharacters(in: .whitespaces).prefix(Limits.groupNameChars))   // remote limit groupNameChars
         guard !t.isEmpty else { return }
         let convRef = db.collection("conversations").document(cid)
         try await convRef.updateData(["title": t, "updatedAt": FieldValue.serverTimestamp()])
@@ -1093,6 +1094,15 @@ enum ChatService {
         // these (the rules want Remove members for them); for anyone else they stay, harmlessly,
         // since admins are exempt (audit 2026-10-20: a delegated admin's promote was refused).
         let conv = await MainActor.run { ConversationsRepository.shared.conversations.first { $0.id == cid } }
+        // Remote limit (flags 2026-11-13, groupAdminsMax, default 20): a group with that many admins
+        // takes no new one. The owner is not counted. Every promote door shows this sentence.
+        if let conv, !conv.isChannel, !conv.admins.contains(promoted) {
+            let most = Limits.groupAdmins
+            if conv.admins.filter({ !conv.isOwner($0) }).count >= most {
+                throw NSError(domain: "ChatService", code: 41,
+                              userInfo: [NSLocalizedDescriptionKey: "A group can have at most \(most) admins."])
+            }
+        }
         let me = uid
         if conv?.isOwner(me) == true || conv?.adminCan(me, .banUsers) == true {
             data["restrictedFlags.\(promoted)"] = FieldValue.delete()
@@ -3714,6 +3724,16 @@ enum ChatService {
     static func voiceDurationLabel(_ seconds: Double) -> String {
         let d = MediaDuration.whole(seconds, rounded: true)
         return String(format: "%d:%02d", d / 60, d % 60)
+    }
+
+    /// Remote limit (flags 2026-11-13, deleteForEveryoneHours, default 48): whether MY OWN message
+    /// `m` in `cid` may still go for everyone. Inside the window always; past it only in a channel
+    /// (no window there, as with Edit) or as a group admin who may remove messages. The same answer
+    /// ThreadView.canDeleteForEveryone gives the bubble, for the photo viewer, video screen and gallery.
+    static func ownDeleteForEveryoneOpen(_ m: Message, cid: String) -> Bool {
+        if Date().timeIntervalSince(m.createdAt) < Limits.deleteForEveryoneSeconds { return true }
+        guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return false }
+        return c.isChannel || (c.isGroup && c.adminCan(uid, .deleteMessages))
     }
 
     /// Delete for Everyone. Returns false when the server refused, so the caller can say so.

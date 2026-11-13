@@ -1184,7 +1184,10 @@ struct MediaGalleryView: View {
         let picked = expandedAll.filter { selection.contains($0.id) }
         // My own album photos picked one by one are hidden here like anyone else's: the server
         // knows only the album message, and a delete by the tile's id was refused (audit 2026-10-20).
-        let mine = Set(picked.filter { $0.authorId == me && $0.id == parentMessageId($0.id) }.map(\.id))
+        // Past the delete-for-everyone window (remote limit deleteForEveryoneHours) my own goes the
+        // same way as theirs: hidden on this phone only.
+        let mine = Set(picked.filter { $0.authorId == me && $0.id == parentMessageId($0.id)
+                                       && ChatService.ownDeleteForEveryoneOpen($0, cid: cid) }.map(\.id))
         let theirs = Set(picked.map(\.id)).subtracting(mine)
         // Hidden BEFORE the awaits, so the grid can drop everything in one pass below rather than
         // theirs vanishing a beat ahead of mine.

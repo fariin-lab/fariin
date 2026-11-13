@@ -293,6 +293,11 @@ final class BlockList {
         let cid = ChatService.convId(me, other)
         do {
             if value {
+                // Remote limit (flags 2026-11-13, blockedUsersMax, default 1000): a full list takes no
+                // new name. The caller's "couldn't block" message covers it, as for a refused write.
+                if !current.contains(other), current.entries.count >= Limits.blockedUsers {
+                    return false
+                }
                 if !current.contains(other) {
                     try await listRef.setData(["at": FieldValue.serverTimestamp()])
                 }

@@ -904,7 +904,12 @@ struct ContactInfoView: View {
         .alert("Couldn't block", isPresented: $blockFailed) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Check your connection and try again.")
+            // A full list (remote limit blockedUsersMax) is refused by BlockList before any write.
+            if BlockList.snapshot.entries.count >= Limits.blockedUsers {
+                Text("You can block up to \(Limits.blockedUsers) people. Unblock someone first.")
+            } else {
+                Text("Check your connection and try again.")
+            }
         }
         .alert("Couldn't update", isPresented: $glowWriteFailed) {
             Button("OK", role: .cancel) {}

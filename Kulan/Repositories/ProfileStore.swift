@@ -941,6 +941,15 @@ final class ProfileStore {
         }.value
         guard let circleData = encoded.0 else { return }
         let posterData = encoded.1
+        // Remote limit (flags 2026-11-13, profilePhotoMB, default 8, the Storage rule's own ceiling):
+        // checked on the encoded file, which is what is uploaded. At the default no 640 / 1280 JPEG
+        // comes near it; a lower value set on the Controls page refuses here with a plain sentence
+        // instead of a Storage error.
+        let most = Limits.profilePhotoBytes
+        if circleData.count > most || (posterData?.count ?? 0) > most {
+            throw NSError(domain: "ProfileStore", code: 8,
+                          userInfo: [NSLocalizedDescriptionKey: "This photo is too large. The limit is \(most / (1024 * 1024)) MB."])
+        }
 
         let circleURL: String
         var posterURL: String?

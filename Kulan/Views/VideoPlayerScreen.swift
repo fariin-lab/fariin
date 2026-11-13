@@ -239,7 +239,8 @@ struct VideoPlayerScreen: View {
             Text("The server refused the delete. The video is still there for both of you.")
         }
         .alert("Delete this video?", isPresented: $confirmDelete) {
-            if isMine {
+            // Remote limit deleteForEveryoneHours: the bubble's window (ChatService.ownDeleteForEveryoneOpen).
+            if isMine && ChatService.ownDeleteForEveryoneOpen(message, cid: cid) {
                 Button("Delete for Everyone", role: .destructive) {
                     Task {
                         if await ChatService.deleteMessage(cid: cid, messageId: message.id) {
@@ -252,7 +253,7 @@ struct VideoPlayerScreen: View {
             }
             if let onDeleteForMe {
                 Button("Delete for Me", role: .destructive) { onDeleteForMe(message); dismiss() }
-            } else if !isMine {
+            } else if !(isMine && ChatService.ownDeleteForEveryoneOpen(message, cid: cid)) {
                 Button("Delete for Me", role: .destructive) { HiddenMessages.hide(message.id); dismiss() }
             }
             Button("Cancel", role: .cancel) {}

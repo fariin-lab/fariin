@@ -243,7 +243,9 @@ struct NewGroupView: View {
                                 Button("Remove Photo", role: .destructive) { avatarData = nil }
                             }
                         }
-                    TextField("Group Name", text: $groupName)
+                    // Remote limit groupNameChars (default 100): the field stops at the cap.
+                    TextField("Group Name", text: Binding(get: { groupName },
+                                                          set: { groupName = String($0.prefix(Limits.groupNameChars)) }))
                         .font(.title3)
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
@@ -464,7 +466,7 @@ struct NewGroupView: View {
 
     private func create() {
         guard !creating else { return }   // the button stays tappable-looking while it works
-        let name = String(groupName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
+        let name = String(groupName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Limits.groupNameChars))
         guard !name.isEmpty else { return }
         // "Create new groups" switched off from the admin panel while this page was open (owner
         // 2026-10-18). The rules refuse it anyway; this says so in words instead of "Try again".
