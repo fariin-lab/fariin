@@ -18,7 +18,9 @@ struct ScreenshotEditorView: View {
     @State private var theme: ShotTheme = .current
     /// nil until the person flips it: the picture starts in the appearance the chat was in.
     @State private var darkChoice: Bool?
-    @State private var showLogo = true
+    /// ⛔ ALWAYS ON (owner 2026-11-13: "the user can't remove my logo and name"). Every saved or
+    /// shared picture carries the Fariin logo and name; there is no switch for it.
+    private let showLogo = true
     @State private var busy = false
 
     private var dark: Bool { darkChoice ?? (scheme == .dark) }
@@ -115,9 +117,6 @@ struct ScreenshotEditorView: View {
         VStack(spacing: 12) {
             hintRow
             ShotThemeRow(cid: snapshot.cid, dark: dark, selected: $theme)
-            Toggle("Show Fariin logo", isOn: $showLogo)
-                .font(.subheadline)
-                .padding(.horizontal, 4)
             actions(look)
         }
         .padding(16)
