@@ -3085,17 +3085,19 @@ enum MessageRowLayout {
         // on a row of its own under the place left an empty band beside it. The time now ends the
         // place's own row where the chevron was (the whole card is the tap, so the chevron was
         // only a hint), and the bubble loses that second row.
-        let pinW: CGFloat = 22
+        // Live location has no mark at all (owner 2026-11-13: the green / red dot read as "AI slop").
+        let pinW: CGFloat = l.live == nil ? 22 : 0
         let labelH = lineSizeOf(labelAttr).height
         let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         let metaSize = BubbleText.lineSize(metaAttr)
-        let rowH = max(pinW, labelH)
+        let rowH = max(pinW, labelH, 22)
         let rowTop = innerY + pad
-        let labelW = max(1, bubbleW - pad * 2 - pinW - gap - gap - metaSize.width)
+        let pinGap: CGFloat = pinW > 0 ? gap : 0
+        let labelW = max(1, bubbleW - pad * 2 - pinW - pinGap - gap - metaSize.width)
         let plan = LocationPlan(
             map: map,
             pin: CGRect(x: pad, y: rowTop + (rowH - pinW) / 2, width: pinW, height: pinW),
-            label: CGRect(x: pad + pinW + gap, y: rowTop + (rowH - labelH) / 2,
+            label: CGRect(x: pad + pinW + pinGap, y: rowTop + (rowH - labelH) / 2,
                           width: labelW, height: labelH),
             labelAttr: labelAttr,
             chevron: .zero)

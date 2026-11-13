@@ -91,11 +91,8 @@ final class LocationBubbleView: UIView {
         label.frame = plan.label
         label.attributedText = plan.labelAttr
         pin.frame = plan.pin
-        if let live = l.live {
-            // A dot, green while live, grey once ended.
-            pin.image = UIImage(systemName: "circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 9))
-            pin.tintColor = live ? UIColor(red: 0x34/255, green: 0xC7/255, blue: 0x59/255, alpha: 1) : .systemGray
-            pin.contentMode = .center
+        if l.live != nil {
+            pin.image = nil   // live location: no dot (owner 2026-11-13)
         } else {
             pin.contentMode = .scaleAspectFit
             // Palette, so the pin is a RED head on a light disc rather than one flat colour.
