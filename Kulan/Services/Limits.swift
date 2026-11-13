@@ -73,7 +73,16 @@ enum Limits {
     /// For scale: most chat clips are under two minutes, which at the exporter's 2 Mbps target is
     /// about 30 MB. 64 covers roughly three and a half minutes at full quality, and anything longer
     /// degrades smoothly instead of failing.
-    static let videoMessageBytes = 64 * 1024 * 1024                // 64 MB — storage.rules chat/
+    ///
+    /// ⛔ OWNER 2026-11-13: SENDING allows up to 100 MB, the COMPRESSION is unchanged. His 10 minute
+    /// clip came out of the standard export at 68.2 MB (the encoder overshoots its 62 MB target on
+    /// long clips) and was refused at 64. The export still aims at `videoExportTargetBytes` (the old
+    /// 62 MB), so no clip is encoded differently; only the cap that refused it moved. Live storage
+    /// rule chat/ is < 102 MB (100 + room for the encryption bytes). Memory peak for a 100 MB clip
+    /// is about 300 MB (the three copies above), his decision.
+    static let videoMessageBytes = 100 * 1024 * 1024               // 100 MB — storage.rules chat/ < 102 MB
+    /// What the exporter aims for at most (unchanged since 64 MB was the cap: 64 - 2).
+    static let videoExportTargetBytes = 62 * 1024 * 1024
     /// The recording ceiling, and `AudioRecorder.maxDuration` IS this value rather than a copy of it.
     /// It used to be neither: this constant was referenced nowhere in the app and the recorder
     /// enforced its own 600, so the documented cap was three times the real one and anybody building

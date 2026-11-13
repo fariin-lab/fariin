@@ -210,7 +210,7 @@ enum VideoTranscoder {
         // `rate` overrides both caps for a caller that must not lose a generation of quality: a repost
         // re-encodes media that was already compressed once (reference app: 3.7-5.8 Mbps for stories).
         let bytesPerSecond: Double = rate ?? (hd ? 500_000 : 250_000)        // ≈ 4 Mbps / 2 Mbps, audio included
-        let ceiling = Int64(Limits.videoMessageBytes - 2 * 1024 * 1024)
+        let ceiling = Int64(Limits.videoExportTargetBytes)   // unchanged 62 MB (owner 2026-11-13)
         let wanted = Int64(max(1, duration) * bytesPerSecond)
         session.fileLengthLimit = min(ceiling, wanted)
         // STRIP THE METADATA. An iPhone recording carries the GPS coordinates it was taken at, the
@@ -393,7 +393,7 @@ enum VideoTranscoder {
 
         // The same ceiling the export path computes, so passthrough can never post a file the
         // re-encode would have shrunk (and Storage would then refuse).
-        let ceiling = min(Int64(Limits.videoMessageBytes - 2 * 1024 * 1024),
+        let ceiling = min(Int64(Limits.videoExportTargetBytes),
                           max(Int64(duration * 400_000), 2 * 1024 * 1024))
         guard let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
               Int64(bytes) <= ceiling else { return nil }
