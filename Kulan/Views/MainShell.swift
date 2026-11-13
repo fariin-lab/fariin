@@ -2725,7 +2725,8 @@ struct ChatsView: View {
             activity: activityRow,
             onOpenActivity: { path.append(ActivityRoute.page) },
             activityPinned: ActivityStore.shared.pinned,
-            onToggleActivityPin: { ActivityStore.shared.setPinned(!ActivityStore.shared.pinned) }
+            onToggleActivityPin: { ActivityStore.shared.setPinned(!ActivityStore.shared.pinned) },
+            topCard: ChatCards.pick(uid: me, hidden: chatFilter != 0 || !searchTrimmed.isEmpty || searchPresented)
         )
     }
 
