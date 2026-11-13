@@ -4,10 +4,11 @@ import UIKit
 // Customize screenshot (owner 2026-11-13): the editor sheet that opens from the notice after a
 // screenshot. Layout after his reference video: a header with close, title and day/night; a
 // rounded card with the chat on the chosen background; round theme swatches; one Share button.
+// The sheet is as tall as what it holds, never taller than the large size.
 //
-// Swipe a message left to take it out (a small Undo bar comes up for a moment). Touch and hold a
-// message's words to hide them. Share renders the same views offscreen (`ScreenshotExporter`) and
-// opens the app's own Share with sheet to send them as photos, or save them.
+// The card shows the chat's REAL rows (`ShotRealRow`). Swipe a message left to take it out (a small
+// Undo capsule comes up for a moment). Touch and hold a message's words to hide them. Share renders
+// the pictures (`ScreenshotExporter`) and opens the app's own Share with sheet.
 
 /// The rendered pictures, handed to the Share with sheet.
 private struct ShotOutgoing: Identifiable {
@@ -32,8 +33,17 @@ struct ScreenshotEditorView: View {
     @State private var plan = ShotPlan()
     @State private var undoFor: String?
     @State private var outgoing: ShotOutgoing?
+    @State private var rendering = false
+    /// The sheet's height, measured from its content (owner 2026-11-13: no empty space under the
+    /// button). Starts near the large size so the first frame is not cramped.
+    @State private var contentHeight: CGFloat = 640
 
     static let side: CGFloat = 16
+    /// The sheet's height counts the home-indicator area too; the measured content does not.
+    private static var bottomInset: CGFloat {
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first?.safeAreaInsets.bottom ?? 0
+    }
 
     private var dark: Bool { darkChoice ?? (scheme == .dark) }
     private var look: ShotLook { ShotLook.resolve(theme, cid: snapshot.cid, dark: dark) }
@@ -41,28 +51,33 @@ struct ScreenshotEditorView: View {
         let gone = Set(removed)
         return snapshot.messages.filter { !gone.contains($0.id) }
     }
-    private var planKey: String { "\(removed.count)|\(theme.id)|\(dark)" }
+    private var planKey: String { "\(removed.count)|\(dark)" }
 
     var body: some View {
-        let look = self.look
+        content(look)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { contentHeight = $0 }
+            .frame(maxHeight: .infinity, alignment: .top)
+            .overlay(alignment: .bottom) { undoBar }
+            .presentationDetents([.height(contentHeight + Self.bottomInset)])
+            .presentationDragIndicator(.visible)
+            .task(id: planKey) { plan = ScreenshotExporter.plan(rows: rows, look: look, cid: snapshot.cid) }
+            .sheet(item: $outgoing) { out in
+                SendContactSheet(contactText: "", pictures: out.images,
+                                 onDispatched: { dismiss() }, onSent: onSent)
+            }
+    }
+
+    private func content(_ look: ShotLook) -> some View {
         VStack(spacing: 0) {
             header
-            ShotCard(rows: rows, look: look, covers: $covers, onRemove: remove)
+            ShotCard(rows: rows, look: look, cid: snapshot.cid, covers: $covers, onRemove: remove)
                 .padding(.top, 22)
             ShotThemeRow(cid: snapshot.cid, dark: dark, selected: $theme)
                 .padding(.top, 20)
             Divider().padding(.horizontal, Self.side).padding(.top, 16)
-            shareButton(look).padding(.top, 20)
-            Spacer(minLength: 0)
+            shareButton(look).padding(.top, 20).padding(.bottom, 12)
         }
-        .overlay(alignment: .bottom) { undoBar }
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
-        .task(id: planKey) { plan = ScreenshotExporter.plan(rows: rows, look: look) }
-        .sheet(item: $outgoing) { out in
-            SendContactSheet(contactText: "", pictures: out.images,
-                             onDispatched: { dismiss() }, onSent: onSent)
-        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func remove(_ id: String) {
@@ -112,48 +127,74 @@ struct ScreenshotEditorView: View {
 
     private func shareButton(_ look: ShotLook) -> some View {
         let p = plan.pictureCount
-        return Button {
-            let images = ScreenshotExporter.render(rows: rows, look: look, covers: covers)
-            if !images.isEmpty { outgoing = ShotOutgoing(images: images) }
-        } label: {
-            Text(p == 1 ? "Share Picture" : "Share \(p) Pictures")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, minHeight: 52)
-                .background(Theme.defaultBubble(scheme == .dark), in: Capsule())
-                .contentShape(Capsule())
+        return Button { share(look) } label: {
+            ZStack {
+                Text(p == 1 ? "Share Picture" : "Share \(p) Pictures").opacity(rendering ? 0 : 1)
+                if rendering { ProgressView().tint(.white) }
+            }
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(Theme.defaultBubble(scheme == .dark), in: Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(rows.isEmpty)
+        .disabled(rows.isEmpty || rendering)
         .opacity(rows.isEmpty ? 0.5 : 1)
         .padding(.horizontal, 30)
     }
 
+    private func share(_ look: ShotLook) {
+        guard !rendering else { return }
+        rendering = true
+        let rows = rows, covers = covers, cid = snapshot.cid
+        Task {
+            let images = await ScreenshotExporter.render(rows: rows, look: look, covers: covers, cid: cid)
+            rendering = false
+            if !images.isEmpty { outgoing = ShotOutgoing(images: images) }
+        }
+    }
+
+    /// A small glass capsule, centred, for a moment after a message is taken out.
     @ViewBuilder private var undoBar: some View {
         if undoFor != nil {
-            ShotNoticeBar(title: "Message removed", detail: nil, action: "Undo", onAction: undo)
-                .padding(.horizontal, Self.side)
-                .padding(.bottom, 92)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+            HStack(spacing: 14) {
+                Text("Message removed").font(.system(size: 15, weight: .medium))
+                Button("Undo", action: undo)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.defaultBubble(scheme == .dark))
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 40)
+            .glassEffect(.regular, in: Capsule())
+            .padding(.bottom, 96)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 }
 
-/// The rounded card with the chat in it. It scrolls when the messages do not fit; the footer
-/// stays at its bottom edge, as it sits at the bottom of every saved picture.
+/// The rounded card with the chat in it. As tall as its messages up to a cap, then it scrolls;
+/// the footer stays at its bottom edge, as it sits at the bottom of every saved picture.
 private struct ShotCard: View {
     let rows: [ShotMessage]
     let look: ShotLook
+    let cid: String
     @Binding var covers: [String: ShotCover]
     let onRemove: (String) -> Void
+    @State private var messagesHeight: CGFloat = 0
 
     private static let corner: CGFloat = 32
     private var width: CGFloat { UIScreen.main.bounds.width - ScreenshotEditorView.side * 2 }
+    private var maxHeight: CGFloat { min(width + 40, UIScreen.main.bounds.height * 0.52) }
+    private var footerBlock: CGFloat {
+        ScreenshotExporter.footerHeight + ScreenshotExporter.footerSpacing + ScreenshotExporter.footerBottom
+    }
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+        let height = min(maxHeight, max(160, messagesHeight))
         messages
-            .frame(width: width, height: width + 40)
+            .frame(width: width, height: height)
             .overlay(alignment: .bottom) {
                 ShotFooter(look: look).padding(.bottom, ScreenshotExporter.footerBottom)
             }
@@ -169,31 +210,31 @@ private struct ShotCard: View {
                 if rows.isEmpty { emptyLine }
                 ForEach(items) { item in
                     ShotEditableRow(message: item.m, look: look, place: item.place, rowWidth: width,
-                                    cover: covers[item.id] ?? ShotCover(),
-                                    edit: edit(item.id))
+                                    cid: cid, cover: covers[item.id] ?? ShotCover(), edit: edit(item.id))
                 }
             }
             .padding(.top, ScreenshotExporter.pageTop)
-            .padding(.bottom, ScreenshotExporter.footerHeight + ScreenshotExporter.footerSpacing
-                     + ScreenshotExporter.footerBottom)
+            .padding(.bottom, footerBlock)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { messagesHeight = $0 }
         }
         .defaultScrollAnchor(.bottom)
         .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.basedOnSize)
         .mask { edgeFade }
     }
 
     private var emptyLine: some View {
         Text("No messages left").font(.subheadline).foregroundStyle(look.chipText)
-            .padding(.top, 120)
+            .padding(.top, 50)
     }
 
     /// Soft top and bottom edges, so a cut-off message reads as "there is more". Only on screen:
     /// the saved pictures are drawn without them.
     private var edgeFade: some View {
         VStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 18)
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
             Color.black
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 40)
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 30)
         }
     }
 
@@ -220,30 +261,31 @@ private struct ShotRowEdit {
     let toggleWhole: () -> Void
 }
 
-/// A message in the editor: the same row the picture draws, plus the left swipe that removes it.
-/// Text rows select words on a long press (see `ShotSelectableText`); a picture or an event line
-/// has a small menu instead, since it has no words to pick.
+/// A message in the editor: the chat's own row, plus the left swipe that removes it. Words are
+/// picked with a long press on the text (see `ShotRowUIView`); a row with no words (a photo, a
+/// sticker) gets a small menu instead.
 private struct ShotEditableRow: View {
     let message: ShotMessage
     let look: ShotLook
     let place: ShotPlacement
     let rowWidth: CGFloat
+    let cid: String
     let cover: ShotCover
     let edit: ShotRowEdit
 
     @State private var dragX: CGFloat = 0
     private static let removeAt: CGFloat = 80
 
-    private var isText: Bool { message.kind == .text }
+    private var hasWords: Bool { !message.text.isEmpty && message.kind != .system }
 
     var body: some View {
-        ShotRowView(message: message, look: look, place: place, rowWidth: rowWidth,
-                    cover: cover, actions: isText ? edit.text : nil)
+        ShotRealRow(message: message, place: place, cover: cover, look: look, width: rowWidth,
+                    cid: cid, actions: edit.text)
             .offset(x: dragX)
             .overlay(alignment: .trailing) { swipeMark }
             .contentShape(Rectangle())
             .onTapGesture { if cover.whole { edit.toggleWhole() } }
-            .contextMenu { if !isText { menu } }
+            .contextMenu { if !hasWords { menu } }
             .simultaneousGesture(swipe)
             .transition(.asymmetric(insertion: .opacity, removal: .move(edge: .leading).combined(with: .opacity)))
     }
@@ -290,6 +332,7 @@ private struct ShotEditableRow: View {
 }
 
 /// Round swatches under the card: this chat's own look first, then the built-in wallpapers.
+/// A swatch changes only the background; the bubbles keep the chat's own style.
 private struct ShotThemeRow: View {
     let cid: String
     let dark: Bool
@@ -359,8 +402,8 @@ private struct ShotRoundButton: View {
     }
 }
 
-/// The dark rounded bar used for the screenshot notice in the chat and for Undo in the editor:
-/// a bold line, an optional grey line, and a text button on the right.
+/// The notice in the chat after a screenshot: liquid glass with continuous corners, a title and a
+/// grey line in the theme's own colours, and an outlined capsule button on the right.
 struct ShotNoticeBar: View {
     let title: String
     let detail: String?
@@ -370,23 +413,25 @@ struct ShotNoticeBar: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
                 if let detail {
-                    Text(detail).font(.system(size: 14)).foregroundStyle(.white.opacity(0.6))
+                    Text(detail).font(.system(size: 14)).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 8)
             Button(action: onAction) {
-                Text(action).font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color(hex: 0x4DA3FF))
-                    .padding(.vertical, 8).padding(.leading, 8)
+                Text(action).font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.fariinAction)
+                    .padding(.horizontal, 14).frame(height: 32)
+                    .overlay { Capsule().strokeBorder(Color.fariinAction, lineWidth: 1) }
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: Capsule())
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, detail == nil ? 10 : 9)
-        .frame(minHeight: 50)
-        .background(Color(white: 0.11).opacity(0.94), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .environment(\.colorScheme, .dark)
+        .padding(.leading, 16).padding(.trailing, 10)
+        .padding(.vertical, 9)
+        .frame(minHeight: 54)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 }

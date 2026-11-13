@@ -34,6 +34,12 @@ struct ShotMessage: Identifiable, Equatable {
     let forwarded: Bool
     /// A photo or video frame that is already decoded in memory. Never fetched for the picture.
     let image: UIImage?
+    /// The row the chat itself drew for this message (owner 2026-11-13: the picture must show the
+    /// chat's real bubbles, styles, link cards and stickers). nil only if the chat had none.
+    var model: MessageRowModel? = nil
+    /// The pictures this row shows, so a saved picture can wait for the sharp copies instead of
+    /// drawing the small preview that travels inside the message.
+    var mediaURLs: [String] = []
 
     static func == (a: ShotMessage, b: ShotMessage) -> Bool { a.id == b.id }
 }
@@ -52,7 +58,8 @@ extension ScreenshotSnapshot {
     @MainActor
     static func make(cid: String, messages: [Message], me: String, isGroup: Bool,
                      readMillis: Double, deliveredMillis: Double, iBlocked: Bool,
-                     name: (String) -> String, dayLabel: (Date) -> String) -> ScreenshotSnapshot {
+                     name: (String) -> String, dayLabel: (Date) -> String,
+                     rowModels: [String: MessageRowModel] = [:]) -> ScreenshotSnapshot {
         var out: [ShotMessage] = []
         for m in messages {
             // Content that was never meant to be kept stays out of the picture: view-once media,
@@ -74,7 +81,9 @@ extension ScreenshotSnapshot {
                 replyText: m.replyTo.map { $0.text.isEmpty ? "Message" : $0.text },
                 edited: m.edited,
                 forwarded: m.forwarded,
-                image: image(of: m)))
+                image: image(of: m),
+                model: rowModels[m.rowId],
+                mediaURLs: mediaURLs(of: m)))
         }
         return ScreenshotSnapshot(cid: cid, isGroup: isGroup, messages: out)
     }
@@ -108,6 +117,14 @@ extension ScreenshotSnapshot {
             if read >= sent { return .read }
             return delivered >= sent ? .delivered : .sent
         }
+    }
+
+    private static func mediaURLs(of m: Message) -> [String] {
+        var out: [String] = []
+        if m.isAlbum { out += m.album.map(\.imageUrl) }
+        else if m.isVideo { out += [m.thumbUrl].compactMap { $0 } }
+        else if m.isImage { out += [m.imageUrl].compactMap { $0 } }
+        return out.filter { !$0.isEmpty }
     }
 
     /// Only what is already in memory: the decoded photo, or the small preview that came inside the

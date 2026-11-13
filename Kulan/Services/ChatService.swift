@@ -3992,26 +3992,35 @@ enum ChatService {
 
     /// The summary fields for whatever message is newest right now. Split out of
     /// `clearSummaryIfNewest` on 2026-09-24 (audit) so the guarded writer can recompute it.
-    private static func summaryOfNewest(_ convRef: DocumentReference) async -> [String: Any] {
+    /// nil = the newest message could not be read, so nothing may be written.
+    private static func summaryOfNewest(_ convRef: DocumentReference) async -> [String: Any]? {
         // ⛔ A GROUP SKIPS ITS DELETED ONES (owner 2026-10-26): a group shows no "deleted" line in
         // the chat, so the chat list must not either; its preview is the newest message still there.
         // A 1:1 keeps the tombstone line, as before.
         let group = !convRef.documentID.contains("_")
-        let newest = try? await convRef.collection("messages")
-            .order(by: "createdAt", descending: true).limit(to: group ? 25 : 1).getDocuments()
+        // ⛔ FROM THE SERVER, AND A FAILED READ WRITES NOTHING (owner 2026-11-13: the chat list row
+        // of a chat whose last message is a call was empty; the chat doc held lastMessage ""). The
+        // read was `try?` with the default source, so an error, or an offline answer from a cache
+        // holding none of this chat's messages, looked exactly like "nothing left at all" and the
+        // summary was wiped. Only the server's answer may say the chat is empty.
+        guard let newest = try? await convRef.collection("messages")
+            .order(by: "createdAt", descending: true).limit(to: group ? 25 : 1)
+            .getDocuments(source: .server) else { return nil }
         // A channel also skips an admin's wallpaper line (owner 2026-11-07: deleting the newest post
         // left that hidden line as the preview, so the chat list showed a blank row).
         let channel = group && Conversation.Right.isChannel(convRef.documentID)
         let pick = group
-            ? newest?.documents.first(where: {
+            ? newest.documents.first(where: {
                 let d = $0.data()
                 if (d["deleted"] as? Bool) == true { return false }
                 if channel, (d["type"] as? String) == "system",
                    ThreadRepository.isWallpaperNotice(d["text"] as? String ?? "") { return false }
                 return true
             })
-            : newest?.documents.first
+            : newest.documents.first
         guard let doc = pick else {
+            // A group whose 25 newest are all deleted is not proof the chat is empty: keep the line.
+            if group, !newest.documents.isEmpty { return nil }
             // Nothing left at all.
             return [
                 "lastMessage": "", "lastSender": "",
@@ -4105,9 +4114,12 @@ enum ChatService {
     /// messages; `summaryText` only stops new ones. The chat list calls this once per chat per
     /// launch for a blank summary that has a sender (a truly new chat has none), and it rewrites
     /// the summary from the newest message, guarded like every other summary rewrite.
-    private static var repairedSummaries = Set<String>()
+    /// When each chat's repair last ran. ⛔ NOT ONCE PER LAUNCH ANY MORE (owner 2026-11-13): a repair
+    /// that failed (offline, a timeout) left the row empty until the app was restarted. Again after 30 s.
+    private static var repairedSummaries: [String: Date] = [:]
     @MainActor static func repairBlankSummary(_ cid: String) {
-        guard repairedSummaries.insert(cid).inserted else { return }
+        if let last = repairedSummaries[cid], Date().timeIntervalSince(last) < 30 { return }
+        repairedSummaries[cid] = Date()
         if serverOwnsPreview(cid) { return }
         let convRef = db.collection("conversations").document(cid)
         Task {
