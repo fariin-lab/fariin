@@ -5179,6 +5179,8 @@ struct ChatRow: View, Equatable {
             previewRow("person.crop.circle.fill", lastSenderPrefix + "Contact")
         } else if decodedLast.hasPrefix(Message.locationMarker) {
             previewRow("mappin.circle.fill", lastSenderPrefix + "Location")
+        } else if decodedLast.hasPrefix(Message.liveMarker) {
+            previewRow("location.fill", lastSenderPrefix + "Live location")
         } else if decodedLast.hasPrefix(Message.pinMarker) {
             // Pin notice — a marker THIS build fully supports. It must render as a friendly preview, NOT
             // the "newer version" fallback below (user report: both users on the latest build saw

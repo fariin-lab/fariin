@@ -5,6 +5,7 @@ import Photos
 import CoreTransferable
 import AVFoundation
 import UIKit
+import CoreLocation
 import FirebaseFirestore
 import FirebaseFunctions   // 2026-09-24 decision D12: consumeOnceImage call
 import UniformTypeIdentifiers
@@ -273,6 +274,9 @@ struct ThreadView: View {
     /// The Location page as a layer INSIDE the attach sheet (owner 2026-10-15): the sheet stays,
     /// the page slides over the photos, back slides it away. See `LocationPickerSheet.embedded`.
     @State private var attachLocation = false
+    /// Live location (2026-11-13): the duration sheet, and the live map page.
+    @State private var showLiveShare = false
+    @State private var liveMapOpen = false
     /// The GIF picker as a layer inside the attach sheet, as Location (owner 2026-10-15).
     @State private var attachGif = false
     /// The Add files page as a layer inside the attach sheet, as Location (owner 2026-10-15).
@@ -2143,10 +2147,25 @@ struct ThreadView: View {
                                     sendLocationShare(lat: lat, lon: lon, label: label)
                                     attachLocation = false
                                 },
+                                onShareLive: {
+                                    attachLocation = false
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { showLiveShare = true }
+                                },
                                 embedded: true,
                                 onBack: { attachLocation = false })   // the X just closes (owner)
                 .modifier(EdgeSwipeBack { attachReopen = true; attachLocation = false })
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showLiveShare) {
+            LiveShareSheet { minutes, note, here in startLiveShare(minutes: minutes, note: note, here: here) }
+                .presentationDetents([.large])
+        }
+        .fullScreenCover(isPresented: $liveMapOpen) {
+            LiveMapPage(cid: cid, me: me, title: "Live Location", name: { personName($0) },
+                        onShareMine: {
+                            liveMapOpen = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { showLiveShare = true }
+                        })
         }
         .sheet(isPresented: $attachGif, onDismiss: reopenAttachIfAsked) {
             GifPickerView(onPick: { gif in
@@ -5721,6 +5740,10 @@ struct ThreadView: View {
                 openProfileHandle(handle)   // see the note on it
             },
             onTapLocation: { id in
+                if let m = repo.items.first(where: { $0.rowId == id }), m.liveCard != nil {
+                    liveMapOpen = true   // live location: the live page, not the Maps app
+                    return
+                }
                 guard let m = repo.items.first(where: { $0.rowId == id }), let loc = m.locationCard else { return }
                 let q = (loc.label ?? "Shared Location")
                     .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Location"
@@ -7667,6 +7690,17 @@ struct ThreadView: View {
 
     /// A location share, from the sheet or from the attach sheet's own page. The chat glides to the
     /// bottom as for any send (see the note at the picker sheet); `sendMarker` is the optimistic row.
+    /// Live location (2026-11-13): the card message (a marker that never changes), then this phone
+    /// starts writing its position to conversations/{cid}/live/{me} until the end.
+    private func startLiveShare(minutes: Int, note: String?, here: CLLocation) {
+        let until = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        nativeScrollTarget = "BOTTOM"
+        sendMarker(Message.liveMarkerText(lat: here.coordinate.latitude, lon: here.coordinate.longitude,
+                                          until: until, note: note))
+        let msgId = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        LiveLocationSharer.shared.start(cid: cid, msgId: msgId, until: until, first: here)
+    }
+
     private func sendLocationShare(lat: Double, lon: Double, label: String?) {
         nativeScrollTarget = "BOTTOM"
         // 2026-09-24 decision D-composer-1: the optimistic row exists (sendMarker), so the glide fires

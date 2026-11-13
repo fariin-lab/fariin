@@ -1095,6 +1095,7 @@ struct AccountSettingsView: View {
     /// root swapped to the login screen (owner 2026-11-07). The root's route replaces the whole tab
     /// shell, page and sheet included, so the next thing on screen is the login / account picker.
     private func signOutNow(deleteMessages: Bool) async {
+        LiveLocationSharer.shared.stop(cid: nil)   // live location ends everywhere (2026-11-13)
         working = true
         await SessionWipe.cleanUpBeforeSignOut()
         // Captured before signOut clears it: whose received media stays on this phone for their

@@ -146,7 +146,7 @@ targets:
         NSCameraUsageDescription: "Fariin uses the camera for photos and videos in chats and stories, video calls, and scanning QR codes."
         NSMicrophoneUsageDescription: "Fariin uses the microphone for voice messages, calls, and videos you record."
         NSFaceIDUsageDescription: "Fariin uses Face ID to unlock the app."
-        NSLocationWhenInUseUsageDescription: "Fariin uses your location to share it in a chat and to suggest nearby places for a story."
+        NSLocationWhenInUseUsageDescription: "Fariin uses your location to share it in a chat, live for the time you choose if you share live location, and to suggest nearby places for a story."
         # 2026-09-24 fix-all #210: the one-time precise-location ask when Approximate Location is on.
         # The key name is the purpose key LocationFetcher passes; change both together.
         NSLocationTemporaryUsageDescriptionDictionary:
@@ -172,7 +172,9 @@ targets:
         # ⛔ 2026-10-17, REVERSED ON HIS WORD ("I missed Background App Refresh"): `fetch` added, with a
         # real task behind it (Services/BackgroundRefresh.swift: one server read of the chat list
         # into the disk cache). iOS shows the Settings row only for an app that declares it.
-        UIBackgroundModes: [voip, audio, fetch]
+        # Live location (2026-11-13): keeps sharing while Fariin is closed. When-In-Use only; iOS
+        # shows the blue location pill while it runs (showsBackgroundLocationIndicator).
+        UIBackgroundModes: [voip, audio, fetch, location]
         # ⛔ READABLE BANNERS — owner 2026-10-18: the notification extension turns message banners
         # into Communication Notifications (sender photo + app badge) with an INSendMessageIntent.
         # iOS only accepts that intent from an app that declares it here AND carries the

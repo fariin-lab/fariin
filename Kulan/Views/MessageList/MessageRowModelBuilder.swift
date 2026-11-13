@@ -159,7 +159,7 @@ enum MessageRowModelBuilder {
         if m.isImage || m.isVideo || m.isGif { return true }
         if m.isAlbum || m.isFile { return true }
         if m.isAudio { return true }
-        if m.locationCard != nil || m.contactCard != nil { return true }
+        if m.locationCard != nil || m.contactCard != nil || m.liveCard != nil { return true }
         if m.poll != nil { return true }
         if m.isFeatureMarker { return true }               // the "update the app" notice
         // ⛔ TOTAL. Every branch above returns true and so does this one: there is no message the
@@ -284,6 +284,14 @@ enum MessageRowModelBuilder {
             body = .album(a)
         } else if msg.isFile {
             body = .file(fileBody(msg))
+        } else if let live = msg.liveCard {
+            // LIVE LOCATION (2026-11-13): the same map card, its line says how long it runs; the
+            // live page (tap) follows where the person is now.
+            let over = live.until <= Date()
+            body = .location(BubbleBody.LocationBody(
+                lat: live.lat, lon: live.lon,
+                label: over ? "Live location ended"
+                            : "Live until \(live.until.formatted(date: .omitted, time: .shortened))"))
         } else if let loc = msg.locationCard {
             body = .location(BubbleBody.LocationBody(
                 lat: loc.lat, lon: loc.lon,

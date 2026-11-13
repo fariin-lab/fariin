@@ -101,6 +101,8 @@ private func _locationTopInset() -> CGFloat {
 // the chosen coordinates (falls back to the live GPS fix when the map hasn't been moved).
 struct LocationPickerSheet: View {
     var onSend: (_ lat: Double, _ lon: Double, _ label: String?) -> Void
+    /// "Share Live Location" (2026-11-13): the row above Send Location; nil hides it.
+    var onShareLive: (() -> Void)? = nil
     /// ⛔ INSIDE THE ATTACH SHEET — owner 2026-10-15, with a picture: "tapping Location closes the
     /// attach sheet and then the location page appears; open it directly in the sheet, back goes to
     /// the photos". Embedded, this page is a layer of the attach sheet (ThreadView `attachLocation`):
@@ -409,6 +411,16 @@ struct LocationPickerSheet: View {
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .background(.regularMaterial, in: Capsule())
                 }
+                if let onShareLive {
+                    Button { dismiss(); onShareLive() } label: {
+                        Label("Share Live Location", systemImage: "location.circle.fill")
+                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity).frame(height: 50)
+                            .liquidGlass(Capsule(), interactive: true)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
                 // Send Location — outputs the chosen (or current GPS) coordinates.
                 Button {
                     guard let c = sendCoordinate else { fetcher.request(); return }
@@ -557,6 +569,16 @@ struct LocationPickerSheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .background(.regularMaterial, in: Capsule())
+                }
+                if let onShareLive {
+                    Button { onShareLive() } label: {
+                        Label("Share Live Location", systemImage: "location.circle.fill")
+                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity).frame(height: 50)
+                            .liquidGlass(Capsule(), interactive: true)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
                 Button {
                     guard let c = sendCoordinate else { fetcher.request(); return }

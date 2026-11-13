@@ -2559,6 +2559,33 @@ extension Message {
     }
 }
 
+// MARK: - Live location (owner 2026-11-13, plan 2026-11-13-live-location-plan.md). The message is a
+// plain marker that never changes: "fariin-live:<lat>|<lon>|<untilMs>|<note>" (note last). Where the
+// person is now lives in conversations/{cid}/live/{uid} (LiveLocation.swift).
+
+struct LiveLocationCard: Equatable {
+    let lat: Double
+    let lon: Double
+    let until: Date
+    let note: String?
+}
+
+extension Message {
+    static let liveMarker = "fariin-live:"
+    var liveCard: LiveLocationCard? {
+        guard text.hasPrefix(Self.liveMarker) else { return nil }
+        let parts = text.dropFirst(Self.liveMarker.count)
+            .split(separator: "|", maxSplits: 3, omittingEmptySubsequences: false)
+        guard parts.count >= 3, let lat = Double(parts[0]), let lon = Double(parts[1]),
+              let ms = Double(parts[2]) else { return nil }
+        let note = parts.count == 4 && !parts[3].isEmpty ? String(parts[3]) : nil
+        return LiveLocationCard(lat: lat, lon: lon, until: Date(timeIntervalSince1970: ms / 1000), note: note)
+    }
+    static func liveMarkerText(lat: Double, lon: Double, until: Date, note: String?) -> String {
+        "\(liveMarker)\(lat)|\(lon)|\(Int64((until.timeIntervalSince1970 * 1000).rounded()))|\(note ?? "")"
+    }
+}
+
 // MARK: - Pinned-message notice (reference-style "X pinned …" row in the chat). E2EE-SAFE: the
 // snippet rides the ENCRYPTED text pipeline as a feature marker — a plaintext system message would
 // leak message content to the server.
@@ -2637,7 +2664,7 @@ extension Message {
 // notice instead of the raw marker text. When you add a NEW feature marker, add its prefix to
 // `knownFeatureMarkers` so THIS version keeps rendering it normally.
 extension Message {
-    static let knownFeatureMarkers: [String] = [contactMarker, locationMarker, pinMarker, pollMarker]
+    static let knownFeatureMarkers: [String] = [contactMarker, locationMarker, pinMarker, pollMarker, liveMarker]
 
     /// True when the text uses the reserved fariin-feature namespace with a feature this build doesn't
     /// know — i.e. it was sent by a newer app version. Matched strictly (`^fariin-<name>:`) so ordinary
@@ -2663,6 +2690,7 @@ extension Message {
         if isSticker { return StickerSend.label(emoji: stickerEmoji) }   // 2026-10-17 chat stickers
         if contactCard != nil { return "Contact" }
         if locationCard != nil { return "Location" }
+        if liveCard != nil { return "Live location" }
         if let p = poll { return "📊 \(p.question)" }
         if pinNotice != nil { return "Pinned a message" }
         if isUnsupportedFeature { return "Message from a newer version" }
