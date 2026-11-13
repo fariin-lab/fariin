@@ -10168,6 +10168,20 @@ struct ThreadView: View {
             debugLog("sendVideo: HD export was \(big.data.count / 1_048_576)MB, over the limit — retrying at standard")
             exported = await VideoTranscoder.prepare(url, hd: false, progress: compressing)
         }
+        // ⛔ A LONG VIDEO STILL FITS (owner 2026-11-13, "video uploading still not working"). His
+        // 10 minute clip came out of the standard export at 68.2 MB, twice (telemetry
+        // video_compress mb=68.2 count=599): the export's fileLengthLimit (62 MB) is a target the
+        // encoder overshoots on long clips, and over 64 MB the send stopped before any upload. One
+        // more encode at the bitrate that lands at 80% of the limit for this length, which leaves
+        // room for that overshoot. It only runs for a clip that did not fit.
+        if let big = exported, big.data.count > Limits.videoMessageBytes, big.duration > 0 {
+            let fitRate = Double(Limits.videoMessageBytes) * 0.8 / big.duration
+            debugLog("sendVideo: export was \(big.data.count / 1_048_576)MB for \(Int(big.duration))s — retrying at \(Int(fitRate)) B/s")
+            Telemetry.event(.info, component: "media", code: "video_refit",
+                            detail: ["mb": String(format: "%.1f", Double(big.data.count) / 1_048_576),
+                                     "count": String(Int(big.duration))])
+            exported = await VideoTranscoder.prepare(url, hd: false, bytesPerSecond: fitRate, progress: compressing)
+        }
         await MainActor.run { UploadProgress.shared.stage(clientId, from: 0.3, span: 0.7) }
         if let exported {
             Telemetry.event(.info, component: "media", code: "video_compress",
