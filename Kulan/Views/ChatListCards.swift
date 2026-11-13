@@ -209,7 +209,7 @@ enum ChatCards {
                         .requestAuthorization(options: [.alert, .badge, .sound])) ?? false
                     if granted { UIApplication.shared.registerForRemoteNotifications() }
                 } else if let u = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(u)
+                    await UIApplication.shared.open(u)
                 }
                 ChatCardsStore.shared.refreshNotifications()
             }
