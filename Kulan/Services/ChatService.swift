@@ -1095,7 +1095,8 @@ enum ChatService {
             // 0 = no limit (owner 2026-11-13: keep today's behaviour unless the Controls page sets one).
             if Limits.groupAdmins > 0, !admins.contains(promoted),
                admins.filter({ $0 != owner }).count >= Limits.groupAdmins {
-                throw LimitReached(message: "A group can have up to \(Limits.groupAdmins) admins.")
+                let noun = Conversation.Right.isChannel(cid) ? "channel" : "group"
+                throw LimitReached(message: "A \(noun) can have at most \(Limits.groupAdmins) admins.")
             }
         }
         var data: [String: Any] = [
@@ -3736,6 +3737,12 @@ enum ChatService {
     /// `m` in `cid` may still go for everyone. Inside the window always; past it only in a channel
     /// (no window there, as with Edit) or as a group admin who may remove messages. The same answer
     /// ThreadView.canDeleteForEveryone gives the bubble, for the photo viewer, video screen and gallery.
+    /// A group chat, the way the bubble's delete menu decides it (ThreadView: `conversation?.isGroup
+    /// ?? !cid.contains("_")`). ⛔ A group has no Delete for Me (owner 2026-10-26).
+    static func deletesOnlyForEveryone(cid: String) -> Bool {
+        ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.isGroup ?? !cid.contains("_")
+    }
+
     static func ownDeleteForEveryoneOpen(_ m: Message, cid: String) -> Bool {
         // 0 (the default, owner 2026-11-13) = no window: always open, as before the limit existed.
         let window = Limits.deleteForEveryoneSeconds

@@ -251,7 +251,9 @@ struct VideoPlayerScreen: View {
                     }
                 }
             }
-            if let onDeleteForMe {
+            if ChatService.deletesOnlyForEveryone(cid: cid) {
+                // No Delete for Me in a group (owner 2026-10-26).
+            } else if let onDeleteForMe {
                 Button("Delete for Me", role: .destructive) { onDeleteForMe(message); dismiss() }
             } else if !(isMine && ChatService.ownDeleteForEveryoneOpen(message, cid: cid)) {
                 Button("Delete for Me", role: .destructive) { HiddenMessages.hide(message.id); dismiss() }
@@ -494,7 +496,11 @@ struct VideoPlayerScreen: View {
                 if !savingLocked {
                     Button { save() } label: { Label("Save Video", systemImage: "square.and.arrow.down") }
                 }
-                Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+                // In a group Delete leads somewhere only when it can go for everyone (no Delete for Me).
+                if !ChatService.deletesOnlyForEveryone(cid: cid)
+                    || (isMine && ChatService.ownDeleteForEveryoneOpen(message, cid: cid)) {
+                    Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+                }
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44)

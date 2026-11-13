@@ -6539,8 +6539,13 @@ struct ThreadView: View {
         // the next one, so ten photos flipped one by one. Now every bubble flips in this one pass,
         // the server calls run four at a time behind a selection that has already closed.
         var serverIds: [String] = []
+        var pastWindow = 0   // my own, too old to go for everyone (remote limit deleteForEveryoneHours)
         for id in selectedIds {
             guard let m = repo.items.first(where: { $0.id == id }) else { continue }
+            if everyone, m.authorId == me, m.sendState == nil, !m.deleted, !m.isCall,
+               !ChatService.ownDeleteForEveryoneOpen(m, cid: self.cid) {
+                pastWindow += 1
+            }
             if everyone && canDeleteForEveryone(m) {
                 serverIds.append(id)
             } else if !isGroup || m.sendState != nil {
@@ -6558,6 +6563,10 @@ struct ThreadView: View {
         // as the screen is concerned; the server writes run behind it. A refusal that comes back
         // later restores those messages and says so in a toast over the chat.
         exitSelection()
+        if pastWindow > 0 {
+            showJumpToast(pastWindow == 1 ? "1 message is past the delete window"
+                                          : "\(pastWindow) messages are past the delete window")
+        }
         guard !toServer.isEmpty else { return }
         let cid = self.cid
         Task {
