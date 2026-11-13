@@ -287,7 +287,12 @@ struct VideoApprovalView: View {
                 // inside overflows it downward (top-aligned, not clipped), so it stays put under the keys.
                 // ⛔ NOT .ignoresSafeArea(.keyboard) (owner 2026-11-13, build 1174: with it the caption
                 // bar stayed under the keyboard, the whole screen stopped avoiding the keys).
-                .frame(maxHeight: .infinity, alignment: .top)
+                // ⛔ minHeight: 0 IS THE FIX (owner 2026-11-13, build 1187: caption bar still under the
+                // keyboard). A frame with only maxHeight takes its CHILD's height when the child is
+                // taller, so the rest-height video made this frame (and the whole ZStack) taller than the
+                // space above the keyboard and pushed the safeAreaInset caption bar down under the keys.
+                // With min AND max set, the frame takes exactly the proposed space; the video overflows it.
+                .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                 .contentShape(Rectangle())   // NO rounded corners on the frame (user request)
                 .gesture(
                     MagnificationGesture()
