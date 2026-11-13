@@ -105,6 +105,9 @@ struct LocationPlan {
     var label: CGRect
     var labelAttr: NSAttributedString
     var chevron: CGRect
+    /// A running live location's button under the row (nil otherwise).
+    var button: CGRect? = nil
+    var buttonAttr: NSAttributedString? = nil
 }
 
 /// A shared contact: the avatar row, then a full-width "message" button under it.
@@ -3096,11 +3099,19 @@ enum MessageRowLayout {
                           width: labelW, height: labelH),
             labelAttr: labelAttr,
             chevron: .zero)
+        var plan2 = plan
         // On the row's baseline side, like a text bubble's footer on its last line.
         let metaRect = CGRect(x: bubbleW - pad - metaSize.width,
                               y: rowTop + rowH - metaSize.height - 1,
                               width: metaSize.width, height: metaSize.height)
         innerY = rowTop + rowH + pad
+        if let action = l.action {
+            plan2.button = CGRect(x: pad, y: innerY - 2, width: bubbleW - pad * 2, height: 38)
+            plan2.buttonAttr = NSAttributedString(string: action, attributes: [
+                .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                .foregroundColor: action == "Stop Sharing" ? UIColor.systemRed : textColor])
+            innerY += 38 + pad - 2
+        }
 
         let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
                                 y: y, width: bubbleW, height: innerY)
@@ -3110,7 +3121,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: plan, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
+            locationPlan: plan2, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             failBadge: nil)

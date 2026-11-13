@@ -18,6 +18,8 @@ final class LocationBubbleView: UIView {
     private let pin = UIImageView()
     private let label = UILabel()
     private let chevron = UIImageView()
+    private let button = UIView()
+    private let buttonLabel = UILabel()
     private var renderedKey: String?
 
     override init(frame: CGRect) {
@@ -33,6 +35,10 @@ final class LocationBubbleView: UIView {
         addSubview(label)
         chevron.contentMode = .scaleAspectFit
         addSubview(chevron)
+        button.layer.cornerCurve = .continuous
+        addSubview(button)
+        buttonLabel.textAlignment = .center
+        addSubview(buttonLabel)
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -49,6 +55,16 @@ final class LocationBubbleView: UIView {
         chevron.image = UIImage(systemName: "chevron.right",
                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
         chevron.tintColor = tint.withAlphaComponent(0.7)
+        if let r = plan.button, let attr = plan.buttonAttr {
+            button.isHidden = false; buttonLabel.isHidden = false
+            button.frame = r
+            button.layer.cornerRadius = r.height / 2
+            button.backgroundColor = tint.withAlphaComponent(0.1)
+            buttonLabel.frame = r
+            buttonLabel.attributedText = attr
+        } else {
+            button.isHidden = true; buttonLabel.isHidden = true
+        }
 
         let key = MapSnapshotCache.key(lat: l.lat, lon: l.lon, size: plan.map.size, dark: dark)
         if let hit = MapSnapshotCache.cached(key) {

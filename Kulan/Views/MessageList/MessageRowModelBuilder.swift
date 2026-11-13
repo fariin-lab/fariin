@@ -293,7 +293,8 @@ enum MessageRowModelBuilder {
             body = .location(BubbleBody.LocationBody(
                 lat: live.lat, lon: live.lon,
                 label: over ? "Live location ended"
-                            : "Live until \(live.until.formatted(date: .omitted, time: .shortened))"))
+                            : "Live until \(live.until.formatted(date: .omitted, time: .shortened))",
+                action: over ? nil : (msg.authorId == ctx.me ? "Stop Sharing" : "View Live Location")))
         } else if let loc = msg.locationCard {
             body = .location(BubbleBody.LocationBody(
                 lat: loc.lat, lon: loc.lon,

@@ -277,6 +277,8 @@ struct ThreadView: View {
     /// Live location (2026-11-13): the duration sheet, and the live map page.
     @State private var showLiveShare = false
     @State private var liveMapOpen = false
+    /// My running live card tapped: Stop Sharing or View Live Location.
+    @State private var liveOwnAsk = false
     /// This chat's live docs (by sharer), listened while the chat is open: a card ends the moment
     /// its sharer stops.
     @State private var liveDocs: [String: LiveDocState] = [:]
@@ -2165,6 +2167,11 @@ struct ThreadView: View {
         .sheet(isPresented: $showLiveShare) {
             LiveShareSheet { minutes, note, here in startLiveShare(minutes: minutes, note: note, here: here) }
                 .presentationDetents([.large])
+        }
+        .confirmationDialog("Live location", isPresented: $liveOwnAsk, titleVisibility: .hidden) {
+            Button("Stop Sharing", role: .destructive) { LiveLocationSharer.shared.stop(cid: cid) }
+            Button("View Live Location") { liveMapOpen = true }
+            Button("Cancel", role: .cancel) {}
         }
         .fullScreenCover(isPresented: $liveMapOpen) {
             LiveMapPage(cid: cid, me: me, title: "Live Location", name: { personName($0) },
@@ -5747,8 +5754,13 @@ struct ThreadView: View {
                 openProfileHandle(handle)   // see the note on it
             },
             onTapLocation: { id in
-                if let m = repo.items.first(where: { $0.rowId == id }), m.liveCard != nil {
-                    liveMapOpen = true   // live location: the live page, not the Maps app
+                if let m = repo.items.first(where: { $0.rowId == id }), let live = m.liveCard {
+                    // Live location: my running share asks Stop / View; anything else opens the page.
+                    if m.authorId == me, LiveDocState.running(card: live.until, doc: liveDocs[me]) {
+                        liveOwnAsk = true
+                    } else {
+                        liveMapOpen = true
+                    }
                     return
                 }
                 guard let m = repo.items.first(where: { $0.rowId == id }), let loc = m.locationCard else { return }

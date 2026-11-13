@@ -207,6 +207,8 @@ enum BubbleBody: Equatable {
         var lat: Double
         var lon: Double
         var label: String
+        /// A running live location's full-width button: "Stop Sharing" (mine) / "View Live Location".
+        var action: String? = nil
     }
 
     struct ContactBody: Equatable {
