@@ -71,6 +71,9 @@ struct GroupLinkQRSheet: View {
     /// count turns the card into "Channel · N followers" and "to follow". Also read from the
     /// environment, for the cards that open this sheet without knowing they are on a channel.
     var channelFollowers: Int? = nil
+    /// What Share sends (owner 2026-11-13: the invite line with the link, not the picture; Save still
+    /// gives the picture). Nil = the group / channel line built from the title.
+    var shareMessage: String? = nil
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.groupQRChannelFollowers) private var envChannelFollowers
@@ -200,15 +203,11 @@ struct GroupLinkQRSheet: View {
 
     private var actions: some View {
         HStack(spacing: 0) {
-            if let img = cardImage {
-                ShareLink(item: Image(uiImage: img),
-                          preview: SharePreview(title, image: Image(uiImage: img))) {
-                    PosterActionIcon(icon: "ic_link_share", diameter: 50, label: "Share")
-                }
-                .buttonStyle(.plain)
-            } else {
-                PosterActionIcon(icon: "ic_link_share", diameter: 50, label: "Share").opacity(0.5)
+            ShareLink(item: shareMessage
+                      ?? ((followers != nil ? "Follow " : "Join ") + title + " on Fariin: " + link)) {
+                PosterActionIcon(icon: "ic_link_share", diameter: 50, label: "Share")
             }
+            .buttonStyle(.plain)
             Button { save() } label: {
                 PosterActionIcon(icon: "arrow.down.to.line", diameter: 50, label: saving ? "Saving…" : "Save")
             }

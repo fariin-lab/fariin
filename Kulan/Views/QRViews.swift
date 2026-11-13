@@ -135,7 +135,9 @@ struct MyQRView: View {
                          photo: me?.photoUrl,
                          subtitle: handle.isEmpty ? " " : "@\(handle)",
                          hint: "Scan with the camera to chat",
-                         onScan: { if let onScan { onScan() } else { showScanner = true } })
+                         onScan: { if let onScan { onScan() } else { showScanner = true } },
+                         shareMessage: "Let's chat on Fariin. Here's my link "
+                            + (handle.isEmpty ? "https://fariin.com" : fariinLink(handle)))
             .fullScreenCover(isPresented: $showScanner) {
                 // `onMyCode: dismiss` on the scanner we open ourselves: its "My code" button comes
                 // back HERE instead of presenting a second copy of this screen on top of this one.
