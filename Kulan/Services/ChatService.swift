@@ -1074,6 +1074,11 @@ enum ChatService {
         try? await writeSystemMessage(cid: cid, text: "\(myName()) renamed the group to “\(t)”")
     }
 
+    struct LimitReached: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
     /// Promote a member to admin (owner, or an admin with "Add new admins") + system message.
     /// owner 2026-10-18: the new admin's rights are written out (`rights`, default
     /// `Conversation.Right.defaults`), with `adminBy` = me and `adminEdit` naming them, which is what
@@ -1082,6 +1087,14 @@ enum ChatService {
     static func promoteGroupAdmin(cid: String, uid promoted: String, name: String,
                                   rights: [String] = Conversation.Right.defaults.map(\.rawValue)) async throws {
         let convRef = db.collection("conversations").document(cid)
+        // groupAdminsMax (owner 2026-11-13, same words as Android). The owner is not counted.
+        if let snap = try? await convRef.getDocument(),
+           let admins = snap.data()?["admins"] as? [String] {
+            let owner = snap.data()?["createdBy"] as? String
+            if !admins.contains(promoted), admins.filter({ $0 != owner }).count >= Limits.groupAdmins {
+                throw LimitReached(message: "A group can have up to \(Limits.groupAdmins) admins.")
+            }
+        }
         var data: [String: Any] = [
             "admins": FieldValue.arrayUnion([promoted]),
             "adminRights.\(promoted)": rights,
