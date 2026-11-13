@@ -336,7 +336,8 @@ final class LinkPreviewBubbleView: UIView {
             // A story card's picture sits inside the card with its own corners; an article's runs
             // edge to edge and the card clips it.
             if quoteCard {
-                hero.layer.cornerRadius = 14   // rounder with the card (owner 2026-11-06)
+                // The post-link card's small picture (owner 2026-11-13, "B"): 9pt, as its mockup.
+                hero.layer.cornerRadius = p.postLink ? 9 : 14   // rounder with the card (owner 2026-11-06)
                 hero.layer.cornerCurve = .continuous
                 hero.clipsToBounds = true
             } else if case .story = p.shape {
@@ -382,7 +383,7 @@ final class LinkPreviewBubbleView: UIView {
             // layout measures the same.
             // Compact = the picture sits BESIDE the words (a photo post's quote); under them it is 8.
             let besideHero = plan.hero.map { $0.maxX <= rect.minX } ?? false
-            subtitle.numberOfLines = quoteCard ? (besideHero ? 4 : 8) : 2
+            subtitle.numberOfLines = quoteCard && !p.postLink ? (besideHero ? 4 : 8) : 2
             subtitle.frame = rect
             subtitle.attributedText = attr
         } else {

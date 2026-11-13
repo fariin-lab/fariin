@@ -367,6 +367,10 @@ enum BubbleBody: Equatable {
         var imageEnc: EncMeta?
         /// A quoted channel post's card: the channel's own photo beside its name (owner 2026-11-06).
         var avatarUrl: String? = nil
+        /// A channel post sent as its LINK (owner 2026-11-13, his pick "B"): the quote's data in the
+        /// small link card (post picture left, channel photo + name, 2 lines, fariin.com), not the
+        /// quote card a quote uses.
+        var postLink: Bool = false
         /// A quoted ALBUM post's pictures, 2 to 4, first = `imageUrl` (owner 2026-11-08). Empty for
         /// every other card, which then draws exactly as before.
         var imageUrls: [String] = []

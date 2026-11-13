@@ -2557,6 +2557,48 @@ enum MessageRowLayout {
         var y: CGFloat = 0
 
         switch p.shape {
+        case .article where p.url.hasPrefix("fariin-quote://") && p.postLink:
+            // ⛔ A POST SENT AS ITS LINK (owner 2026-11-13, his pick "B" of three mockups): the small
+            // link card, not the quote card. The post's picture on the left (62pt, rounded), then the
+            // channel's photo and name, two lines of the post, and "fariin.com".
+            let cardPad: CGFloat = 8
+            let thumb: CGFloat = 62
+            let hasThumb = p.imageUrl != nil
+            let hero = hasThumb ? CGRect(x: cardPad, y: cardPad, width: thumb, height: thumb) : nil
+            let x = cardPad + (hasThumb ? thumb + 10 : 2)
+            let colW = max(1, width - x - cardPad)
+            var cy = cardPad
+            let head: CGFloat = 18
+            let avatar = CGRect(x: x, y: cy, width: head, height: head)
+            let titleAttr = NSAttributedString(string: p.title, attributes: [
+                .font: UIFont.systemFont(ofSize: 15, weight: .semibold), .foregroundColor: textColor])
+            let tW = max(1, colW - head - 6)
+            let tH = lineSizeOf(titleAttr, cap: tW).height
+            let titleRect = CGRect(x: x + head + 6, y: cy + (head - tH) / 2, width: tW, height: tH)
+            cy += max(head, tH) + 3
+            var subtitle: CGRect?
+            var subtitleAttr: NSAttributedString?
+            if !p.desc.isEmpty {
+                let attr = NSAttributedString(string: p.desc, attributes: [
+                    .font: UIFont.systemFont(ofSize: 13), .foregroundColor: textColor])
+                let h = cappedHeight(attr, width: colW, lines: 2)
+                subtitle = CGRect(x: x, y: cy, width: colW, height: h)
+                subtitleAttr = attr
+                cy += h + 2
+            }
+            let hostAttr = NSAttributedString(string: "fariin.com", attributes: [
+                .font: UIFont.systemFont(ofSize: 12), .foregroundColor: textColor.withAlphaComponent(0.6)])
+            let hostH = lineSizeOf(hostAttr, cap: colW).height
+            let hostRect = CGRect(x: x, y: cy, width: colW, height: hostH)
+            cy += hostH
+            let height = max(cy, hasThumb ? cardPad + thumb : 0) + cardPad
+            return (CGSize(width: width, height: height),
+                    LinkPreviewPlan(card: .zero, hero: hero, heroTiles: [], avatar: avatar,
+                                    title: titleRect, titleAttr: titleAttr,
+                                    subtitle: subtitle, subtitleAttr: subtitleAttr,
+                                    host: hostRect, hostAttr: hostAttr,
+                                    divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil))
+
         case .article where p.url.hasPrefix("fariin-quote://"):
             // A QUOTED CHANNEL POST (owner 2026-11-06, his reference): a 20pt channel photo with the
             // channel's name in blue, the post's picture with its own corners, then its words.

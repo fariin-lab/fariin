@@ -329,7 +329,12 @@ enum MessageRowModelBuilder {
                 // A call link takes the call card whatever preview travelled with it: the web page
                 // behind the link knows nothing about the call, and older messages carry none.
                 // A quoted channel post takes the card's place (owner 2026-11-06, `quoteBody`).
-                linkPreview: msg.quoteId.map { quoteBody($0, cid: ctx.cid, mid: msg.id) } ?? callLinkPreview(text) ?? msg.linkPreview.map(linkPreviewBody),
+                // A post sent as its link (owner 2026-11-13, "B"): the same quote data, the link card.
+                linkPreview: msg.quoteId.map { qid -> BubbleBody.LinkPreview in
+                    var card = quoteBody(qid, cid: ctx.cid, mid: msg.id)
+                    card.postLink = Self.hasPostLink(text)
+                    return card
+                } ?? callLinkPreview(text) ?? msg.linkPreview.map(linkPreviewBody),
                 bold: text == msg.text ? msg.boldRanges : []))
         }
 
@@ -872,6 +877,14 @@ enum MessageRowModelBuilder {
     /// answer for this reader (`QuoteStore`): the channel's name, the post's text as quoted, its first
     /// picture, "Quoted post" under them. Post deleted / This channel is private when that is the
     /// answer, with no picture. "Loading…" until the first answer lands.
+    /// A channel post's own link in the words: fariin.com/<name>/<number or id>, or the private
+    /// form fariin.com/c/<cid>/<number or id> (`ChannelPostLink`). Not a profile (one part) and not
+    /// a story (/s/).
+    static func hasPostLink(_ text: String) -> Bool {
+        text.range(of: #"fariin\.com/(?:c/[A-Za-z0-9]+|(?!s/)[A-Za-z0-9_]+)/(?!s/)[A-Za-z0-9]+(?![A-Za-z0-9/])"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     private static func quoteBody(_ qid: String, cid: String, mid: String) -> BubbleBody.LinkPreview {
         // Where this card sits, so a reader of THIS chat sees a quote of a private channel's post
         // (owner 2026-11-08). The server checks the quote really was sent in this message.
