@@ -270,7 +270,7 @@ final class BlockList {
     func setBlocked(_ other: String, _ value: Bool) async -> Bool {
         // blockedUsersMax (owner 2026-11-13, same words as Android): a new block past the cap is refused.
         if value {
-            let full = await MainActor.run { self.entries[other] == nil && self.entries.count >= Limits.blockedUsers }
+            let full = await MainActor.run { Limits.blockedUsers > 0 && self.entries[other] == nil && self.entries.count >= Limits.blockedUsers }
             if full {
                 await MainActor.run {
                     ToastNotice.show("You can block up to \(Limits.blockedUsers) people. Unblock someone first.")
