@@ -2507,6 +2507,7 @@ struct GroupMemberSheet: View {
     var grantable: [String] = []            // owner 2026-10-18: the rights I may hand out (all, for the owner)
     // owner 2026-10-25: Transfer Ownership asks the server first, then for my password.
     @State private var showTransferPassword = false
+    @State private var memberPhotoFrame: CGRect = .zero
     @State private var transferred = false
     @State private var noPasswordAlert = false
     @State private var showCreatePassword = false
@@ -2981,6 +2982,13 @@ struct GroupMemberSheet: View {
         VStack(spacing: 6) {
             // Honor THEIR audience settings, like the 1:1 profile does (audit).
             AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 96)
+                // Owner 2026-11-13: the photo opens full screen out of its circle, like the profile
+                // page, and lands back in it; the card stays open.
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { memberPhotoFrame = $0 }
+                .onTapGesture {
+                    guard let url = gatedMemberPhoto, !url.isEmpty else { return }
+                    PhotoViewerDoor.show(name: member.name, photoUrl: url, from: memberPhotoFrame)
+                }
                 .padding(.bottom, 6)
             HStack(spacing: 6) {
                 // The name gives way last (audit 2026-10-20: a long tag squeezed it to "Ab…").
@@ -3615,5 +3623,43 @@ private struct HideMembersSection: View {
                                                            set: { if !$0 { error = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(error ?? "") }
+    }
+}
+
+/// The profile page's photo viewer in a window of its own, above any sheet (a member card is a
+/// sheet, and an overlay inside it cannot reach the whole screen).
+@MainActor enum PhotoViewerDoor {
+    private static var window: UIWindow?
+
+    static func show(name: String, photoUrl: String, from: CGRect) {
+        guard window == nil, let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) else { return }
+        let w = UIWindow(windowScene: scene)
+        w.windowLevel = .alert
+        w.backgroundColor = .clear
+        let host = UIHostingController(rootView: PhotoViewerHost(name: name, photoUrl: photoUrl, from: from))
+        host.view.backgroundColor = .clear
+        w.rootViewController = host
+        w.isHidden = false
+        window = w
+    }
+
+    static func close() {
+        window?.isHidden = true
+        window = nil
+    }
+}
+
+private struct PhotoViewerHost: View {
+    let name: String
+    let photoUrl: String
+    let from: CGRect
+    @State private var shown = true
+
+    var body: some View {
+        ProfilePhotoViewer(name: name, photoUrl: photoUrl, sourceFrame: from, isPresented: $shown)
+            .ignoresSafeArea()
+            .onChange(of: shown) { _, now in if !now { PhotoViewerDoor.close() } }
     }
 }
