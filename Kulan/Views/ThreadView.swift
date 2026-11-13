@@ -2172,7 +2172,8 @@ struct ThreadView: View {
         }
         .sheet(isPresented: $showLiveShare) {
             LiveShareSheet { minutes, note, here in startLiveShare(minutes: minutes, note: note, here: here) }
-                .presentationDetents([.large])
+                .presentationDetents([.fraction(0.82), .large])
+                .presentationDragIndicator(.visible)
         }
         .confirmationDialog("Live location", isPresented: $liveOwnAsk, titleVisibility: .hidden) {
             Button("Stop", role: .destructive) { LiveLocationSharer.shared.stop(cid: cid) }

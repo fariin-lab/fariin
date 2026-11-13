@@ -16,30 +16,6 @@ struct LiveShareSheet: View {
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
     @AppStorage("liveLocation.explained") private var explained = false
 
-    private func durationTile(_ m: Int, _ title: String) -> some View {
-        let on = minutes == m
-        let ink: Color = on ? .onFariinAction : .primary
-        return Button { minutes = m } label: {
-            VStack(spacing: 8) {
-                ZStack {
-                    Circle().stroke(ink.opacity(0.22), lineWidth: 3)
-                    Circle().trim(from: 0, to: m == 15 ? 0.25 : 1)
-                        .stroke(ink, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    if m == 480 { Circle().fill(ink).frame(width: 3, height: 3) }
-                }
-                .frame(width: 30, height: 30)
-                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(ink)
-            }
-            .frame(maxWidth: .infinity).padding(.vertical, 14)
-            .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(on ? Color.fariinAction : Color(.secondarySystemBackground)))
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .animation(.easeOut(duration: 0.15), value: on)
-    }
-
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
@@ -59,12 +35,14 @@ struct LiveShareSheet: View {
                 }
                 Text("For how long?").font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                // Three tiles, each with a small clock ring (owner 2026-11-13: "something cool, not cheap").
-                HStack(spacing: 10) {
-                    durationTile(15, "15 min")
-                    durationTile(60, "1 hour")
-                    durationTile(480, "8 hours")
+                // iOS-native (owner 2026-11-13: the iPhone gets iPhone design, not Android's tiles):
+                // the system segmented control, Liquid Glass on iOS 26.
+                Picker("For how long?", selection: $minutes) {
+                    Text("15 min").tag(15)
+                    Text("1 hour").tag(60)
+                    Text("8 hours").tag(480)
                 }
+                .pickerStyle(.segmented)
                 Text("Until \(Date().addingTimeInterval(TimeInterval(minutes * 60)).formatted(date: .omitted, time: .shortened))")
                     .font(.system(size: 13)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
@@ -80,13 +58,13 @@ struct LiveShareSheet: View {
                     onShare(minutes, n.isEmpty ? nil : String(n.prefix(200)), here)
                     dismiss()
                 } label: {
-                    Text(fetcher.location == nil ? "Finding your location..." : "Start Sharing")
-                        .font(.body.weight(.semibold)).foregroundStyle(Color.onFariinAction)
-                        .frame(maxWidth: .infinity).frame(height: 50)
-                        .background(Capsule().fill(Color.fariinAction))
-                        .contentShape(Capsule())
+                    Label(fetcher.location == nil ? "Finding your location..." : "Start Sharing",
+                          systemImage: "location.fill")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity).frame(height: 44)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glassProminent)
+                .tint(Color.fariinAction)
                 .disabled(fetcher.location == nil)
                 .opacity(fetcher.location == nil ? 0.5 : 1)
             }
@@ -191,9 +169,9 @@ struct LiveMapPage: View {
                     } label: { Image(systemName: "ellipsis") }
                 }
             }
-            .alert("Stop sharing live location?", isPresented: $confirmStop) {
+            .confirmationDialog("Stop sharing your live location?", isPresented: $confirmStop, titleVisibility: .visible) {
+                Button("Stop Sharing", role: .destructive) { LiveLocationSharer.shared.stop(cid: cid) }
                 Button("Cancel", role: .cancel) {}
-                Button("Stop", role: .destructive) { LiveLocationSharer.shared.stop(cid: cid) }
             }
         }
         .onAppear { listen() }
