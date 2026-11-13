@@ -25,13 +25,26 @@ struct LiveSpot: Identifiable, Equatable {
 struct LiveDocState: Equatable {
     let until: Date
     let ended: Bool
+    /// The doc's updatedAt: for an ended share, when it was stopped.
+    var at: Date? = nil
 
-    static func running(card until: Date, doc: LiveDocState?) -> Bool {
-        guard until > Date() else { return false }
+    static func running(card until: Date, doc: LiveDocState?, now: Date = Date()) -> Bool {
+        guard until > now else { return false }
         guard let doc else { return true }
         if doc.ended { return false }
         if abs(doc.until.timeIntervalSince(until)) < 2 { return true }
         return doc.until < until
+    }
+}
+
+extension LiveDocState {
+    /// "52 min left", "1 h 20 min left", "under a minute left".
+    static func left(until: Date, now: Date) -> String {
+        let m = Int(until.timeIntervalSince(now) / 60)
+        if m < 1 { return "under a minute left" }
+        if m < 60 { return "\(m) min left" }
+        let h = m / 60, r = m % 60
+        return r == 0 ? "\(h) h left" : "\(h) h \(r) min left"
     }
 }
 

@@ -23,17 +23,19 @@ struct LiveShareSheet: View {
                     .frame(height: 220)
                     .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 if !explained {
-                    Text("The people in this chat will see where you are, live, for the time you choose, even when Fariin is closed. You can stop at any time.")
+                    Text("Your spot will keep updating in this chat as you move, for as long as you choose, even when Fariin is closed. Stop it any time.")
                         .font(.footnote).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Picker("Share for", selection: $minutes) {
-                    Text("15 minutes").tag(15)
+                Text("For how long?").font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Picker("For how long?", selection: $minutes) {
+                    Text("15 min").tag(15)
                     Text("1 hour").tag(60)
                     Text("8 hours").tag(480)
                 }
                 .pickerStyle(.segmented)
-                TextField("Add a comment", text: $note)
+                TextField("Add a note", text: $note)
                     .padding(.horizontal, 14).frame(height: 44)
                     .background(Color(.secondarySystemBackground), in: Capsule())
                 Spacer(minLength: 0)
@@ -45,7 +47,7 @@ struct LiveShareSheet: View {
                     onShare(minutes, n.isEmpty ? nil : String(n.prefix(200)), here)
                     dismiss()
                 } label: {
-                    Text(fetcher.location == nil ? "Finding your location..." : "Share Live Location")
+                    Text(fetcher.location == nil ? "Finding your location..." : "Start Sharing")
                         .font(.body.weight(.semibold)).foregroundStyle(Color.onFariinAction)
                         .frame(maxWidth: .infinity).frame(height: 50)
                         .background(Capsule().fill(Color.fariinAction))
@@ -56,7 +58,7 @@ struct LiveShareSheet: View {
                 .opacity(fetcher.location == nil ? 0.5 : 1)
             }
             .padding(16)
-            .navigationTitle("Share Live Location")
+            .navigationTitle("Share your location live")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -112,7 +114,7 @@ struct LiveMapPage: View {
 
                 VStack(spacing: 0) {
                     if spots.isEmpty {
-                        Text("Live location ended")
+                        Text("No one is sharing right now.")
                             .font(.subheadline).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity).padding(.vertical, 16)
                     }
@@ -133,7 +135,7 @@ struct LiveMapPage: View {
                     Button {
                         if sharingHere || mine != nil { confirmStop = true } else { onShareMine() }
                     } label: {
-                        Text(sharingHere || mine != nil ? "Stop Sharing" : "Share My Live Location")
+                        Text(sharingHere || mine != nil ? "Stop sharing mine" : "Share mine live too")
                             .font(.body.weight(.semibold))
                             .foregroundStyle(sharingHere || mine != nil ? Color.red : Color.onFariinAction)
                             .frame(maxWidth: .infinity).frame(height: 50)

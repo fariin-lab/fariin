@@ -60,6 +60,8 @@ struct MessageRowContext {
     var iBlocked: Bool
     /// Live location docs of this chat, by sharer uid (until, ended), while the chat is open.
     var liveDocs: [String: LiveDocState] = [:]
+    /// The clock live cards count down from (ThreadView moves it every 30 s while one runs).
+    var liveNow: Date = Date()
     var searchTerm: String
     var nameFor: (String) -> String
     var avatarFor: (String) -> String?
@@ -289,12 +291,17 @@ enum MessageRowModelBuilder {
         } else if let live = msg.liveCard {
             // LIVE LOCATION (2026-11-13): the same map card, its line says how long it runs; the
             // live page (tap) follows where the person is now.
-            let over = !LiveDocState.running(card: live.until, doc: ctx.liveDocs[msg.authorId])
+            // Our own words (owner 2026-11-13): "Live · 52 min left", "Live · ended 5:31 AM".
+            let doc = ctx.liveDocs[msg.authorId]
+            let over = !LiveDocState.running(card: live.until, doc: doc, now: ctx.liveNow)
+            let endedAt = (doc?.ended == true ? doc?.at : nil).map { min($0, live.until) } ?? live.until
             body = .location(BubbleBody.LocationBody(
                 lat: live.lat, lon: live.lon,
-                label: over ? "Live location ended"
-                            : "Live until \(live.until.formatted(date: .omitted, time: .shortened))",
-                action: over ? nil : (msg.authorId == ctx.me ? "Stop Sharing" : "View Live Location")))
+                label: over ? "Live · ended \(endedAt.formatted(date: .omitted, time: .shortened))"
+                            : "Live · \(LiveDocState.left(until: live.until, now: ctx.liveNow))",
+                action: over ? nil : (msg.authorId == ctx.me ? "Stop" : "Open Live Map"),
+                live: !over,
+                photo: ctx.avatarFor(msg.authorId)))
         } else if let loc = msg.locationCard {
             body = .location(BubbleBody.LocationBody(
                 lat: loc.lat, lon: loc.lon,

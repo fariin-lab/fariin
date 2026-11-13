@@ -3109,7 +3109,7 @@ enum MessageRowLayout {
             plan2.button = CGRect(x: pad, y: innerY - 2, width: bubbleW - pad * 2, height: 38)
             plan2.buttonAttr = NSAttributedString(string: action, attributes: [
                 .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
-                .foregroundColor: action == "Stop Sharing" ? UIColor.systemRed : textColor])
+                .foregroundColor: action == "Stop" ? UIColor.systemRed : textColor])
             innerY += 38 + pad - 2
         }
 

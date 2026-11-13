@@ -282,6 +282,8 @@ struct ThreadView: View {
     /// This chat's live docs (by sharer), listened while the chat is open: a card ends the moment
     /// its sharer stops.
     @State private var liveDocs: [String: LiveDocState] = [:]
+    /// Moves every 30 s while a live card runs, so "52 min left" counts down.
+    @State private var liveNow = Date()
     @State private var liveListener: ListenerRegistration?
     /// The GIF picker as a layer inside the attach sheet, as Location (owner 2026-10-15).
     @State private var attachGif = false
@@ -1701,6 +1703,10 @@ struct ThreadView: View {
         // Leaving the chat (swipe-back to the list, or any pop) closes the keyboard so it never
         // lingers over the chat list.
         .onAppear { listenLive() }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now in
+            // Only while a live card can still be running here: a quiet chat never rebuilds for it.
+            if repo.items.contains(where: { $0.liveCard.map { $0.until > now } ?? false }) { liveNow = now }
+        }
         .onDisappear {
             liveListener?.remove(); liveListener = nil
             inputFocused = false
@@ -2169,8 +2175,8 @@ struct ThreadView: View {
                 .presentationDetents([.large])
         }
         .confirmationDialog("Live location", isPresented: $liveOwnAsk, titleVisibility: .hidden) {
-            Button("Stop Sharing", role: .destructive) { LiveLocationSharer.shared.stop(cid: cid) }
-            Button("View Live Location") { liveMapOpen = true }
+            Button("Stop", role: .destructive) { LiveLocationSharer.shared.stop(cid: cid) }
+            Button("Open Live Map") { liveMapOpen = true }
             Button("Cancel", role: .cancel) {}
         }
         .fullScreenCover(isPresented: $liveMapOpen) {
@@ -4471,7 +4477,7 @@ struct ThreadView: View {
             onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
             otherLastReadMillis: repo.otherLastReadMillis,
             otherDeliveredMillis: repo.otherDeliveredMillis, iBlocked: repo.iBlocked,
-            liveDocs: liveDocs,
+            liveDocs: liveDocs, liveNow: liveNow,
             searchTerm: searchActive ? searchTerm : "",
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
@@ -7716,7 +7722,8 @@ struct ThreadView: View {
                 var next: [String: LiveDocState] = [:]
                 for d in snap?.documents ?? [] {
                     guard let u = (d.data()["until"] as? Timestamp)?.dateValue() else { continue }
-                    next[d.documentID] = LiveDocState(until: u, ended: (d.data()["ended"] as? Bool) == true)
+                    next[d.documentID] = LiveDocState(until: u, ended: (d.data()["ended"] as? Bool) == true,
+                                                      at: (d.data()["updatedAt"] as? Timestamp)?.dateValue())
                 }
                 if next != liveDocs { liveDocs = next }
             }

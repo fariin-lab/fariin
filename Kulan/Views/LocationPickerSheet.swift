@@ -413,9 +413,13 @@ struct LocationPickerSheet: View {
                 }
                 if let onShareLive {
                     Button { dismiss(); onShareLive() } label: {
-                        Label("Share Live Location", systemImage: "location.circle.fill")
-                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                            .frame(maxWidth: .infinity).frame(height: 50)
+                        VStack(spacing: 1) {
+                            Label("Share location live", systemImage: "location.circle.fill")
+                                .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                            Text("Updates as you move, for as long as you choose")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                            .frame(maxWidth: .infinity).frame(height: 54)
                             .liquidGlass(Capsule(), interactive: true)
                             .contentShape(Capsule())
                     }
@@ -572,9 +576,13 @@ struct LocationPickerSheet: View {
                 }
                 if let onShareLive {
                     Button { onShareLive() } label: {
-                        Label("Share Live Location", systemImage: "location.circle.fill")
-                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                            .frame(maxWidth: .infinity).frame(height: 50)
+                        VStack(spacing: 1) {
+                            Label("Share location live", systemImage: "location.circle.fill")
+                                .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                            Text("Updates as you move, for as long as you choose")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                            .frame(maxWidth: .infinity).frame(height: 54)
                             .liquidGlass(Capsule(), interactive: true)
                             .contentShape(Capsule())
                     }

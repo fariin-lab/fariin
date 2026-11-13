@@ -20,6 +20,10 @@ final class LocationBubbleView: UIView {
     private let chevron = UIImageView()
     private let button = UIView()
     private let buttonLabel = UILabel()
+    /// Live location: the sharer's photo in a white ring on the map, a green ring breathing out of it.
+    private let avatar = UIImageView()
+    private let pulse = CAShapeLayer()
+    private var avatarURL: String?
     private var renderedKey: String?
 
     override init(frame: CGRect) {
@@ -37,20 +41,69 @@ final class LocationBubbleView: UIView {
         addSubview(chevron)
         button.layer.cornerCurve = .continuous
         addSubview(button)
+        pulse.fillColor = UIColor(red: 0x34/255, green: 0xC7/255, blue: 0x59/255, alpha: 1).cgColor
+        layer.addSublayer(pulse)
+        avatar.contentMode = .scaleAspectFill
+        avatar.clipsToBounds = true
+        avatar.layer.borderColor = UIColor.white.cgColor
+        avatar.layer.borderWidth = 3
+        avatar.backgroundColor = .systemGray4
+        addSubview(avatar)
         buttonLabel.textAlignment = .center
         addSubview(buttonLabel)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    private func applyAvatar(_ l: BubbleBody.LocationBody, map: CGRect) {
+        guard let live = l.live else {
+            avatar.isHidden = true; pulse.isHidden = true; pulse.removeAllAnimations(); return
+        }
+        let s: CGFloat = 44
+        let r = CGRect(x: map.midX - s / 2, y: map.midY - s / 2, width: s, height: s)
+        avatar.isHidden = false
+        avatar.frame = r
+        avatar.layer.cornerRadius = s / 2
+        pulse.isHidden = !live
+        pulse.frame = r
+        pulse.path = UIBezierPath(ovalIn: CGRect(origin: .zero, size: r.size)).cgPath
+        if live, pulse.animation(forKey: "breathe") == nil {
+            let scale = CABasicAnimation(keyPath: "transform.scale"); scale.fromValue = 1; scale.toValue = 1.6
+            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0.5; fade.toValue = 0
+            let g = CAAnimationGroup(); g.animations = [scale, fade]; g.duration = 1.6; g.repeatCount = .infinity
+            pulse.add(g, forKey: "breathe")
+        } else if !live {
+            pulse.removeAllAnimations()
+        }
+        guard avatarURL != l.photo else { return }
+        avatarURL = l.photo
+        avatar.image = nil
+        guard let url = l.photo, !url.isEmpty else { return }
+        if let hit = ProfilePhotoLoader.shared.cachedAvatar(url) { avatar.image = hit; return }
+        Task { @MainActor [weak self] in
+            let img = await ProfilePhotoLoader.shared.avatar(url)
+            guard let self, self.avatarURL == url else { return }
+            self.avatar.image = img
+        }
+    }
 
     func configure(_ l: BubbleBody.LocationBody, plan: LocationPlan, tint: UIColor, dark: Bool) {
         map.frame = plan.map
         label.frame = plan.label
         label.attributedText = plan.labelAttr
         pin.frame = plan.pin
-        // Palette, so the pin is a RED head on a light disc rather than one flat colour.
-        pin.image = UIImage(systemName: "mappin.circle.fill", withConfiguration:
-            UIImage.SymbolConfiguration(pointSize: 22)
-                .applying(UIImage.SymbolConfiguration(paletteColors: [.systemRed, tint])))
+        if let live = l.live {
+            // A dot, green while live, grey once ended.
+            pin.image = UIImage(systemName: "circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 9))
+            pin.tintColor = live ? UIColor(red: 0x34/255, green: 0xC7/255, blue: 0x59/255, alpha: 1) : .systemGray
+            pin.contentMode = .center
+        } else {
+            pin.contentMode = .scaleAspectFit
+            // Palette, so the pin is a RED head on a light disc rather than one flat colour.
+            pin.image = UIImage(systemName: "mappin.circle.fill", withConfiguration:
+                UIImage.SymbolConfiguration(pointSize: 22)
+                    .applying(UIImage.SymbolConfiguration(paletteColors: [.systemRed, tint])))
+        }
+        applyAvatar(l, map: plan.map)
         chevron.frame = plan.chevron
         chevron.image = UIImage(systemName: "chevron.right",
                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
