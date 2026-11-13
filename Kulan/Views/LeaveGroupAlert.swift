@@ -157,6 +157,7 @@ struct LeaveGroupAlert: View {
 
     static func show(title: String, message: String, confirm: String,
                      cancel: String = "Cancel", confirmColor: Color = .red,
+                     second: String? = nil, onSecond: (@MainActor () -> Void)? = nil,
                      onConfirm: @escaping @MainActor () -> Void) {
         guard window == nil, let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
@@ -167,7 +168,8 @@ struct LeaveGroupAlert: View {
         let host = UIHostingController(rootView: GlassConfirmAlert(title: title, message: message,
                                                                    confirm: confirm, onConfirm: onConfirm,
                                                                    onClose: { close() },
-                                                                   cancel: cancel, confirmColor: confirmColor))
+                                                                   cancel: cancel, confirmColor: confirmColor,
+                                                                   second: second, onSecond: onSecond))
         host.view.backgroundColor = .clear
         w.rootViewController = host
         w.isHidden = false
@@ -189,6 +191,9 @@ struct GlassConfirmAlert: View {
     /// "Cancel" and a red action by default; a plain question (Backup PIN nudge) passes its own.
     var cancel: String = "Cancel"
     var confirmColor: Color = .red
+    /// An optional second action between the confirm and Cancel (live location: Open Live Map).
+    var second: String? = nil
+    var onSecond: (@MainActor () -> Void)? = nil
 
     @State private var shown = false
 
@@ -220,6 +225,12 @@ struct GlassConfirmAlert: View {
                 button(confirm, color: confirmColor, weight: .semibold) {
                     onConfirm()
                     close()
+                }
+                if let second {
+                    button(second, color: .primary, weight: .semibold) {
+                        onSecond?()
+                        close()
+                    }
                 }
                 button(cancel, color: .primary, weight: .regular) { close() }
             }
