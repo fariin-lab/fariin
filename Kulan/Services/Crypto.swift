@@ -1095,6 +1095,81 @@ final class Crypto {
         return Data(opened)
     }
 
+    // MARK: - Instant forward (owner 2026-11-13)
+
+    /// THE SAME SEALED FILE, ITS KEY WRAPPED FOR ANOTHER CHAT. A file is sealed once under its own
+    /// random key (`encryptBytes`, `encryptBytesForGroup`); only that 32-byte key is wrapped for the
+    /// chat's people. So a forward that copies the ciphertext as it is (the `forwardMedia` callable)
+    /// needs only this: open the key with the SOURCE chat's wrap, wrap it for the TARGET exactly the
+    /// way the two send functions do, and keep the data nonce `n`. The bytes are never decrypted
+    /// here and the server never sees the key.
+    ///
+    /// `members`: the target group's members (nil for a 1:1). `targetPlain`: the target is a group
+    /// that takes files in the clear (`sealBytesForGroup` would return `.plain`).
+    ///
+    /// nil = this file cannot go the instant way, and the caller sends it the old way:
+    ///   · a clear (plain group) file into a 1:1 or a sealed group: it would have to be sealed, and
+    ///     that needs the bytes;
+    ///   · a sealed file into a plain group: guests and later members read a plain group's files,
+    ///     and a key wrapped for today's members would lock them out;
+    ///   · a key this phone cannot open.
+    /// Throws `MissingRecipientKeyError` the way the send functions do when nobody can be wrapped for.
+    func rewrapFileKey(_ meta: EncMeta, fromCid: String, toCid: String,
+                       members: [String]?, targetPlain: Bool) async throws -> EncMeta? {
+        let targetIsGroup = Self.isGroupCid(toCid)
+        if meta.isPlain { return (targetIsGroup && targetPlain && Self.isGroupCid(fromCid)) ? .plain : nil }
+        if targetIsGroup && targetPlain { return nil }
+        guard meta.v == 1, let fileKey = await openFileKey(meta, cid: fromCid), fileKey.count == 32 else { return nil }
+        try await ensureReady()
+        guard let sk = mySecretKey, let me = currentUid() else { return nil }
+
+        if targetIsGroup {
+            guard let members, !members.isEmpty else { return nil }
+            var wraps: [String: String] = [:]
+            let keys = try await groupKeys(members)
+            for uid in Set(members) {
+                guard let pub = keys[uid] else { continue }   // keyless members, as encryptBytesForGroup
+                guard let w: (authenticatedCipherText: Bytes, nonce: Box.Nonce) =
+                        sodium.box.seal(message: fileKey, recipientPublicKey: pub, senderSecretKey: sk) else { continue }
+                wraps[uid] = Data(w.authenticatedCipherText).base64EncodedString()
+                           + "." + Data(w.nonce).base64EncodedString()
+            }
+            guard wraps.keys.contains(where: { $0 != me }) else {
+                throw MissingRecipientKeyError(uid: members.first { $0 != me } ?? "")
+            }
+            return EncMeta(v: 1, n: meta.n, k: "", kn: "", w: wraps, a: me)
+        }
+        let other = otherUid(toCid)
+        guard let otherPub = await keyForSending(other) else { throw MissingRecipientKeyError(uid: other) }
+        guard let wrapped: (authenticatedCipherText: Bytes, nonce: Box.Nonce) =
+                sodium.box.seal(message: fileKey, recipientPublicKey: otherPub, senderSecretKey: sk) else { return nil }
+        return EncMeta(v: 1, n: meta.n,
+                       k: Data(wrapped.authenticatedCipherText).base64EncodedString(),
+                       kn: Data(wrapped.nonce).base64EncodedString())
+    }
+
+    /// The file key out of `meta` as this phone holds it in chat `cid`: the key half of
+    /// `decryptBytes`, with the same routes (my group wrap, a released group key, the 1:1 wrap).
+    private func openFileKey(_ meta: EncMeta, cid: String) async -> Bytes? {
+        if let wraps = meta.w, let author = meta.a {
+            func released() -> Bytes? { Self.isGroupCid(cid) ? releasedKey(meta.n) : nil }
+            do { try await ensureReady(); _ = await preloadKey(author) } catch {}
+            guard let sk = mySecretKey, let me = currentUid(), let myWrap = wraps[me],
+                  let authorPub = lock.withLock({ pubCache[author] }) else { return released() }
+            let wp = myWrap.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+            guard wp.count == 2, let wrappedKey = Data(base64Encoded: wp[0]),
+                  let keyNonce = Data(base64Encoded: wp[1]) else { return released() }
+            return openFrom(author, current: authorPub, box: Bytes(wrappedKey), nonce: Bytes(keyNonce), sk: sk)
+                ?? released()
+        }
+        do { try await ensureReady(); _ = await preloadKey(otherUid(cid)) } catch {}
+        guard let sk = mySecretKey,
+              let otherPub = lock.withLock({ pubCache[otherUid(cid)] }),
+              let wrappedKey = Data(base64Encoded: meta.k),
+              let keyNonce = Data(base64Encoded: meta.kn) else { return nil }
+        return openFrom(otherUid(cid), current: otherPub, box: Bytes(wrappedKey), nonce: Bytes(keyNonce), sk: sk)
+    }
+
     // MARK: - Group text (sender-key-per-message)
     //
     // Generalizes the file-wrap pattern to N members: the body is sealed ONCE under a

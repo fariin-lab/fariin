@@ -3262,6 +3262,12 @@ enum ChatService {
         var m = m
         m.text = liveText
         let forwarded = isForward(m, from: sourceCid, to: targetCid)
+        // The instant way first (owner 2026-11-13): the file already on the server, copied there and
+        // its key re-wrapped. Anything it cannot do goes on to the old way below, unchanged.
+        if !m.isSticker, !m.isGif,
+           await instantForward(m, from: sourceCid, to: targetCid, clientId: clientId, forwarded: forwarded) {
+            return
+        }
         if m.isSticker {   // 2026-10-17 chat stickers
             try await StickerSend.forward(m, from: sourceCid, to: targetCid, clientId: clientId, forwarded: forwarded)
         } else if m.isImage {
@@ -3393,6 +3399,246 @@ enum ChatService {
             try await sendFile(cid: targetCid, data: dec, fileName: m.fileName ?? "File", clientId: clientId, forwarded: forwarded)
         } else {
             try await sendText(cid: targetCid, text: m.text, clientId: clientId, forwarded: forwarded, bold: bold)
+        }
+    }
+
+    // MARK: - Instant forward (owner 2026-11-13: "Forwarding must be instant")
+
+    /// The storage path inside one of our download addresses; nil for anything else (an R2
+    /// address, a GIF service). The server checks the bucket.
+    static func storagePath(ofDownloadURL s: String?) -> String? {
+        guard let s, let c = URLComponents(string: s), c.scheme == "https",
+              c.host == "firebasestorage.googleapis.com" else { return nil }
+        let parts = c.percentEncodedPath.components(separatedBy: "/o/")
+        guard parts.count == 2, !parts[1].isEmpty, !parts[1].contains("/") else { return nil }
+        return parts[1].removingPercentEncoding
+    }
+
+    /// ⛔ FORWARD WITHOUT SENDING THE FILE AGAIN. The old way downloaded the file, decrypted it,
+    /// sealed it again and uploaded it again: a 60 MB video was two full transfers (and a video went
+    /// through the whole send pipeline again). The reference app forwards by pointing at what the
+    /// server already holds; this is the same idea with end-to-end encryption kept:
+    ///   1. every file's KEY is opened with the source chat's wrap and wrapped for the target
+    ///      (`Crypto.rewrapFileKey`), on this phone, before the server is asked anything;
+    ///   2. the `forwardMedia` callable copies the sealed bytes inside the bucket to
+    ///      chat/{target}/{new message id}<same suffix> and hands back the new addresses;
+    ///   3. the message is written the way the send functions write it, with the new addresses, the
+    ///      new keys, the same size, length, waveform, blurhash and inline thumb (sealed for the
+    ///      target), `forwarded`/`fwd`, and the same clientId so it replaces the optimistic bubble.
+    /// The bytes are never re-encoded, so HD stays HD.
+    ///
+    /// true = the message is written. false = nothing is left behind and the caller forwards the old
+    /// way: a file that is gone from the server (swept, expired), a refusal from the callable, a key
+    /// that cannot be re-wrapped (a plain group's file into an encrypted chat, a sealed file into a
+    /// plain group), an R2 address, a message still being sent, or any error at all. When the copy
+    /// succeeded but the message write failed, the copy is removed (`undo`) before falling back.
+    private static func instantForward(_ m: Message, from sourceCid: String, to targetCid: String,
+                                       clientId: String?, forwarded: Bool) async -> Bool {
+        guard m.isImage || m.isVideo || m.isAudio || m.isFile || m.isAlbum,
+              !m.viewOnce, !m.uploading, m.localImageData == nil, m.localAlbum.isEmpty,
+              m.localAudioData == nil, !m.localFile,
+              !OfficialChannel.isOfficial(sourceCid), !OfficialChannel.isOfficial(targetCid) else { return false }
+        let tap = Date()
+        let clientTs = tap.timeIntervalSince1970 * 1000
+
+        // Every file of the message, with the key that opens it.
+        struct Part { let path: String; let meta: EncMeta }
+        func part(_ url: String?, _ meta: EncMeta?) -> Part? {
+            guard let meta, let path = storagePath(ofDownloadURL: url) else { return nil }
+            return Part(path: path, meta: meta)
+        }
+        var parts: [Part] = []
+        var fileThumb: Part?
+        if m.isAlbum {
+            for it in m.album {
+                guard let p = part(it.imageUrl, it.enc) else { return false }
+                parts.append(p)
+                if it.isVideo {
+                    guard let v = part(it.videoUrl, it.videoEnc) else { return false }
+                    parts.append(v)
+                }
+            }
+        } else if m.isImage {
+            guard let p = part(m.imageUrl, m.enc) else { return false }
+            parts.append(p)
+        } else if m.isVideo {
+            guard let clip = part(m.videoUrl, m.enc), let poster = part(m.thumbUrl, m.thumbEnc) else { return false }
+            parts += [clip, poster]
+        } else if m.isAudio {
+            guard let p = part(m.audioUrl, m.enc) else { return false }
+            parts.append(p)
+        } else if m.isFile {
+            guard let p = part(m.fileUrl, m.enc) else { return false }
+            parts.append(p)
+            // The preview tile is a nicety: one that cannot come along is left out, not a reason to
+            // send the whole document again.
+            if let t = part(m.thumbUrl, m.thumbEnc) { fileThumb = t; parts.append(t) }
+        }
+        guard !parts.isEmpty, Set(parts.map(\.path)).count == parts.count else { return false }
+
+        let convRef = db.collection("conversations").document(targetCid)
+        let msgRef = convRef.collection("messages").document()
+        let newId = msgRef.documentID
+        var copied = false
+        do {
+            var members = await freshGroupMembers(targetCid, nil)
+            if members == nil, !targetCid.contains("_") { members = try await groupDocMembers(targetCid) }
+            if members == nil, !targetCid.contains("_") { return false }
+            let listedPlain = members != nil ? await groupIsPlain(targetCid) : false
+            let targetPlain = listedPlain && !GroupCrypto.sealNewMessages
+
+            // Keys first: a key this phone cannot re-wrap costs the server nothing.
+            var newMeta: [String: EncMeta] = [:]
+            for p in parts {
+                guard let nm = try await Crypto.shared.rewrapFileKey(p.meta, fromCid: sourceCid, toCid: targetCid,
+                                                                     members: members, targetPlain: targetPlain)
+                else { return false }
+                newMeta[p.path] = nm
+            }
+
+            // The 1:1 conversation doc, which the message write needs, alongside the copy.
+            var ensureConv: Task<Void, Error>?
+            if members == nil {
+                let other = targetCid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+                ensureConv = Task { try await convRef.setData(["users": [uid, other]], merge: true) }
+            }
+            let callable = Functions.functions(region: "me-central1").httpsCallable("forwardMedia")
+            callable.timeoutInterval = 20
+            // Marked before the call: an answer lost on the way back may still have copied.
+            copied = true
+            let res = try await callable.call([
+                "srcCid": sourceCid, "msgId": m.id, "dstCid": targetCid, "dstMsgId": newId,
+                "objects": parts.map(\.path),
+            ])
+            guard let d = res.data as? [String: Any], d["ok"] as? Bool == true,
+                  let objs = d["objects"] as? [[String: Any]] else { throw ForwardError.sourceUnavailable }
+            var newURL: [String: String] = [:]
+            for o in objs { if let s = o["src"] as? String, let u = o["url"] as? String { newURL[s] = u } }
+            guard parts.allSatisfy({ newURL[$0.path] != nil }) else { throw ForwardError.sourceUnavailable }
+            /// The new address and key for one of the message's old addresses.
+            func moved(_ old: String?) -> (url: String, meta: EncMeta)? {
+                guard let path = storagePath(ofDownloadURL: old), let u = newURL[path], let k = newMeta[path] else { return nil }
+                return (u, k)
+            }
+
+            let sealMembers = members
+            func seal(_ s: String) async -> String? {
+                if let sealMembers { return try? await Crypto.shared.sealForGroup(s, members: sealMembers, cid: targetCid) }
+                return try? await Crypto.shared.encryptForConversation(targetCid, s)
+            }
+
+            var msg: [String: Any] = [
+                "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs, "text": "",
+            ]
+            var convUpdate: [String: Any] = ["lastSender": uid, "updatedAt": FieldValue.serverTimestamp()]
+            let caption = m.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let carriesCaption = m.isImage || m.isVideo || m.isAlbum
+            if carriesCaption, !caption.isEmpty { msg["text"] = (await seal(caption)) ?? "" }
+            if carriesCaption, let bh = m.blurhash, !bh.isEmpty, let s = await seal(bh), !s.isEmpty { msg["blurhash"] = s }
+            if carriesCaption, let th = m.thumb, !th.isEmpty, let s = await seal(th), !s.isEmpty { msg["thumb"] = s }
+
+            if m.isAlbum {
+                var out: [[String: Any]] = []
+                for it in m.album {
+                    guard let img = moved(it.imageUrl) else { throw ForwardError.sourceUnavailable }
+                    var row: [String: Any] = ["kind": it.isVideo ? "video" : "image", "imageUrl": img.url,
+                                              "enc": img.meta.asDict, "width": it.width, "height": it.height]
+                    if it.isVideo {
+                        guard let clip = moved(it.videoUrl) else { throw ForwardError.sourceUnavailable }
+                        row["videoUrl"] = clip.url; row["videoEnc"] = clip.meta.asDict
+                        row["duration"] = MediaDuration.clean(it.duration) ?? 0
+                    }
+                    out.append(row)
+                }
+                msg["type"] = "album"; msg["album"] = out
+                let videos = m.album.filter(\.isVideo).count, photos = m.album.count - videos
+                convUpdate["lastMessage"] = videos > 0 && photos > 0 ? "🎬 \(out.count) Media"
+                    : videos > 0 ? "🎥 \(videos) Video\(videos > 1 ? "s" : "")" : "📷 \(photos) Photos"
+                if let first = out.first(where: { ($0["kind"] as? String) == "image" }) ?? out.first,
+                   let u = first["imageUrl"] as? String, let e = first["enc"] {
+                    convUpdate["lastImageUrl"] = u; convUpdate["lastImageEnc"] = e
+                    let rest = out.filter { ($0["imageUrl"] as? String) != u }
+                    convUpdate["lastImages"] = ([first] + rest).prefix(3).compactMap { t -> [String: Any]? in
+                        guard let tu = t["imageUrl"], let te = t["enc"] else { return nil }
+                        return ["imageUrl": tu, "enc": te]
+                    }
+                }
+            } else if m.isImage {
+                guard let img = moved(m.imageUrl) else { throw ForwardError.sourceUnavailable }
+                msg["type"] = "image"; msg["imageUrl"] = img.url; msg["enc"] = img.meta.asDict
+                if let w = m.width, let h = m.height { msg["width"] = w; msg["height"] = h }
+                convUpdate["lastMessage"] = "📷 Photo"
+                convUpdate["lastImageUrl"] = img.url; convUpdate["lastImageEnc"] = img.meta.asDict
+            } else if m.isVideo {
+                guard let clip = moved(m.videoUrl), let poster = moved(m.thumbUrl) else { throw ForwardError.sourceUnavailable }
+                msg["type"] = "video"; msg["videoUrl"] = clip.url; msg["enc"] = clip.meta.asDict
+                msg["thumbUrl"] = poster.url; msg["thumbEnc"] = poster.meta.asDict
+                msg["duration"] = MediaDuration.clean(m.duration ?? 0) ?? 0
+                msg["width"] = m.width ?? 720; msg["height"] = m.height ?? 720
+                convUpdate["lastMessage"] = "🎥 Video · " + voiceDurationLabel(m.duration ?? 0)
+                convUpdate["lastImageUrl"] = poster.url; convUpdate["lastImageEnc"] = poster.meta.asDict
+            } else if m.isAudio {
+                guard let a = moved(m.audioUrl) else { throw ForwardError.sourceUnavailable }
+                msg["type"] = "audio"; msg["audioUrl"] = a.url; msg["enc"] = a.meta.asDict
+                msg["duration"] = MediaDuration.clean(m.duration ?? 0) ?? 0; msg["waveform"] = m.waveform
+                convUpdate["lastMessage"] = "🎤 Voice message · " + voiceDurationLabel(m.duration ?? 0)
+            } else {
+                guard let f = moved(m.fileUrl) else { throw ForwardError.sourceUnavailable }
+                let name = m.fileName ?? "File"
+                var plainName = name
+                if sealMembers == nil, Self.sealsFileNames {   // as sendFile
+                    msg["fileNameEnc"] = try await Crypto.shared.encryptForConversation(targetCid, name)
+                    plainName = Self.fileNameStandIn(name)
+                }
+                msg["type"] = "file"; msg["fileUrl"] = f.url; msg["enc"] = f.meta.asDict
+                msg["fileName"] = plainName; msg["fileSize"] = m.fileSize ?? 0
+                if fileThumb != nil, let t = moved(m.thumbUrl) { msg["thumbUrl"] = t.url; msg["thumbEnc"] = t.meta.asDict }
+                convUpdate["lastMessage"] = "📄 File"
+            }
+            if let clientId { msg["clientId"] = clientId }
+            if forwarded {
+                msg["forwarded"] = true
+                if let fwd = await sealedForwardSource(cid: targetCid, members: sealMembers) { msg["fwd"] = fwd }
+            }
+            if let sealMembers {
+                for u in sealMembers where u != uid { convUpdate["unreadCount.\(u)"] = FieldValue.increment(Int64(1)) }
+            } else {
+                let other = targetCid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+                convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1))
+            }
+
+            // This phone's own copies follow under the new id, so the sender's bubble opens at once.
+            if m.isVideo || m.isAlbum {
+                if m.isVideo { VideoCache.copy(from: m.id, to: newId) }
+                for (i, it) in m.album.enumerated() where it.isVideo { VideoCache.copy(from: "\(m.id)-\(i)", to: "\(newId)-\(i)") }
+            }
+            if m.isAudio, let local = AudioCache.url(for: m.id), let bytes = try? Data(contentsOf: local) {
+                AudioCache.store(bytes, for: newId)
+                if let clientId { AudioCache.store(bytes, for: clientId) }
+            }
+            if m.isImage, let old = m.imageUrl, let img = moved(old),
+               let raw = await DiskImageCache.shared.rawData(for: old), let ui = UIImage(data: raw) {
+                DiskImageCache.shared.store(ui, data: raw, for: img.url, owned: true)
+            }
+
+            try await ensureConv?.value
+            try Task.checkCancellation()
+            let batch = db.batch()
+            batch.setData(msg, forDocument: msgRef)
+            batch.updateData(convUpdate, forDocument: convRef)
+            try await batch.commit()
+            if let clientId, m.isImage || m.isVideo { await MediaSend.shared.markItemDone(clientId) }
+            DiagLog.add("FWD# instant type=\(msg["type"] as? String ?? "?") files=\(parts.count) "
+                        + "ms=\(Int(Date().timeIntervalSince(tap) * 1000))")
+            return true
+        } catch {
+            DiagLog.add("FWD# instant fell back: \(error.localizedDescription.prefix(80))")
+            if copied {
+                VideoCache.remove(newId)
+                _ = try? await Functions.functions(region: "me-central1").httpsCallable("forwardMedia")
+                    .call(["undo": true, "dstCid": targetCid, "dstMsgId": newId])
+            }
+            return false
         }
     }
 

@@ -66,6 +66,13 @@ enum VideoCache {
         return dest
     }
 
+    /// The clip this phone holds for `from`, also kept for `to` (an instant forward, owner
+    /// 2026-11-13). A copy inside one folder: APFS clones it, so no bytes are written. Best effort.
+    static func copy(from: String, to: String) {
+        guard let have = url(for: from), url(for: to) == nil else { return }
+        try? FileManager.default.copyItem(at: have, to: fileURL(to))
+    }
+
     /// Thrown by a send whose own copy could not be kept on this phone.
     struct NoRoomError: LocalizedError {
         var errorDescription: String? {
