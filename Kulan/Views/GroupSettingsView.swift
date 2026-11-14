@@ -821,7 +821,7 @@ struct GroupAdminsView: View {
                     Button { showPick = true } label: { Label("Add Admin", systemImage: "person.badge.plus") }
                 }
                 ForEach(admins, id: \.self) { uid in
-                    GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }.equatable()
+                    GroupMemberRow(conv: conv, uid: uid, me: me, showPromoter: true) { opened = uid }.equatable()
                         .listRowInsets(EdgeInsets())
                 }
             } footer: {
