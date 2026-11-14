@@ -48,6 +48,10 @@ struct QuoteCard: Equatable, Codable {
         locked = d["locked"] as? Bool
     }
 
+    /// A quoted poll post (owner 2026-11-14): the question and options from the marker the post's
+    /// text carries. The card draws them as a small live poll; every text surface says "Poll: ...".
+    var poll: PollCard? { state == .ok ? PollCard.parse(text) : nil }
+
     /// The card's lines, as the bubble draws them.
     var heading: String {
         switch state {
@@ -59,6 +63,9 @@ struct QuoteCard: Equatable, Codable {
     var body: String {
         switch state {
         case .ok:
+            // A poll post's text is its marker (owner 2026-11-14: the card printed "fariin-poll:eyJ...").
+            if let poll { return "Poll: \(poll.question)" }
+            if text.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil { return "Post" }
             if !text.isEmpty { return text }
             switch kind {
             case "photo": return "Photo"

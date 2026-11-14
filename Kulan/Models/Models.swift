@@ -2632,6 +2632,30 @@ struct PollCard: Equatable {
     var images: [PollImage?] = []
     var isQuiz: Bool { !correct.isEmpty }
     func image(_ i: Int) -> PollImage? { i < images.count ? images[i] : nil }
+
+    /// A poll read from its "fariin-poll:" marker text. Used by a message's own text and by a
+    /// quoted channel post, whose text is the marker as the server copied it (owner 2026-11-14).
+    static func parse(_ text: String) -> PollCard? {
+        guard text.hasPrefix(Message.pollMarker) else { return nil }
+        let b64 = String(text.dropFirst(Message.pollMarker.count))
+        guard let data = Data(base64Encoded: b64),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = obj["id"] as? String,
+              let q = obj["q"] as? String,
+              let opts = obj["opts"] as? [String], opts.count >= 2 else { return nil }
+        let correct = ((obj["quiz"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
+            .filter { $0 >= 0 && $0 < opts.count }
+        let ends = (obj["ends"] as? NSNumber)?.doubleValue
+        // Pictures (2026-11-14): kept only when the array lines up with the options.
+        var images: [PollImage?] = []
+        if let raw = obj["imgs"] as? [Any], raw.count == opts.count {
+            images = raw.map { PollImage(json: $0) }
+            if images.allSatisfy({ $0 == nil }) { images = [] }
+        }
+        return PollCard(id: id, question: q, options: opts, multiple: obj["multi"] as? Bool ?? false,
+                        hideVoters: obj["anon"] as? Bool ?? false, correct: correct,
+                        endsAt: (ends ?? 0) > 0 ? ends : nil, images: images)
+    }
 }
 
 /// One option's picture: the uploaded file and, when the chat seals media, its file key (the same
@@ -2663,27 +2687,7 @@ struct PollImage: Equatable, Hashable {
 
 extension Message {
     static let pollMarker = "fariin-poll:"
-    var poll: PollCard? {
-        guard text.hasPrefix(Self.pollMarker) else { return nil }
-        let b64 = String(text.dropFirst(Self.pollMarker.count))
-        guard let data = Data(base64Encoded: b64),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = obj["id"] as? String,
-              let q = obj["q"] as? String,
-              let opts = obj["opts"] as? [String], opts.count >= 2 else { return nil }
-        let correct = ((obj["quiz"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
-            .filter { $0 >= 0 && $0 < opts.count }
-        let ends = (obj["ends"] as? NSNumber)?.doubleValue
-        // Pictures (2026-11-14): kept only when the array lines up with the options.
-        var images: [PollImage?] = []
-        if let raw = obj["imgs"] as? [Any], raw.count == opts.count {
-            images = raw.map { PollImage(json: $0) }
-            if images.allSatisfy({ $0 == nil }) { images = [] }
-        }
-        return PollCard(id: id, question: q, options: opts, multiple: obj["multi"] as? Bool ?? false,
-                        hideVoters: obj["anon"] as? Bool ?? false, correct: correct,
-                        endsAt: (ends ?? 0) > 0 ? ends : nil, images: images)
-    }
+    var poll: PollCard? { PollCard.parse(text) }
     static func pollMarkerText(id: String, question: String, options: [String], multiple: Bool,
                                hideVoters: Bool = false, correct: [Int] = [], endsAt: Double? = nil,
                                images: [PollImage?] = []) -> String {

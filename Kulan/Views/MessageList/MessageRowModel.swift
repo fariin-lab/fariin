@@ -383,6 +383,19 @@ enum BubbleBody: Equatable {
         /// A quoted ALBUM post's pictures, 2 to 4, first = `imageUrl` (owner 2026-11-08). Empty for
         /// every other card, which then draws exactly as before.
         var imageUrls: [String] = []
+        /// A quoted or linked POLL post (owner 2026-11-14): the poll the post's marker carries and
+        /// where its votes live (the source channel and post). nil for every other card.
+        var quotedPoll: QuotedPoll? = nil
+    }
+
+    /// The poll inside a quote or post-link card. Votes are read live from the ORIGINAL post.
+    struct QuotedPoll: Equatable {
+        var cid: String
+        var mid: String
+        var question: String
+        var options: [String]
+        var multiple: Bool
+        var endsAt: Double?
     }
 
     struct TextBody: Equatable {
