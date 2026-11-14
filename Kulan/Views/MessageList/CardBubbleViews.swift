@@ -175,6 +175,8 @@ final class LinkPreviewBubbleView: UIView {
     // on this view itself — `backing` clips to the card).
     private let glyphCircle = UIView()
     private let glyphIcon = UIImageView()
+    /// A quoted or linked poll post's bars, chart square and live line (owner 2026-11-14).
+    private let quotedPoll = QuotedPollView()
     private let joinButton = UIView()
     private let joinLabel = UILabel()
     /// ⛔ A STORY CARD'S PICTURE IS THE STORY'S DOOR (owner, 2026-10-11: View Story "is open like
@@ -235,6 +237,8 @@ final class LinkPreviewBubbleView: UIView {
             b.layer.cornerCurve = .continuous
             backing.addSubview(b)
         }
+        quotedPoll.isHidden = true
+        backing.addSubview(quotedPoll)
         // Last, so it lies over everything the card draws; it follows the card's size.
         pressDim.alpha = 0
         pressDim.isUserInteractionEnabled = false
@@ -450,6 +454,8 @@ final class LinkPreviewBubbleView: UIView {
             // Compact = the picture sits BESIDE the words (a photo post's quote); under them it is 8.
             let besideHero = plan.hero.map { $0.maxX <= rect.minX } ?? false
             subtitle.numberOfLines = quoteCard && !p.postLink ? (besideHero ? 4 : 8) : 2
+            // A poll's question: 3 lines in the quote card, 2 in the link card (the layout's caps).
+            if let pp = plan.poll { subtitle.numberOfLines = pp.linkCard ? 2 : 3 }
             subtitle.frame = rect
             subtitle.attributedText = attr
         } else {
@@ -457,6 +463,15 @@ final class LinkPreviewBubbleView: UIView {
         }
 
         applySkeleton(QuoteSkeleton.isLoading(p) ? plan : nil, tint: tint)
+
+        if let pp = plan.poll, let qp = p.quotedPoll {
+            quotedPoll.isHidden = false
+            quotedPoll.frame = CGRect(origin: .zero, size: plan.card.size)
+            quotedPoll.configure(pp, poll: qp, tint: tint)
+        } else if !quotedPoll.isHidden {
+            quotedPoll.isHidden = true
+            quotedPoll.stop()
+        }
 
         if let rect = plan.host, let attr = plan.hostAttr {
             host.isHidden = false
@@ -520,8 +535,176 @@ final class LinkPreviewBubbleView: UIView {
     func prepareForReuse() {
         hero.reset()
         albumTiles.forEach { $0.reset() }
+        quotedPoll.stop()
         setFlightKey("")
         hero.alpha = 1
+    }
+}
+
+// ── A poll inside a quote card or a post-link card ──
+
+/// The poll a quoted (or linked) channel poll post carries (owner 2026-11-14, his picks "Mini poll
+/// (live)" and "Link card"). The votes are the ORIGINAL post's, read live through the same shared
+/// listeners the poll bubble uses (`PollService.listen`, channel path). Voting happens in the post
+/// itself: a tap on the card opens it, as every quote card does.
+final class QuotedPollView: UIView {
+    private let glyphBox = UIView()
+    private let glyphBars = (0..<3).map { _ in UIView() }
+    private var tracks: [UIView] = []
+    private var fills: [UIView] = []
+    private var labels: [UILabel] = []
+    private var percents: [UILabel] = []
+    private let more = UILabel()
+    private let footer = UILabel()
+
+    private var plan: QuotedPollPlan?
+    private var poll: BubbleBody.QuotedPoll?
+    private var tint: UIColor = .label
+    private var listener: ListenerRegistration?
+    private var listeningKey: String?
+    private var votes: [String: [Int]] = [:]
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        glyphBox.layer.cornerRadius = 10
+        glyphBox.layer.cornerCurve = .continuous
+        addSubview(glyphBox)
+        for b in glyphBars {
+            b.layer.cornerCurve = .circular
+            glyphBox.addSubview(b)
+        }
+        more.lineBreakMode = .byTruncatingTail
+        addSubview(more)
+        footer.lineBreakMode = .byTruncatingTail
+        addSubview(footer)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    deinit { FirestoreHub.drop([listener]) }   // never remove() directly in a deinit: see ListenerBox
+
+    func configure(_ plan: QuotedPollPlan, poll: BubbleBody.QuotedPoll, tint: UIColor) {
+        self.plan = plan
+        self.poll = poll
+        self.tint = tint
+
+        if let g = plan.glyph {
+            glyphBox.isHidden = false
+            glyphBox.frame = g
+            glyphBox.backgroundColor = tint.withAlphaComponent(0.12)
+            // Three upright rounded bars, short, tall, middle: our own drawing of a bar chart.
+            let w: CGFloat = 5, gap: CGFloat = 4
+            let heights: [CGFloat] = [11, 20, 15]
+            let left = (g.width - (w * 3 + gap * 2)) / 2
+            let base = g.height / 2 + 10
+            for (i, b) in glyphBars.enumerated() {
+                b.frame = CGRect(x: left + CGFloat(i) * (w + gap), y: base - heights[i], width: w, height: heights[i])
+                b.layer.cornerRadius = w / 2
+                b.backgroundColor = tint.withAlphaComponent(0.85)
+            }
+        } else {
+            glyphBox.isHidden = true
+        }
+
+        while tracks.count < plan.bars.count {
+            let t = UIView()
+            t.layer.cornerCurve = .continuous
+            t.clipsToBounds = true
+            let f = UIView()
+            t.addSubview(f)
+            addSubview(t)
+            let l = UILabel()
+            l.lineBreakMode = .byTruncatingTail
+            addSubview(l)
+            let p = UILabel()
+            p.textAlignment = .right
+            addSubview(p)
+            tracks.append(t); fills.append(f); labels.append(l); percents.append(p)
+        }
+        for i in tracks.indices {
+            let on = i < plan.bars.count
+            tracks[i].isHidden = !on; labels[i].isHidden = !on; percents[i].isHidden = !on
+            guard on else { continue }
+            let bar = plan.bars[i]
+            tracks[i].frame = bar.track
+            tracks[i].layer.cornerRadius = bar.track.height / 2
+            tracks[i].backgroundColor = tint.withAlphaComponent(0.07)
+            labels[i].frame = bar.label
+            labels[i].attributedText = bar.labelAttr
+            percents[i].frame = bar.percent
+        }
+
+        more.isHidden = plan.more == nil
+        more.frame = plan.more ?? .zero
+        more.attributedText = plan.moreAttr
+        footer.frame = plan.footer
+
+        let key = "\(poll.cid)|\(poll.mid)"
+        if listeningKey != key {
+            listener?.remove()
+            listeningKey = key
+            votes = [:]
+            listener = PollService.listen(cid: poll.cid, messageId: poll.mid, channel: true) { [weak self] v in
+                guard let self, self.listeningKey == key else { return }
+                self.votes = v
+                self.paint()
+            }
+        }
+        paint()
+    }
+
+    private var isOpen: Bool {
+        guard let ends = poll?.endsAt else { return true }
+        return Date().timeIntervalSince1970 * 1000 < ends
+    }
+
+    /// The live part: fills, percentages and the footer words. Geometry is the plan's.
+    private func paint() {
+        guard let plan else { return }
+        let voters = votes.count
+        let mine = Set(votes[AuthService.shared.uid ?? ""] ?? [])
+        let open = isOpen
+        // Results show once I have voted or the poll is over, as in the poll bubble itself.
+        let showResults = !mine.isEmpty || !open
+        let count = "\(voters) vote\(voters == 1 ? "" : "s")"
+        let words: String
+        if plan.linkCard {
+            let opts = "\(plan.optionCount) options"
+            words = voters > 0 ? "\(opts) · \(count) · fariin.com" : "\(opts) · fariin.com"
+        } else if !open {
+            words = voters > 0 ? "Poll ended · \(count)" : "Poll ended"
+        } else if mine.isEmpty {
+            words = voters > 0 ? "\(count) · tap to vote" : "Tap to vote"
+        } else {
+            words = count
+        }
+        footer.attributedText = NSAttributedString(string: words, attributes: [
+            .font: UIFont.systemFont(ofSize: 12), .foregroundColor: tint.withAlphaComponent(0.6)])
+
+        let pFont = UIFont.systemFont(ofSize: 12, weight: .bold)
+        for i in tracks.indices where i < plan.bars.count {
+            let n = votes.values.filter { $0.contains(i) }.count
+            let fraction = voters > 0 ? CGFloat(n) / CGFloat(voters) : 0
+            let track = tracks[i].bounds
+            if showResults {
+                fills[i].isHidden = false
+                fills[i].frame = CGRect(x: 0, y: 0, width: track.width * min(1, fraction), height: track.height)
+                fills[i].backgroundColor = tint.withAlphaComponent(mine.contains(i) ? 0.28 : 0.12)
+                percents[i].isHidden = false
+                percents[i].attributedText = NSAttributedString(
+                    string: "\(Int((fraction * 100).rounded()))%",
+                    attributes: [.font: pFont, .foregroundColor: tint.withAlphaComponent(0.85)])
+            } else {
+                fills[i].isHidden = true
+                percents[i].isHidden = true
+            }
+        }
+    }
+
+    func stop() {
+        listener?.remove()
+        listener = nil
+        listeningKey = nil
+        votes = [:]
     }
 }
 

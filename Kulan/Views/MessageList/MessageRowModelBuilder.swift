@@ -922,6 +922,16 @@ enum MessageRowModelBuilder {
         // first picture, and only 2 to 4 of them; anything else is the single-picture card.
         let album = (c.images ?? []).filter { !$0.isEmpty }
         let images = image != nil && album.count >= 2 ? Array(album.prefix(4)) : []
+        // A poll post (owner 2026-11-14, his pick "Mini poll" / "Link card"): the poll itself, its
+        // votes read live from the original post. No picture.
+        if let poll = c.poll, !c.cid.isEmpty, !c.mid.isEmpty {
+            return BubbleBody.LinkPreview(shape: .article, url: "fariin-quote://\(qid)", title: c.heading,
+                                          desc: poll.question, host: "", imageUrl: nil, imageEnc: nil,
+                                          avatarUrl: c.photoUrl.isEmpty ? nil : c.photoUrl,
+                                          quotedPoll: BubbleBody.QuotedPoll(
+                                            cid: c.cid, mid: c.mid, question: poll.question,
+                                            options: poll.options, multiple: poll.multiple, endsAt: poll.endsAt))
+        }
         // The card (owner 2026-11-06, his reference): the channel's photo and name, the post's
         // picture, its words; under my own words (MessageRowLayout places it below the text).
         return BubbleBody.LinkPreview(shape: .article, url: "fariin-quote://\(qid)", title: c.heading,

@@ -2628,13 +2628,12 @@ struct PollCard: Equatable {
     /// When voting ends (ms), nil = never. Also written in the clear (`pollEndsAt`) for the rules.
     var endsAt: Double? = nil
     var isQuiz: Bool { !correct.isEmpty }
-}
 
-extension Message {
-    static let pollMarker = "fariin-poll:"
-    var poll: PollCard? {
-        guard text.hasPrefix(Self.pollMarker) else { return nil }
-        let b64 = String(text.dropFirst(Self.pollMarker.count))
+    /// A poll read from its "fariin-poll:" marker text. Used by a message's own text and by a
+    /// quoted channel post, whose text is the marker as the server copied it (owner 2026-11-14).
+    static func parse(_ text: String) -> PollCard? {
+        guard text.hasPrefix(Message.pollMarker) else { return nil }
+        let b64 = String(text.dropFirst(Message.pollMarker.count))
         guard let data = Data(base64Encoded: b64),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let id = obj["id"] as? String,
@@ -2647,6 +2646,11 @@ extension Message {
                         hideVoters: obj["anon"] as? Bool ?? false, correct: correct,
                         endsAt: (ends ?? 0) > 0 ? ends : nil)
     }
+}
+
+extension Message {
+    static let pollMarker = "fariin-poll:"
+    var poll: PollCard? { PollCard.parse(text) }
     static func pollMarkerText(id: String, question: String, options: [String], multiple: Bool,
                                hideVoters: Bool = false, correct: [Int] = [], endsAt: Double? = nil) -> String {
         var obj: [String: Any] = ["id": id, "q": question, "opts": options, "multi": multiple]

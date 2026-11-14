@@ -249,6 +249,30 @@ struct LinkPreviewPlan {
     var join: CGRect? = nil
     var joinLabel: CGRect? = nil
     var joinAttr: NSAttributedString? = nil
+    /// A quoted or linked poll post (owner 2026-11-14), CARD coordinates. nil for every other card.
+    var poll: QuotedPollPlan? = nil
+}
+
+/// The poll inside a quote card ("Mini poll") or a post-link card ("Link card"), owner 2026-11-14.
+/// Only the fills, the percentages and the footer words are written live; no rect depends on a vote.
+struct QuotedPollPlan {
+    struct Bar {
+        var track: CGRect
+        var label: CGRect
+        var labelAttr: NSAttributedString
+        var percent: CGRect
+    }
+    /// The link card's 44pt square with the drawn bar chart; nil in a quote card.
+    var glyph: CGRect?
+    /// Up to three option bars (quote card only).
+    var bars: [Bar] = []
+    var more: CGRect?
+    var moreAttr: NSAttributedString?
+    /// The live line: "N votes · tap to vote" (quote) or "N options · N votes · fariin.com" (link).
+    var footer: CGRect
+    var footerAttr: NSAttributedString
+    var optionCount: Int
+    var linkCard: Bool
 }
 
 struct BubblePlan {
@@ -2588,6 +2612,7 @@ enum MessageRowLayout {
             // ⛔ A POST SENT AS ITS LINK (owner 2026-11-13, his pick "B" of three mockups): the small
             // link card, not the quote card. The post's picture on the left (62pt, rounded), then the
             // channel's photo and name, two lines of the post, and "fariin.com".
+            if let qp = p.quotedPoll { return quotedPollLink(p, qp, textColor: textColor, width: width) }
             let cardPad: CGFloat = 8
             let thumb: CGFloat = 62
             let hasThumb = p.imageUrl != nil
@@ -2629,6 +2654,7 @@ enum MessageRowLayout {
         case .article where p.url.hasPrefix("fariin-quote://"):
             // A QUOTED CHANNEL POST (owner 2026-11-06, his reference): a 20pt channel photo with the
             // channel's name in blue, the post's picture with its own corners, then its words.
+            if let qp = p.quotedPoll { return quotedPollQuote(p, qp, textColor: textColor, width: width) }
             y = 10
             // ⛔ 24pt PHOTO, 16pt NAME (owner 2026-11-08: "channel name looks small"). The name
             // matches the card's own 16pt words; the header row is the photo's height.
@@ -2903,6 +2929,131 @@ enum MessageRowLayout {
                                     divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil,
                                     glyph: glyph))
         }
+    }
+
+    /// ⛔ A QUOTED POLL POST, "Mini poll (live)" (owner 2026-11-14, his pick 3 of the canvas): the
+    /// quote card's header with a "Poll" tag, the question at 15 bold, up to three 28pt option bars,
+    /// "+N more" past three, and the live "N votes · tap to vote" line.
+    private static func quotedPollQuote(_ p: BubbleBody.LinkPreview, _ qp: BubbleBody.QuotedPoll,
+                                        textColor: UIColor, width: CGFloat) -> (CGSize, LinkPreviewPlan) {
+        let pad: CGFloat = 10
+        let inner = max(1, width - pad * 2)
+        var y: CGFloat = 10
+        let head: CGFloat = 24
+        let avatar = CGRect(x: pad, y: y, width: head, height: head)
+        let secondary = textColor.withAlphaComponent(0.55)
+        let tagAttr = NSMutableAttributedString()
+        if let icon = UIImage(systemName: "chart.bar.fill")?.withTintColor(secondary, renderingMode: .alwaysOriginal) {
+            let a = NSTextAttachment(image: icon)
+            a.bounds = CGRect(x: 0, y: -1, width: 12, height: 11)
+            tagAttr.append(NSAttributedString(attachment: a))
+            tagAttr.append(NSAttributedString(string: " "))
+        }
+        tagAttr.append(NSAttributedString(string: "Poll", attributes: [
+            .font: UIFont.systemFont(ofSize: 12), .foregroundColor: secondary]))
+        let tagSize = lineSizeOf(tagAttr)
+        let tagRect = CGRect(x: pad + inner - tagSize.width, y: y + (head - tagSize.height) / 2,
+                             width: tagSize.width, height: tagSize.height)
+        let titleW = max(1, inner - (head + 8) - tagSize.width - 8)
+        let titleAttr = NSAttributedString(string: p.title, attributes: [
+            .font: UIFont.systemFont(ofSize: 16, weight: .semibold), .foregroundColor: textColor])
+        let tH = lineSizeOf(titleAttr, cap: titleW).height
+        let titleRect = CGRect(x: pad + head + 8, y: y + (head - tH) / 2, width: titleW, height: tH)
+        y += head + 8
+
+        let qAttr = NSAttributedString(string: qp.question, attributes: [
+            .font: UIFont.systemFont(ofSize: 15, weight: .bold), .foregroundColor: textColor])
+        let qH = cappedHeight(qAttr, width: inner, lines: 3)
+        let question = CGRect(x: pad, y: y, width: inner, height: qH)
+        y += qH + 8
+
+        // Bars: 28pt capsules, 6 apart; the label 13 semibold on the left, the percent 12 bold right.
+        let barH: CGFloat = 28, barGap: CGFloat = 6, barInset: CGFloat = 10
+        let pFont = UIFont.systemFont(ofSize: 12, weight: .bold)
+        let percentW = ceil(("100%" as NSString).size(withAttributes: [.font: pFont]).width) + 2
+        let percentH = ceil(pFont.lineHeight)
+        var bars: [QuotedPollPlan.Bar] = []
+        for (i, opt) in qp.options.prefix(3).enumerated() {
+            if i > 0 { y += barGap }
+            let track = CGRect(x: pad, y: y, width: inner, height: barH)
+            let labelAttr = NSAttributedString(string: opt, attributes: [
+                .font: UIFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: textColor])
+            let labelW = max(1, inner - barInset * 2 - percentW - 6)
+            let lH = lineSizeOf(labelAttr, cap: labelW).height
+            bars.append(QuotedPollPlan.Bar(
+                track: track,
+                label: CGRect(x: pad + barInset, y: y + (barH - lH) / 2, width: labelW, height: lH),
+                labelAttr: labelAttr,
+                percent: CGRect(x: track.maxX - barInset - percentW, y: y + (barH - percentH) / 2,
+                                width: percentW, height: percentH)))
+            y += barH
+        }
+        var more: CGRect?
+        var moreAttr: NSAttributedString?
+        if qp.options.count > 3 {
+            let attr = NSAttributedString(string: "+\(qp.options.count - 3) more", attributes: [
+                .font: UIFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: secondary])
+            let h = lineSizeOf(attr, cap: inner).height
+            y += 6
+            more = CGRect(x: pad, y: y, width: inner, height: h)
+            moreAttr = attr
+            y += h
+        }
+        y += 8
+        let footFont = UIFont.systemFont(ofSize: 12)
+        let footerAttr = NSAttributedString(string: "Tap to vote", attributes: [
+            .font: footFont, .foregroundColor: textColor.withAlphaComponent(0.6)])
+        let footer = CGRect(x: pad, y: y, width: inner, height: ceil(footFont.lineHeight))
+        y += footer.height + 10
+
+        var plan = LinkPreviewPlan(card: .zero, hero: nil, heroTiles: [], avatar: avatar,
+                                   title: titleRect, titleAttr: titleAttr,
+                                   subtitle: question, subtitleAttr: qAttr,
+                                   host: tagRect, hostAttr: tagAttr,
+                                   divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil)
+        plan.poll = QuotedPollPlan(glyph: nil, bars: bars, more: more, moreAttr: moreAttr,
+                                   footer: footer, footerAttr: footerAttr,
+                                   optionCount: qp.options.count, linkCard: false)
+        return (CGSize(width: width, height: y), plan)
+    }
+
+    /// ⛔ A POLL POST SENT AS ITS LINK, "Link card" (owner 2026-11-14, his pick 4): a 44pt rounded
+    /// square with a drawn bar chart on the left, then "<Channel> · Poll", the question, and the live
+    /// "N options · N votes · fariin.com".
+    private static func quotedPollLink(_ p: BubbleBody.LinkPreview, _ qp: BubbleBody.QuotedPoll,
+                                       textColor: UIColor, width: CGFloat) -> (CGSize, LinkPreviewPlan) {
+        let cardPad: CGFloat = 8
+        let side: CGFloat = 44
+        let glyph = CGRect(x: cardPad, y: cardPad, width: side, height: side)
+        let x = cardPad + side + 10
+        let colW = max(1, width - x - cardPad)
+        var cy = cardPad
+        let titleAttr = NSAttributedString(string: "\(p.title) · Poll", attributes: [
+            .font: UIFont.systemFont(ofSize: 15, weight: .semibold), .foregroundColor: textColor])
+        let tH = lineSizeOf(titleAttr, cap: colW).height
+        let titleRect = CGRect(x: x, y: cy, width: colW, height: tH)
+        cy += tH + 2
+        let qAttr = NSAttributedString(string: qp.question, attributes: [
+            .font: UIFont.systemFont(ofSize: 13), .foregroundColor: textColor])
+        let qH = cappedHeight(qAttr, width: colW, lines: 2)
+        let question = CGRect(x: x, y: cy, width: colW, height: qH)
+        cy += qH + 2
+        let n = qp.options.count
+        let footerAttr = NSAttributedString(string: "\(n) options · fariin.com", attributes: [
+            .font: UIFont.systemFont(ofSize: 12), .foregroundColor: textColor.withAlphaComponent(0.6)])
+        let fH = lineSizeOf(footerAttr, cap: colW).height
+        let footer = CGRect(x: x, y: cy, width: colW, height: fH)
+        cy += fH
+        let height = max(cy, cardPad + side) + cardPad
+        var plan = LinkPreviewPlan(card: .zero, hero: nil, heroTiles: [], avatar: nil,
+                                   title: titleRect, titleAttr: titleAttr,
+                                   subtitle: question, subtitleAttr: qAttr,
+                                   host: nil, hostAttr: nil,
+                                   divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil)
+        plan.poll = QuotedPollPlan(glyph: glyph, bars: [], more: nil, moreAttr: nil,
+                                   footer: footer, footerAttr: footerAttr,
+                                   optionCount: n, linkCard: true)
+        return (CGSize(width: width, height: height), plan)
     }
 
     /// The height of an attributed string clamped to `lines` — the card's title and description are
