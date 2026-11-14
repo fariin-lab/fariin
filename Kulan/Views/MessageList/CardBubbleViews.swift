@@ -1048,7 +1048,7 @@ final class PollOptionRow: UIView {
         isUserInteractionEnabled = false
         thumb.contentMode = .scaleAspectFill
         thumb.clipsToBounds = true
-        thumb.layer.cornerRadius = 8
+        thumb.layer.cornerRadius = 10
         thumb.layer.cornerCurve = .continuous
         thumb.isHidden = true
         smallMark.contentMode = .center
@@ -1166,17 +1166,14 @@ final class PollOptionRow: UIView {
         smallMark.isHidden = !marked
         label.attributedText = o.labelAttr
         if showResults {
-            // No tick: the picture (or the words) start at the inner edge, where the tick would be.
+            // No tick: the words start where the tick would be (after the picture, if any).
             var f = o.labelResult
-            var t = o.thumbResult
             if !marked {
-                let shift = (t == .zero ? o.labelResult.minX : t.minX) - o.mark.minX
-                f.size.width += shift
-                f.origin.x -= shift
-                t.origin.x -= shift
+                f.size.width += o.labelResult.minX - o.mark.minX
+                f.origin.x = o.mark.minX
             }
             label.frame = f
-            if o.thumb != .zero { thumb.frame = t }
+            if o.thumb != .zero { thumb.frame = o.thumbResult }
         } else {
             label.frame = o.label
             if o.thumb != .zero { thumb.frame = o.thumb }
