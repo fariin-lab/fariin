@@ -538,10 +538,37 @@ final class ConnectionStatus {
 // At `.headline` (17 pt) "Waiting for network" plus the arc was ~163 pt, and the Chats bar (Edit on
 // the left, filter + compose on the right) has ~156 pt of centred room, so the system pushed it
 // left. `.subheadline` semibold (15 pt) keeps the title's weight and fits centred.
+//
+// ⛔ CENTRED ON THE SCREEN, NOT ON THE SLOT (owner 2026-11-14, ringed screenshot). The Chats bar
+// has one circle on the left and two on the right, so the system's principal slot is centred
+// between them and sits ~26 pt left of the screen's middle. The label now measures its slot and
+// shifts itself to the screen's centre, and narrows (the text shrinks) so the shift never runs
+// it into the right-hand buttons. On a symmetric bar the shift is zero.
 struct ConnectionTitleLabel: View {
     let text: String
+    @State private var slot: CGRect = .zero
+
+    /// How far right the label moves, and how wide it may be once it has moved.
+    private var placement: (shift: CGFloat, width: CGFloat?) {
+        guard slot.width > 0 else { return (0, nil) }
+        let mid = UIScreen.main.bounds.width / 2
+        let shift = mid - slot.midX
+        // Room either side of the screen's centre inside the slot; the label gets twice the smaller.
+        let half = min(mid - slot.minX, slot.maxX - mid)
+        guard half > 0 else { return (0, nil) }
+        return (shift, half * 2)
+    }
 
     var body: some View {
+        let p = placement
+        label
+            .frame(maxWidth: p.width)
+            .offset(x: p.shift)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slot = $0 }
+    }
+
+    private var label: some View {
         HStack(spacing: 6) {
             // owner 2026-10-27: our own turning arc instead of the system's ticking spinner.
             BusyArc(size: 13, lineWidth: 2.1, color: .secondary)
