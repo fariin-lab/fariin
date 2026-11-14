@@ -73,12 +73,20 @@ enum PollService {
             let msgRef = db.collection("conversations").document(cid).collection("messages").document(messageId)
             var counts: [Int: Int] = [:], voters = 0, mine: [Int] = []
             var tallyAt: Double = 0, mineAt: Double = 0   // ms: when the server counted / when I voted
+            // My vote BEFORE the latest change, and when it was cast (owner 2026-11-14: a quick
+            // change from Haa to oky read "2 votes, 50% / 50%" for up to a minute). The server's
+            // count can still hold the OLD vote; that one must come off, not only the new one.
+            var prevMine: [Int] = [], prevAt: Double = 0
             let emit = {
                 var c = counts, v = voters
                 // My vote comes off the server's numbers only once they include it (the count was
                 // taken after I voted); before that it is simply added (review fix 2026-10-29).
                 if !mine.isEmpty, mineAt > 0, tallyAt >= mineAt {
                     for i in mine { c[i] = max(0, (c[i] ?? 0) - 1) }
+                    v = max(0, v - 1)
+                } else if !prevMine.isEmpty, prevAt > 0, tallyAt >= prevAt {
+                    // The count is older than my new vote but holds my old one: take the old off.
+                    for i in prevMine { c[i] = max(0, (c[i] ?? 0) - 1) }
                     v = max(0, v - 1)
                 }
                 // ⛔ ROUND ROBIN (2026-10-29 review fix): each option's votes go to the NEXT
@@ -120,7 +128,11 @@ enum PollService {
                 // An error is not "I have not voted": my last vote stays (audit L14).
                 guard let snap else { PollVotesHub.shared.noteDead(key: key); return }
                 let raw = snap.data()?["options"]
-                mine = (raw as? [Int]) ?? ((raw as? [NSNumber])?.map(\.intValue) ?? [])
+                let next = (raw as? [Int]) ?? ((raw as? [NSNumber])?.map(\.intValue) ?? [])
+                // A real change of my vote: remember the one it replaces (see prevMine). A pending
+                // echo of the same vote changes nothing here.
+                if next != mine, !mine.isEmpty { prevMine = mine; prevAt = mineAt > 0 ? mineAt : Date().timeIntervalSince1970 * 1000 }
+                mine = next
                 // A pending server timestamp reads as nil: not counted yet, so nothing is taken off.
                 mineAt = ((snap.data()?["at"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
                 emit()
