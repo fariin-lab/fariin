@@ -218,7 +218,15 @@ struct NewChannelView: View {
                 }
             }
             try? await Task.sleep(for: .milliseconds(600))   // after the push (NewGroupView's lesson)
-            if !Task.isCancelled { nameFocused = true }
+            // Owner 2026-11-14: the keyboard did not open here. One set of the focus can be dropped
+            // while the Form cell is still being laid out after the push, so ask again until it
+            // holds (three tries, 250 ms apart). Going back cancels the task, so no keyboard opens
+            // over the page being left.
+            for _ in 0..<3 {
+                if Task.isCancelled || nameFocused { break }
+                nameFocused = true
+                try? await Task.sleep(for: .milliseconds(250))
+            }
         }
         .fullScreenCover(isPresented: $showCamera, onDismiss: {
             if let ui = pickedImage { pickedImage = nil; cropItem = GroupCropItem(image: ui) }
