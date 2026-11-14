@@ -1148,6 +1148,17 @@ final class Crypto {
                        kn: Data(wrapped.nonce).base64EncodedString())
     }
 
+    /// A sealed file forwarded into a PLAIN group (owner 2026-11-14): the data nonce and the opened
+    /// file key, base64, for `forwardMedia` to open that one object and store it in the clear, the
+    /// way the plain group's own upload would have stored it. The plain group's server reads its
+    /// files anyway; the key opens this file only. nil = not a sealed file, or a key this phone
+    /// cannot open (the caller then sends the old way).
+    func fileKeyForClearCopy(_ meta: EncMeta, fromCid: String) async -> (n: String, k: String)? {
+        guard meta.v == 1, !meta.n.isEmpty, let nonce = Data(base64Encoded: meta.n), nonce.count == 24,
+              let fileKey = await openFileKey(meta, cid: fromCid), fileKey.count == 32 else { return nil }
+        return (meta.n, Data(fileKey).base64EncodedString())
+    }
+
     /// The file key out of `meta` as this phone holds it in chat `cid`: the key half of
     /// `decryptBytes`, with the same routes (my group wrap, a released group key, the 1:1 wrap).
     private func openFileKey(_ meta: EncMeta, cid: String) async -> Bytes? {
