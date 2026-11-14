@@ -201,6 +201,9 @@ enum BubbleBody: Equatable {
         /// A channel's poll (2026-10-29 review fix): read from the post's counts, decided by the row
         /// that knows, not guessed from the chat list (which can be empty on a cold open).
         var inChannel: Bool = false
+        /// 2026-11-14: a picture per option (parallel to `options`), empty when none.
+        var images: [PollImage?] = []
+        func image(_ i: Int) -> PollImage? { i < images.count ? images[i] : nil }
     }
 
     struct LocationBody: Equatable {

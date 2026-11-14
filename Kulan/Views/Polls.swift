@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 import FirebaseFirestore
 
 // Polls. The poll content (question + options) travels E2EE inside the message text as a "fariin-poll:"
@@ -346,15 +347,37 @@ struct PollBubbleContent: View {
     }
 }
 
+/// A poll option's picture (2026-11-14), loaded the way a chat photo is: memory, then disk, then
+/// the shared download that decrypts with the chat's keys and fills the cache.
+enum PollThumbs {
+    @MainActor static func load(_ ref: PollImage, cid: String) async -> UIImage? {
+        if let mem = DiskImageCache.shared.memoryImage(ref.url) { return mem }
+        if let disk = await DiskImageCache.shared.image(for: ref.url) { return disk }
+        if MediaFetch.sealedWithoutMe(ref.enc) { return nil }
+        let ok = await MediaDownloads.shared.download(
+            ref.url, priority: .user,
+            finish: MediaFetch.photoFinisher(url: ref.url, enc: ref.enc, cid: cid))
+        return ok ? await DiskImageCache.shared.image(for: ref.url) : nil
+    }
+}
+
 // Compose a new poll (owner 2026-10-19, our own layout): question, 2–10 options, then Multiple
 // answers, Hide who voted, Quiz (tap an option's circle to mark it right) and an end time.
 struct PollComposerSheet: View {
+    /// The chat, so option pictures are sealed and stored like a photo sent there (2026-11-14).
+    var cid: String = ""
+    var group: [String]? = nil
     let onSend: (_ marker: String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var question = ""
     /// Each option keeps its own id (audit 2026-10-20: removing one by index crashed the field
     /// binding) and its own right-answer mark.
-    struct Opt: Identifiable { let id = UUID(); var text = ""; var right = false }
+    struct Opt: Identifiable {
+        let id = UUID(); var text = ""; var right = false
+        /// 2026-11-14: an optional picture (512px JPEG bytes, shown from `preview`).
+        var imageData: Data? = nil
+        var preview: UIImage? = nil
+    }
     @State private var options: [Opt] = [Opt(), Opt()]
     /// ⛔ THE NEXT OPTION APPEARS BY ITSELF — owner 2026-10-21 (the reference app's composer): typing
     /// into the last option adds an empty one under it, up to 10; Return moves to the next. No "Add
@@ -366,6 +389,12 @@ struct PollComposerSheet: View {
     @State private var quiz = false
     @State private var ends: EndChoice = .never
     @State private var sent = false
+    /// Option pictures: which row the photo picker is choosing for, and the upload before sending.
+    @State private var pickingFor: UUID?
+    @State private var showPicker = false
+    @State private var pickedItem: PhotosPickerItem?
+    @State private var uploading = false
+    @State private var uploadError: String?
 
     enum EndChoice: Hashable, CaseIterable {
         case never, hour, day, week
@@ -377,11 +406,11 @@ struct PollComposerSheet: View {
         }
     }
 
-    /// The options kept (non-empty), each with whether it was marked right.
-    private var kept: [(text: String, right: Bool)] {
+    /// The options kept (non-empty), each with whether it was marked right and its picture.
+    private var kept: [(text: String, right: Bool, image: Data?)] {
         options.compactMap { o in
             let t = o.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return t.isEmpty ? nil : (t, o.right)
+            return t.isEmpty ? nil : (t, o.right, o.imageData)
         }
     }
     private var canSend: Bool {
@@ -396,7 +425,24 @@ struct PollComposerSheet: View {
                     TextField("Ask a question", text: $question, axis: .vertical).lineLimit(1...3)
                 }
                 Section {
-                    ForEach(Array(options.enumerated()), id: \.element.id) { i, o in optionRow(i, o.id) }
+                    // Always in edit mode (below): the system's red minus on the left deletes, the
+                    // three-line handle on the right drags. The text fields stay editable.
+                    ForEach(Array(options.enumerated()), id: \.element.id) { i, o in
+                        optionRow(i, o.id)
+                            .deleteDisabled(options.count <= 2 || o.text.isEmpty)
+                            .moveDisabled(o.text.isEmpty)
+                    }
+                    .onDelete { set in
+                        let ids = set.map { options[$0].id }
+                        options.removeAll { ids.contains($0.id) }
+                        tidyOptions()
+                    }
+                    .onMove { from, to in
+                        options.move(fromOffsets: from, toOffset: to)
+                        // The empty row that grows the next option always stays last.
+                        let filled = options.filter { !$0.text.isEmpty }
+                        options = filled + options.filter { $0.text.isEmpty }
+                    }
                 } header: {
                     Text("Options")
                 } footer: {
@@ -418,6 +464,18 @@ struct PollComposerSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .environment(\.editMode, .constant(.active))
+            .photosPicker(isPresented: $showPicker, selection: $pickedItem, matching: .images)
+            .onChange(of: pickedItem) { _, item in
+                guard let item, let id = pickingFor else { return }
+                pickedItem = nil
+                Task { await attach(item, to: id) }
+            }
+            .interactiveDismissDisabled(uploading)
+            .alert("Could not send the poll", isPresented: Binding(get: { uploadError != nil },
+                                                                   set: { if !$0 { uploadError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(uploadError ?? "") }
             .navigationTitle("New Poll").navigationBarTitleDisplayMode(.inline)
             .onChange(of: quiz) { _, on in if on { multiple = false } }
             .onChange(of: multiple) { _, many in if !many { keepOneRight() } }
@@ -426,7 +484,11 @@ struct PollComposerSheet: View {
                     Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Send") { send() }.fontWeight(.semibold).disabled(!canSend)
+                    if uploading {
+                        ProgressView()
+                    } else {
+                        Button("Send") { send() }.fontWeight(.semibold).disabled(!canSend)
+                    }
                 }
             }
         }
@@ -473,12 +535,51 @@ struct PollComposerSheet: View {
                 .focused($focusedOpt, equals: id)
                 .submitLabel(.next)
                 .onSubmit { focusNext(after: id) }
-            // Remove only on an option that has words, and never below two rows.
-            if options.count > 2, !(options.first { $0.id == id }?.text.isEmpty ?? true) {
-                Button { options.removeAll { $0.id == id } } label: {
-                    Image(systemName: "minus.circle.fill").foregroundStyle(.red)
-                }.buttonStyle(.plain)
+            // A picture for this option (2026-11-14): the paperclip picks one; once picked, the
+            // small rounded thumbnail is a menu to replace or remove it.
+            if let preview = options.first(where: { $0.id == id })?.preview {
+                Menu {
+                    Button { pick(for: id) } label: { Label("Replace Photo", systemImage: "photo") }
+                    Button(role: .destructive) { clearImage(id) } label: {
+                        Label("Remove Photo", systemImage: "trash")
+                    }
+                } label: {
+                    Image(uiImage: preview).resizable().scaledToFill()
+                        .frame(width: 30, height: 30)
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .accessibilityLabel("Option photo")
+            } else if !(options.first { $0.id == id }?.text.isEmpty ?? true) {
+                Button { pick(for: id) } label: {
+                    Image(systemName: "paperclip").font(.system(size: 16)).foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add a photo to this option")
             }
+        }
+    }
+
+    private func pick(for id: UUID) {
+        pickingFor = id
+        showPicker = true
+    }
+
+    private func clearImage(_ id: UUID) {
+        guard let k = options.firstIndex(where: { $0.id == id }) else { return }
+        options[k].imageData = nil
+        options[k].preview = nil
+    }
+
+    /// Reads the picked photo, shrinks it to 512px on its long side and keeps it on the row.
+    private func attach(_ item: PhotosPickerItem, to id: UUID) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+        let jpeg = ChatService.downscaledJPEG(data, maxDimension: 512, quality: 0.75)
+        guard let ui = UIImage(data: jpeg) else { return }
+        await MainActor.run {
+            guard let k = options.firstIndex(where: { $0.id == id }) else { return }
+            options[k].imageData = jpeg
+            options[k].preview = ui
         }
     }
 
@@ -515,17 +616,52 @@ struct PollComposerSheet: View {
 
     private func send() {
         // A second tap during the dismiss animation sent the poll twice (audit, 2026-09-24).
-        guard !sent, canSend else { return }
-        sent = true
-        let id = UUID().uuidString.prefix(12).lowercased()
+        guard !sent, !uploading, canSend else { return }
+        let id = String(UUID().uuidString.prefix(12).lowercased())
         let list = kept
-        let marker = Message.pollMarkerText(
-            id: String(id), question: question.trimmingCharacters(in: .whitespacesAndNewlines),
-            options: list.map(\.text), multiple: multiple, hideVoters: hideVoters,
-            correct: quiz ? list.indices.filter { list[$0].right } : [],
-            endsAt: ends.seconds.map { (Date().timeIntervalSince1970 + $0) * 1000 })
-        onSend(marker)
-        dismiss()
+        let texts = list.map(\.text)
+        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        let correct = quiz ? list.indices.filter { list[$0].right } : []
+        let endsAt = ends.seconds.map { (Date().timeIntervalSince1970 + $0) * 1000 }
+        let many = multiple, anon = hideVoters
+        let build: ([PollImage?]) -> String = { images in
+            Message.pollMarkerText(id: id, question: q, options: texts, multiple: many,
+                                   hideVoters: anon, correct: correct, endsAt: endsAt, images: images)
+        }
+        let pictures = list.map(\.image)
+        guard pictures.contains(where: { $0 != nil }), !cid.isEmpty else {
+            sent = true
+            onSend(build([]))
+            dismiss()
+            return
+        }
+        // Pictures go up first (small, 512px); the poll is sent once every one is stored, so no one
+        // ever sees a poll pointing at a file that is not there yet.
+        uploading = true
+        let cid = cid, group = group
+        Task {
+            do {
+                let images = try await withThrowingTaskGroup(of: (Int, PollImage).self) { g in
+                    for (i, data) in pictures.enumerated() {
+                        guard let data else { continue }
+                        g.addTask { (i, try await ChatService.uploadPollImage(cid: cid, data: data, group: group)) }
+                    }
+                    var out = [PollImage?](repeating: nil, count: pictures.count)
+                    for try await (i, img) in g { out[i] = img }
+                    return out
+                }
+                await MainActor.run {
+                    uploading = false
+                    guard !sent else { return }
+                    sent = true
+                    onSend(build(images))
+                    dismiss()
+                }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { uploading = false; uploadError = msg }
+            }
+        }
     }
 }
 
@@ -606,6 +742,11 @@ struct PollResultsSheet: View {
                         HStack(spacing: 6) {
                             if poll.correct.contains(i), votes[me] != nil || !isOpen {   // only after I voted or it ended (audit)
                                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            }
+                            if let img = poll.image(i) {
+                                SecureImageView(imageUrl: img.url, enc: img.enc, cid: cid, smallSync: true)
+                                    .frame(width: 28, height: 28)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                             }
                             Text(poll.options[i]).textCase(nil)
                             Spacer()

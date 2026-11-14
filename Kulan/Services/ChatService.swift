@@ -2052,6 +2052,32 @@ enum ChatService {
     /// `prepared`: `rawData` already went through `sendJPEG` (the thread does it once and shows the
     /// same bytes in the bubble, and a retry resends those bytes), so it is uploaded as it is rather
     /// than decoded and encoded a second time.
+    /// 2026-11-14: one poll option's picture. Downscaled to 512px, sealed exactly like a photo in
+    /// this chat (1:1 sealed, sealed group sealed for its members, plain group or channel in the
+    /// clear) and stored where a photo is, `chat/{cid}/{id}.enc`, under a fresh message-style id.
+    /// Uploaded before the poll is sent; the poll's sealed text then carries the url and key.
+    static func uploadPollImage(cid: String, data rawData: Data, group: [String]?) async throws -> PollImage {
+        let data = downscaledJPEG(rawData, maxDimension: 512, quality: 0.75)
+        guard !data.isEmpty else {
+            throw NSError(domain: "Poll", code: 1, userInfo: [NSLocalizedDescriptionKey: "That picture could not be read."])
+        }
+        var members = await freshGroupMembers(cid, group)
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
+        let cipher: Data, meta: EncMeta
+        if let members {
+            (cipher, meta) = try await Crypto.shared.sealBytesForGroup(data, members: members, cid: cid)
+        } else {
+            (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data)
+        }
+        let fileId = db.collection("conversations").document(cid).collection("messages").document().documentID
+        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(fileId).enc")
+        // This phone already has the picture: seed the cache so the bubble draws it at once.
+        if let ui = UIImage(data: data) {
+            DiskImageCache.shared.store(ui.preparingForDisplay() ?? ui, data: data, for: url, owned: true)
+        }
+        return PollImage(url: url, enc: meta.isPlain ? nil : meta)
+    }
+
     static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "", forwarded: Bool = false,
                           quality: PhotoQuality = .default, prepared: Bool = false, quote: String? = nil) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload — order is when send was tapped
