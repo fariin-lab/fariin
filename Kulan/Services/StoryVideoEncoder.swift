@@ -91,7 +91,17 @@ enum StoryVideoEncoder {
                 f = (b.outputImage ?? f).cropped(to: f.extent)
             }
             let s = layout.fit * shown.width / max(1, f.extent.width)
-            f = f.transformed(by: CGAffineTransform(scaleX: s, y: s))
+            // A shrink goes through Lanczos (owner 2026-11-14: small text in a story video went soft);
+            // an affine transform samples bilinearly, which blurs and shimmers on a 2:1 downscale.
+            if s < 0.999 {
+                let lz = CIFilter.lanczosScaleTransform()
+                lz.inputImage = f
+                lz.scale = Float(s)
+                lz.aspectRatio = 1
+                f = lz.outputImage ?? f.transformed(by: CGAffineTransform(scaleX: s, y: s))
+            } else {
+                f = f.transformed(by: CGAffineTransform(scaleX: s, y: s))
+            }
             f = f.transformed(by: CGAffineTransform(translationX: layout.videoOrigin.x - f.extent.minX,
                                                     y: layout.videoOrigin.y - f.extent.minY))
             var out = f.composited(over: underPlaced)
@@ -370,6 +380,12 @@ extension VideoTranscoder {
               let transform = try? await track.load(.preferredTransform) else { return nil }
         let d = natural.applying(transform)
         let shown = CGSize(width: abs(d.width), height: abs(d.height))
+        // ⛔ A FULL-HD CLIP STAYS FULL HD (owner 2026-11-14: a 1440x1440 video posted as a story came
+        // out soft, the same file sent in the reference app did not). Plain stories were always
+        // 720x1280, so a square clip on the 9:16 canvas landed at 720x720. The reference app writes a
+        // story at 1080x1920 when the source is full HD; so do we: short side >= 1000 -> HD canvas.
+        if min(shown.width, shown.height) >= 1000 { edits.hd = true }
+        let hdOut = edits.hd
         if !edits.composing {
             // Same test as the old path: a clip that is not the canvas's shape gets the gradient.
             let target = canvasAspect ?? (9.0 / 16.0)
@@ -382,7 +398,7 @@ extension VideoTranscoder {
         let whole = start < 0.05 && length >= fullTime.seconds - 0.05
         if whole, !edits.composing, edits.gradientAspect == nil, !stripAudio,
            StoryVideoBrightness.isNeutral(brightness),
-           let copied = await storyCopy(asset: asset, track: track, shown: shown, hd: hd, seconds: length),
+           let copied = await storyCopy(asset: asset, track: track, shown: shown, hd: hdOut, seconds: length),
            let quick = await finish(data: copied, asset: asset, duration: length) {
             return quick
         }
