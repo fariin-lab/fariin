@@ -3429,8 +3429,8 @@ enum ChatService {
     ///
     /// true = the message is written. false = nothing is left behind and the caller forwards the old
     /// way: a file that is gone from the server (swept, expired), a refusal from the callable, a key
-    /// that cannot be re-wrapped (a plain group's file into an encrypted chat, a sealed file into a
-    /// plain group), an R2 address, a message still being sent, or any error at all. When the copy
+    /// that cannot be re-wrapped (a plain group's file into an encrypted chat), a sealed file into a
+    /// plain group whose key this phone cannot open or that the server did not open, an R2 address, a message still being sent, or any error at all. When the copy
     /// succeeded but the message write failed, the copy is removed (`undo`) before falling back.
     private static func instantForward(_ m: Message, from sourceCid: String, to targetCid: String,
                                        clientId: String?, forwarded: Bool) async -> Bool {
@@ -3488,8 +3488,18 @@ enum ChatService {
             let targetPlain = listedPlain && !GroupCrypto.sealNewMessages
 
             // Keys first: a key this phone cannot re-wrap costs the server nothing.
+            // A sealed part going into a plain group: the server opens it with its key and stores it
+            // in the clear (forwardMedia `keys`), so the message carries `.plain` like the group's
+            // own uploads and every reader opens it unchanged.
             var newMeta: [String: EncMeta] = [:]
+            var clearKeys: [String: [String: String]] = [:]
             for p in parts {
+                if targetPlain, !p.meta.isPlain {
+                    guard let fk = await Crypto.shared.fileKeyForClearCopy(p.meta, fromCid: sourceCid) else { return false }
+                    clearKeys[p.path] = ["n": fk.n, "k": fk.k]
+                    newMeta[p.path] = .plain
+                    continue
+                }
                 guard let nm = try await Crypto.shared.rewrapFileKey(p.meta, fromCid: sourceCid, toCid: targetCid,
                                                                      members: members, targetPlain: targetPlain)
                 else { return false }
@@ -3503,17 +3513,29 @@ enum ChatService {
                 ensureConv = Task { try await convRef.setData(["users": [uid, other]], merge: true) }
             }
             let callable = Functions.functions(region: "me-central1").httpsCallable("forwardMedia")
-            callable.timeoutInterval = 20
+            // An opened copy reads, opens and writes the bytes on the server (up to 100 MB): more time.
+            callable.timeoutInterval = clearKeys.isEmpty ? 20 : 180
             // Marked before the call: an answer lost on the way back may still have copied.
             copied = true
-            let res = try await callable.call([
+            var payload: [String: Any] = [
                 "srcCid": sourceCid, "msgId": m.id, "dstCid": targetCid, "dstMsgId": newId,
                 "objects": parts.map(\.path),
-            ])
+            ]
+            if !clearKeys.isEmpty { payload["keys"] = clearKeys }
+            let res = try await callable.call(payload)
+            clearKeys.removeAll()
             guard let d = res.data as? [String: Any], d["ok"] as? Bool == true,
                   let objs = d["objects"] as? [[String: Any]] else { throw ForwardError.sourceUnavailable }
             var newURL: [String: String] = [:]
-            for o in objs { if let s = o["src"] as? String, let u = o["url"] as? String { newURL[s] = u } }
+            var opened: Set<String> = []
+            for o in objs {
+                if let s = o["src"] as? String, let u = o["url"] as? String { newURL[s] = u }
+                if let s = o["src"] as? String, o["opened"] as? Bool == true { opened.insert(s) }
+            }
+            // A server that ignored the keys copied the sealed bytes: `.plain` over them would be
+            // unreadable for everyone, so that is a fall back (the copy is undone below).
+            guard parts.allSatisfy({ newMeta[$0.path]?.isPlain != true || $0.meta.isPlain || opened.contains($0.path) })
+            else { throw ForwardError.sourceUnavailable }
             guard parts.allSatisfy({ newURL[$0.path] != nil }) else { throw ForwardError.sourceUnavailable }
             /// The new address and key for one of the message's old addresses.
             func moved(_ old: String?) -> (url: String, meta: EncMeta)? {
