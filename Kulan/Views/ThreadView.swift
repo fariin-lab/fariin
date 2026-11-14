@@ -4721,7 +4721,10 @@ struct ThreadView: View {
         // Except for the room's admins (owner 2026-10-29: "admin or owner can't delete this badges
         // text, on long press show Select and Delete"): they may clear a notice for everyone, and a
         // group hides its tombstones (ThreadRepository), so the line simply goes.
-        if m.isSystem {
+        // A "<name> pinned ..." line in a group or channel is the same kind of line (owner
+        // 2026-11-14: "I can't delete those in the channel"); it went down the message path, which
+        // drops pin notices from every action.
+        if m.isSystem || (m.pinNotice != nil && isGroup) {
             guard canDeleteNotice(m) else { return [] }
             return [
                 CMAction(title: "Select", icon: "checkmark.circle") {
@@ -6454,7 +6457,8 @@ struct ThreadView: View {
     /// A group notice an admin holding "Delete messages" may remove for everyone. Not a member's own
     /// "joined" or "left" line: those are about the room, and only its admins clear them.
     private func canDeleteNotice(_ m: Message) -> Bool {
-        guard m.isSystem, let c = conversation, c.isGroup, c.adminCan(me, .deleteMessages) else { return false }
+        guard m.isSystem || m.pinNotice != nil, let c = conversation, c.isGroup,
+              c.adminCan(me, .deleteMessages) || m.authorId == me else { return false }
         return canDeleteForEveryone(m)
     }
 
