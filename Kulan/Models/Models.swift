@@ -2627,7 +2627,38 @@ struct PollCard: Equatable {
     var correct: [Int] = []
     /// When voting ends (ms), nil = never. Also written in the clear (`pollEndsAt`) for the rules.
     var endsAt: Double? = nil
+    /// 2026-11-14: a picture per option, parallel to `options` (nil = no picture). Empty when the
+    /// poll has none. Sealed with the poll; the file itself is stored like a chat photo.
+    var images: [PollImage?] = []
     var isQuiz: Bool { !correct.isEmpty }
+    func image(_ i: Int) -> PollImage? { i < images.count ? images[i] : nil }
+}
+
+/// One option's picture: the uploaded file and, when the chat seals media, its file key (the same
+/// `enc` object a photo message carries). `enc` nil or `v: 0` = stored in the clear.
+struct PollImage: Equatable, Hashable {
+    let url: String
+    let enc: EncMeta?
+
+    init(url: String, enc: EncMeta?) { self.url = url; self.enc = enc }
+
+    init?(json: Any?) {
+        guard let o = json as? [String: Any], let url = o["url"] as? String, !url.isEmpty else { return nil }
+        self.url = url
+        if let e = o["enc"] as? [String: Any],
+           let data = try? JSONSerialization.data(withJSONObject: e),
+           let meta = try? JSONDecoder().decode(EncMeta.self, from: data) {
+            enc = meta
+        } else {
+            enc = nil
+        }
+    }
+
+    var json: [String: Any] {
+        var o: [String: Any] = ["url": url]
+        if let enc, !enc.isPlain { o["enc"] = enc.asDict }
+        return o
+    }
 }
 
 extension Message {
@@ -2643,13 +2674,23 @@ extension Message {
         let correct = ((obj["quiz"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
             .filter { $0 >= 0 && $0 < opts.count }
         let ends = (obj["ends"] as? NSNumber)?.doubleValue
+        // Pictures (2026-11-14): kept only when the array lines up with the options.
+        var images: [PollImage?] = []
+        if let raw = obj["imgs"] as? [Any], raw.count == opts.count {
+            images = raw.map { PollImage(json: $0) }
+            if images.allSatisfy({ $0 == nil }) { images = [] }
+        }
         return PollCard(id: id, question: q, options: opts, multiple: obj["multi"] as? Bool ?? false,
                         hideVoters: obj["anon"] as? Bool ?? false, correct: correct,
-                        endsAt: (ends ?? 0) > 0 ? ends : nil)
+                        endsAt: (ends ?? 0) > 0 ? ends : nil, images: images)
     }
     static func pollMarkerText(id: String, question: String, options: [String], multiple: Bool,
-                               hideVoters: Bool = false, correct: [Int] = [], endsAt: Double? = nil) -> String {
+                               hideVoters: Bool = false, correct: [Int] = [], endsAt: Double? = nil,
+                               images: [PollImage?] = []) -> String {
         var obj: [String: Any] = ["id": id, "q": question, "opts": options, "multi": multiple]
+        if images.count == options.count, images.contains(where: { $0 != nil }) {
+            obj["imgs"] = images.map { $0.map { $0.json as Any } ?? NSNull() }
+        }
         if hideVoters { obj["anon"] = true }
         if !correct.isEmpty { obj["quiz"] = correct }
         if let endsAt { obj["ends"] = Int64(endsAt) }

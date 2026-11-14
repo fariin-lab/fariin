@@ -809,6 +809,7 @@ final class PollBubbleView: UIView {
             r.frame = bounds
             r.apply(plan.options[i], filledRows: plan.filledRows, trackRadius: plan.trackRadius,
                     ink: tint, check: plan.checkColor, card: plan.card, isMe: plan.isMe)
+            r.setThumb(plan.card ? p.image(i) : nil, cid: cid)
         }
 
         let key = "\(cid)|\(p.messageId)"
@@ -1037,10 +1038,19 @@ final class PollOptionRow: UIView {
     private var card = false
     private var isMe = false
     private let smallMark = UIImageView()       // card look: the tick or cross before the words
+    /// 2026-11-14: the option's picture (card look only). A tap on it is a vote like the rest of
+    /// the row: the view takes no touches.
+    private let thumb = UIImageView()
+    private var thumbURL: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
+        thumb.contentMode = .scaleAspectFill
+        thumb.clipsToBounds = true
+        thumb.layer.cornerRadius = 8
+        thumb.layer.cornerCurve = .continuous
+        thumb.isHidden = true
         smallMark.contentMode = .center
         track.clipsToBounds = true
         addSubview(track)
@@ -1055,8 +1065,29 @@ final class PollOptionRow: UIView {
         addSubview(percent)
         addSubview(faceStack)
         addSubview(smallMark)
+        addSubview(thumb)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Shows the option's picture, loaded through the same cache, shared download and decrypt as a
+    /// chat photo. A reused row drops the old picture at once so it never shows another poll's.
+    func setThumb(_ ref: PollImage?, cid: String) {
+        guard let ref, let o = option, o.thumb != .zero else {
+            thumbURL = nil; thumb.image = nil; thumb.isHidden = true; return
+        }
+        thumb.isHidden = false
+        thumb.frame = o.thumb
+        thumb.backgroundColor = ink.withAlphaComponent(0.12)
+        guard thumbURL != ref.url else { return }
+        thumbURL = ref.url
+        if let mem = DiskImageCache.shared.memoryImage(ref.url) { thumb.image = mem; return }
+        thumb.image = nil
+        Task { @MainActor [weak self] in
+            let img = await PollThumbs.load(ref, cid: cid)
+            guard let self, self.thumbURL == ref.url else { return }
+            self.thumb.image = img
+        }
+    }
 
     func apply(_ o: PollPlan.Option, filledRows: Bool, trackRadius: CGFloat, ink: UIColor, check: UIColor,
                card: Bool = false, isMe: Bool = false) {
@@ -1135,15 +1166,20 @@ final class PollOptionRow: UIView {
         smallMark.isHidden = !marked
         label.attributedText = o.labelAttr
         if showResults {
-            // No tick: the words start at the inner edge, where the tick would be.
+            // No tick: the picture (or the words) start at the inner edge, where the tick would be.
             var f = o.labelResult
+            var t = o.thumbResult
             if !marked {
-                f.size.width += o.labelResult.minX - o.mark.minX
-                f.origin.x = o.mark.minX
+                let shift = (t == .zero ? o.labelResult.minX : t.minX) - o.mark.minX
+                f.size.width += shift
+                f.origin.x -= shift
+                t.origin.x -= shift
             }
             label.frame = f
+            if o.thumb != .zero { thumb.frame = t }
         } else {
             label.frame = o.label
+            if o.thumb != .zero { thumb.frame = o.thumb }
         }
 
         percent.isHidden = !showResults

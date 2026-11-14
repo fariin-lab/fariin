@@ -145,6 +145,10 @@ struct PollPlan {
         var labelResult: CGRect = .zero
         /// The small tick (or quiz cross) before the words once results show.
         var mark: CGRect = .zero
+        /// 2026-11-14: the option's picture, 34pt, before the words (zero when it has none). Before
+        /// results it sits after the ring, with results after the tick slot.
+        var thumb: CGRect = .zero
+        var thumbResult: CGRect = .zero
     }
     var filledRows: Bool
     /// The side inset, so the in-bubble sender name lines up with the question.
@@ -3309,10 +3313,13 @@ enum MessageRowLayout {
         // Up to three 24pt faces overlapping by 8.
         let facesW: CGFloat = p.hideVoters ? 0 : (24 + 16 * 2)
         let rightW = inner + percentW + 8 + (facesW > 0 ? facesW + 8 : 0)
-        let w0 = max(1, contentW - inner - ring - ringGap - inner)
-        let w1 = max(1, contentW - inner - markW - markGap - rightW)
+        // An option with a picture: a 34pt thumbnail and 8 more before the words.
+        let thumbSide: CGFloat = 34, thumbGap: CGFloat = 8
         var options: [PollPlan.Option] = []
         for (i, opt) in p.options.enumerated() {
+            let thumbW: CGFloat = p.image(i) != nil ? thumbSide + thumbGap : 0
+            let w0 = max(1, contentW - inner - ring - ringGap - thumbW - inner)
+            let w1 = max(1, contentW - inner - markW - markGap - thumbW - rightW)
             let labelAttr = NSAttributedString(string: opt, attributes: [
                 .font: labelFont, .foregroundColor: textColor])
             let lH = max(BubbleText.size(labelAttr, width: w0).height,
@@ -3320,17 +3327,24 @@ enum MessageRowLayout {
             let rowH = max(46, lH + 20)      // a long option grows the capsule, never clips
             let row = CGRect(x: pad, y: innerY, width: contentW, height: rowH)
             let labelY = innerY + (rowH - lH) / 2
-            options.append(PollPlan.Option(
+            let thumbY = innerY + (rowH - thumbSide) / 2
+            let x0 = pad + inner + ring + ringGap, x1 = pad + inner + markW + markGap
+            var o = PollPlan.Option(
                 glyph: CGRect(x: pad + inner, y: innerY + (rowH - ring) / 2, width: ring, height: ring),
-                label: CGRect(x: pad + inner + ring + ringGap, y: labelY, width: w0, height: lH),
+                label: CGRect(x: x0 + thumbW, y: labelY, width: w0, height: lH),
                 labelAttr: labelAttr, labelChosenAttr: labelAttr,
                 percent: CGRect(x: row.maxX - inner - percentW, y: innerY + (rowH - percentH) / 2,
                                 width: percentW, height: percentH),
                 track: row,
                 // Half the gap to each neighbour, so every point between two options votes.
                 hit: row.insetBy(dx: 0, dy: -gap / 2),
-                labelResult: CGRect(x: pad + inner + markW + markGap, y: labelY, width: w1, height: lH),
-                mark: CGRect(x: pad + inner, y: innerY + (rowH - markW) / 2, width: markW, height: markW)))
+                labelResult: CGRect(x: x1 + thumbW, y: labelY, width: w1, height: lH),
+                mark: CGRect(x: pad + inner, y: innerY + (rowH - markW) / 2, width: markW, height: markW))
+            if thumbW > 0 {
+                o.thumb = CGRect(x: x0, y: thumbY, width: thumbSide, height: thumbSide)
+                o.thumbResult = CGRect(x: x1, y: thumbY, width: thumbSide, height: thumbSide)
+            }
+            options.append(o)
             innerY += rowH
             if i < p.options.count - 1 { innerY += gap }
         }

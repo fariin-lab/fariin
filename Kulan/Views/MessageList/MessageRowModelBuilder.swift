@@ -321,7 +321,7 @@ enum MessageRowModelBuilder {
                 correct: poll.correct, endsAt: poll.endsAt, closed: msg.pollClosed,
                 // A channel never shows who voted (2026-10-29, S4): no faces on its poll bubble.
                 hideVoters: poll.hideVoters || ctx.isChannel,
-                inChannel: ctx.isChannel))
+                inChannel: ctx.isChannel, images: poll.images))
         } else if let card = msg.contactCard {
             body = .contact(BubbleBody.ContactBody(
                 uid: card.uid, name: card.name, photo: card.photo,

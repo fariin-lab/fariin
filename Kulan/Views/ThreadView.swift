@@ -2128,7 +2128,7 @@ struct ThreadView: View {
             pollAwaitingDismiss = nil
             sendMarker(marker)   // 2026-09-24 decision D-composer-1: same pipeline as text
         }) {
-            PollComposerSheet { marker in
+            PollComposerSheet(cid: cid, group: isGroup ? groupMembers : nil) { marker in
                 showAttachPanel = false
                 pollAwaitingDismiss = marker
             }
