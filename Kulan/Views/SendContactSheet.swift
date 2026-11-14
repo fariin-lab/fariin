@@ -36,6 +36,13 @@ struct SendContactSheet: View {
     /// Called as the sheet closes on Send, before the uploads finish, so the page that opened it
     /// can close too. The result still arrives through `onSent`.
     var onDispatched: () -> Void = {}
+    /// A file the round share button hands to the system sheet instead of the link (the video
+    /// viewer's Share, owner 2026-11-14). Nil = the link or the pictures, as before.
+    var systemShareFile: URL? = nil
+    /// False hides the round share button (a chat with No Saving on).
+    var allowsSystemShare = true
+    /// With nothing picked the wide button runs this as "Save to Photos" (the video viewer).
+    var saveToPhotos: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
@@ -143,7 +150,7 @@ struct SendContactSheet: View {
         //
         // `sending` still guards the button and the drag-to-dismiss, so a double tap cannot send
         // twice; it simply no longer draws anything.
-        .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: pictures.isEmpty ? [link] : pictures) }
+        .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: systemShareFile.map { [$0] } ?? (pictures.isEmpty ? [link] : pictures)) }
         .alert("Slow mode", isPresented: Binding(get: { slowNote != nil }, set: { if !$0 { slowNote = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(slowNote ?? "") }
@@ -162,7 +169,9 @@ struct SendContactSheet: View {
             HStack {
                 circleButton("magnifyingglass") { openSearch() }
                 Spacer()
-                circleButton(pictures.isEmpty ? "ic_link_share" : "ic_share_up") { showSystemShare = true }
+                if allowsSystemShare {
+                    circleButton(pictures.isEmpty && systemShareFile == nil ? "ic_link_share" : "ic_share_up") { showSystemShare = true }
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -375,10 +384,12 @@ struct SendContactSheet: View {
     private var bottomButton: some View {
         Button {
             if !selected.isEmpty { Task { await sendAll() } }
+            else if let saveToPhotos { dismiss(); saveToPhotos() }
             else if pictures.isEmpty { copyLink() }
             else { savePictures() }
         } label: {
-            Text(selected.isEmpty ? (pictures.isEmpty ? "Copy Link" : "Save to Photos")
+            Text(selected.isEmpty ? (idleIsEmpty ? "Select chats"
+                                     : pictures.isEmpty && saveToPhotos == nil ? "Copy Link" : "Save to Photos")
                                   : "Send to \(selected.count)")
                 .font(.system(size: 17, weight: .semibold))
                 // ⛔ WHITE IN BOTH STATES (his order, 2026-08-21). It was the accent colour while
@@ -413,12 +424,18 @@ struct SendContactSheet: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(sending)
+        .disabled(sending || (selected.isEmpty && idleIsEmpty))
         .animation(.easeOut(duration: 0.18), value: selected.isEmpty)
         // ⛔ THE AVATARS EDGES, NOT THE PAGE MARGIN. See sideInset above.
         .padding(.horizontal, sideInset)
         .padding(.top, 4)
         .padding(.bottom, 14)
+    }
+
+    /// Nothing picked and nothing to copy or save (a forward with no link, No Saving on): the wide
+    /// button waits for a chat instead of copying an empty link.
+    private var idleIsEmpty: Bool {
+        contactText.isEmpty && pictures.isEmpty && saveToPhotos == nil
     }
 
     /// ⛔ COPY CLOSES THE SHEET — owner 2026-10-15: "when I tap Copy, the sheet should close by
