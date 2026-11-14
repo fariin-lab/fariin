@@ -55,6 +55,10 @@ struct ForwardPicker: View {
     @State private var repo = ConversationsRepository.shared
     @State private var query = ""
     @State private var selected = Set<String>()
+    /// ONE TAP SENDS, SELECT FOR MANY (owner 2026-11-14): the list opens without circles and a tap
+    /// on a chat forwards there and opens it. "Select" (top right) brings the circles back for
+    /// sending to several chats with the comment box.
+    @State private var selectMode = false
     @State private var comment = ""
     @State private var refusedNote: String?
     /// The alert's title for refusedNote: "Can't send here" unless the chat-count limit set it.
@@ -221,7 +225,7 @@ struct ForwardPicker: View {
             // Add-your-own-text (owner's pick): appears once a chat is chosen; lands as its OWN
             // message right after the forwards, in every picked chat — never glued to a caption.
             .safeAreaInset(edge: .bottom) {
-                if !selected.isEmpty && onPick == nil { forwardComposer }
+                if selectMode && !selected.isEmpty && onPick == nil { forwardComposer }
             }
             // "Send to", ✕ on the left — the reference's sheet (owner, 2026-09-29). Its right-hand
             // "New group" is not here: groups are switched off in this app (`Flags.groupsEnabled`),
@@ -234,6 +238,17 @@ struct ForwardPicker: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
+                if onPick == nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(selectMode ? "Cancel" : "Select") {
+                            withAnimation(.smooth(duration: 0.25)) {
+                                selectMode.toggle()
+                                if !selectMode { selected = [] }
+                            }
+                        }
+                        .tint(.primary)
+                    }
+                }
             }
             .alert(refusedTitle, isPresented: Binding(get: { refusedNote != nil },
                                                           set: { if !$0 { refusedNote = nil } })) {
@@ -268,7 +283,7 @@ struct ForwardPicker: View {
                 // TINT, which anything up the tree can pull grey (owner's rule, 2026-08-16).
                 // Pick-one (Quote) has no circles (owner 2026-11-06): a tap picks the chat at once,
                 // so a tick to fill would be a step that is not there.
-                if onPick == nil {
+                if onPick == nil && selectMode {
                     Image(systemName: on ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 22, weight: .light))
                         .foregroundStyle(on ? Color.primary : Color.secondary)
@@ -308,6 +323,12 @@ struct ForwardPicker: View {
         if let onPick, let c = repo.conversations.first(where: { $0.id == id }) {
             dismiss()
             onPick(c)
+            return
+        }
+        // Not selecting: this one chat, sent now; sendAll lands in it (one target = open the chat).
+        if !selectMode {
+            selected = [id]
+            sendAll()
             return
         }
         // Remote limit (flags 2026-11-13, forwardChatsAtOnce): how many chats one forward may go to.
