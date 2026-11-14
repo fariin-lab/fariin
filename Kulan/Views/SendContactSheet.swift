@@ -150,7 +150,7 @@ struct SendContactSheet: View {
         //
         // `sending` still guards the button and the drag-to-dismiss, so a double tap cannot send
         // twice; it simply no longer draws anything.
-        .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: systemShareFile.map { [$0] } ?? (pictures.isEmpty ? [link] : pictures)) }
+        .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: systemShareFile.map { [$0] as [Any] } ?? (pictures.isEmpty ? [link] as [Any] : pictures as [Any])) }
         .alert("Slow mode", isPresented: Binding(get: { slowNote != nil }, set: { if !$0 { slowNote = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(slowNote ?? "") }
