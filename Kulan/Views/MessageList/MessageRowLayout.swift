@@ -3301,7 +3301,10 @@ enum MessageRowLayout {
         let labelFont = UIFont.systemFont(ofSize: 15, weight: .semibold)
         let inner: CGFloat = 14, ring: CGFloat = 18, ringGap: CGFloat = 10
         let markW: CGFloat = 14, markGap: CGFloat = 6
-        let percentW: CGFloat = 38
+        // Wide enough for "100%" at 14 bold, measured, plus a little air (owner 2026-11-14: a fixed
+        // 38 cut it to "10..."). Larger accessibility text is not used on this card.
+        let percentW: CGFloat = ceil(("100%" as NSString).size(withAttributes:
+            [.font: UIFont.systemFont(ofSize: 14, weight: .bold)]).width) + 4
         let percentH = ceil(UIFont.systemFont(ofSize: 14, weight: .bold).lineHeight)
         // Up to three 24pt faces overlapping by 8.
         let facesW: CGFloat = p.hideVoters ? 0 : (24 + 16 * 2)
