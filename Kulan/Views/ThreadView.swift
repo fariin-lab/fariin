@@ -4149,7 +4149,12 @@ struct ThreadView: View {
         // A channel's reactions (2026-10-29): my picks live apart from the posts, so they key too.
         let chanRx = conversation?.isChannel == true
         let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.countOverrides[cid]?.count ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
-        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(groupCardTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")|\(conversation?.repliesOff == true)|\(conversation?.bubbleStylesOff == true)|\(conversation?.quotesOff == true)"   // 2026-09-24 feature-audit: edit clock; replies switch 2026-11-06; quotes switch 2026-11-10
+        // LIVE LOCATION (owner 2026-11-14: Stop stayed after he stopped): the card's line and its
+        // Stop button come from liveDocs + liveNow, which nothing here keyed on, so an ended share
+        // never redrew. In the key AND in the live row's value (the rule below).
+        let liveKey = liveDocs.isEmpty && !repo.items.contains(where: { $0.liveCard != nil }) ? "-"
+            : "\(liveDocs.map { "\($0.key)\($0.value.ended)\($0.value.until.timeIntervalSince1970)" }.sorted().joined(separator: ",")):\(Int(liveNow.timeIntervalSince1970 / 60))"
+        let key = "\(liveKey)|\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(groupCardTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")|\(conversation?.repliesOff == true)|\(conversation?.bubbleStylesOff == true)|\(conversation?.quotesOff == true)"   // 2026-09-24 feature-audit: edit clock; replies switch 2026-11-06; quotes switch 2026-11-10
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -4273,6 +4278,11 @@ struct ThreadView: View {
                 if let r = m.replyTo, !r.isStatus, repo.isFromBeforeThisDevice(id: r.id) { linkTok += ":QO" }
                 // Bold spans: an edit may change only them.
                 if let b = m.boldSpans { linkTok += ":B\(b.hashValue)" }
+                // Live location card: running or ended, and the minutes-left text.
+                if let live = m.liveCard {
+                    let running = LiveDocState.running(card: live.until, doc: liveDocs[m.authorId], now: liveNow)
+                    linkTok += running ? ":LV\(Int(live.until.timeIntervalSince(liveNow) / 60))" : ":LX"
+                }
                 out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.replyFaces.hashValue)|\(m.repliesOff(channelDefault: chanRepliesOff))|\(quotesTok)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key

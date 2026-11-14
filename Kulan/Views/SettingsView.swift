@@ -1125,6 +1125,8 @@ private struct LogOutSheet: View {
     @State private var signingOut = false
     /// "Delete messages from this phone" (owner 2026-11-12): off, the history waits for the return.
     @State private var deleteMessages = false
+    /// The switch above is hidden (owner 2026-11-14). See the note where it is drawn.
+    static let showDeleteSwitch = false
     /// First value is a close estimate so the sheet does not open at one height and move.
     @State private var contentHeight: CGFloat = 400
 
@@ -1168,11 +1170,15 @@ private struct LogOutSheet: View {
                 .multilineTextAlignment(.center)
                 .padding(.top, 10)
 
-            Toggle("Delete messages from this phone", isOn: $deleteMessages)
-                .font(.subheadline)
-                .tint(.red)
-                .disabled(signingOut)
-                .padding(.top, 14)
+            // HIDDEN, not deleted (owner 2026-11-14 "remove that"): deleteMessages stays false, so a
+            // log-out always keeps the history. Flip `showDeleteSwitch` to bring it back.
+            if Self.showDeleteSwitch {
+                Toggle("Delete messages from this phone", isOn: $deleteMessages)
+                    .font(.subheadline)
+                    .tint(.red)
+                    .disabled(signingOut)
+                    .padding(.top, 14)
+            }
 
             Button {
                 guard !signingOut else { return }
