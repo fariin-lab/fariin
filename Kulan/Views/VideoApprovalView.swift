@@ -281,7 +281,10 @@ struct VideoApprovalView: View {
                 // keyboard up it keeps its rest height, anchored at the top, and the keyboard covers
                 // its lower part. Zoom (pinch) is unchanged.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .frame(height: captionFocused ? restVideoHeight : nil)   // fixed at rest size while typing
+                // ⛔ REVERSED (owner 2026-11-14, build 1187 screenshot): with the rest height kept, the
+                // keyboard covered the video's lower half and only the play button moved. He wants the
+                // video to zoom out and move up into the space above the caption bar, so it now fits
+                // that space while typing, the same as at rest. `restVideoHeight` is kept, unused.
                 .padding(.top, Self.topChromeH)   // below the top row, as the photo editor
                 // The flexible frame takes exactly the space above the keyboard; the fixed-height video
                 // inside overflows it downward (top-aligned, not clipped), so it stays put under the keys.

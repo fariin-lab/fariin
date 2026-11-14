@@ -3523,7 +3523,9 @@ struct ThreadView: View {
             // been reading "Pinned Message / Tap to view". The window still goes first: it holds the
             // live copy, so an edit or a reaction shows here without a second fetch.
             let msg = repo.items.first { $0.id == pid } ?? repo.pinnedPreviews[pid]
-            let author = msg.map { personName($0.authorId) } ?? "Pinned Message"
+            // Groups and channels say "Pinned Message", not who wrote it (owner 2026-11-14, the
+            // reference app's way); a 1:1 keeps the author's name.
+            let author = isGroup ? "Pinned Message" : (msg.map { personName($0.authorId) } ?? "Pinned Message")
             HStack(spacing: 10) {
                 // Vertical count indicator (one bar per pin, current highlighted).
                 if ids.count > 1 {
