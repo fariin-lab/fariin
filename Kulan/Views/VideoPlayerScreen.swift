@@ -33,6 +33,23 @@ struct VideoPlayerScreen: View {
     @State private var confirmDelete = false
     @State private var deleteFailed = false
     @State private var forwarding: Message?
+    /// The Share button's sheet: the app's own Share with grid (chats, the system share circle,
+    /// Save to Photos), forwarding this clip (owner 2026-11-14).
+    @State private var sharingToChats = false
+    /// Hold on the left or right of the picture: 2x while the finger stays down (owner 2026-11-14).
+    @State private var boosting = false
+    /// The clip was paused when the hold began, so the release pauses it again.
+    @State private var boostResumePaused = false
+    /// When the last hold ended: the lift of a long hold is not also a tap on the chrome.
+    @State private var boostEndedAt = Date.distantPast
+    /// The pending hold: 0.4 s after the finger lands it turns into 2x unless cancelled.
+    @State private var holdTask: Task<Void, Never>?
+    /// The playing surface's width, to tell which side a hold is on.
+    @State private var surfaceWidth: CGFloat = 0
+    /// Full Screen: the screen turned to landscape for this clip (owner 2026-11-14).
+    @State private var fullScreen = false
+    /// The screen really is wider than tall right now (rotation finished).
+    @State private var isLandscape = false
     private var isMine: Bool { message.authorId == AuthService.shared.uid }
     // (A second, SwiftUI open/close animation used to live here alongside the UIKit one. It is gone —
     // see the note in ImageViewerView. One pipeline owns both directions for photo and video alike.)
@@ -146,6 +163,16 @@ struct VideoPlayerScreen: View {
         // top bar at full opacity on the first frame and dropped the bottom panel in, unanimated,
         // the moment the player was ready.
         .overlay(alignment: .top) { if showChrome { topBar.opacity(chromeEntered ? 1 : 0) } }
+        .overlay(alignment: .top) {
+            if boosting { boostPill.padding(.top, 64).transition(.opacity.combined(with: .scale(scale: 0.9))) }
+        }
+        .animation(.easeOut(duration: 0.15), value: boosting)
+        // Full Screen ends when the phone is turned back upright, the same as tapping the button.
+        .onGeometryChange(for: Bool.self, of: { $0.size.width > $0.size.height }) { wide in
+            let wasWide = isLandscape
+            isLandscape = wide
+            if fullScreen, wasWide, !wide { setFullScreen(false) }
+        }
         .overlay(alignment: .bottom) {
             if showChrome, player != nil { bottomPanel.opacity(chromeEntered ? 1 : 0).transition(.opacity) }
         }
@@ -176,7 +203,7 @@ struct VideoPlayerScreen: View {
         .overlay {
             // Unconditional: the system .zoom this used to be suppressed for is gone from chat media.
             MediaDismissHost(
-                canBegin: { !zoomed && !scrubbing },
+                canBegin: { !zoomed && !scrubbing && !boosting && !fullScreen },
                 media: {
                     // The video's fitted rect from its stored dimensions (fallback: full screen).
                     let bounds = UIScreen.main.bounds
@@ -224,7 +251,10 @@ struct VideoPlayerScreen: View {
         // A flying copy outlives this cover on purpose (it lands on the thumbnail after the viewer
         // is gone). If its landing never completes it is left in the window, drawn over the
         // conversation — see `sweepOrphanedFlights`.
-        .onDisappear { cleanup(); MediaPresentGate.noteClosed(); MediaDismissHost.scheduleOrphanSweep() }
+        .onDisappear {
+            if fullScreen { fullScreen = false; OrientationLock.allowLandscape(false) }
+            cleanup(); MediaPresentGate.noteClosed(); MediaDismissHost.scheduleOrphanSweep()
+        }
         // 2026-09-24 decision D16: the photo viewer's alerts and sheets, video wording.
         .alert("Couldn't save video", isPresented: $saveError) {
             // The usual cause is Photos access being off: one tap to the switch.
@@ -264,6 +294,23 @@ struct VideoPlayerScreen: View {
             if let items = shareItems { ActivityView(items: items) }
         }
         .sheet(item: $forwarding) { m in ForwardPicker(message: m, sourceCid: cid) }
+        .sheet(isPresented: $sharingToChats) {
+            SendContactSheet(contactText: "", forwardMessages: [message], sourceCid: cid,
+                             systemShareFile: savingLocked ? nil : localVideoURL,
+                             allowsSystemShare: !savingLocked && localVideoURL != nil,
+                             saveToPhotos: savingLocked ? nil : { save() })
+        }
+    }
+
+    /// Forward rules for this clip: on this phone, sent, not deleted, not view-once, No Forwarding off.
+    private var canForward: Bool {
+        localVideoURL != nil && message.sendState == nil && !message.deleted && !message.viewOnce && !forwardingLocked
+    }
+
+    /// Share: the Share with grid when the clip may be forwarded; with No Forwarding on, only the
+    /// system sheet (the grid would send it into a chat).
+    private func openShare() {
+        if canForward { sharingToChats = true } else { share() }
     }
 
     // 2026-09-24 decision D16: the decrypted clip on this device (VideoCache, or the sender's own
@@ -362,7 +409,31 @@ struct VideoPlayerScreen: View {
                             }
                         }
                 )
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { surfaceWidth = $0 }
                 .onTapGesture { toggleChrome() }
+                // Hold on the left or right side = 2x while held. Simultaneous, so the tap and the
+                // pinch keep working; it only starts unzoomed (see beginBoost).
+                // A touch-down drag gives the finger's place at once (a long press has none); the hold
+                // counts only while the finger stays within 12pt, so a swipe stays a swipe.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { v in
+                            if holdTask == nil, !boosting {
+                                let x = v.startLocation.x
+                                holdTask = Task { @MainActor in
+                                    try? await Task.sleep(nanoseconds: 400_000_000)
+                                    guard !Task.isCancelled else { return }
+                                    beginBoost(atX: x)
+                                }
+                            } else if !boosting, hypot(v.translation.width, v.translation.height) > 12 {
+                                holdTask?.cancel()
+                            }
+                        }
+                        .onEnded { _ in
+                            holdTask?.cancel(); holdTask = nil
+                            endBoost()
+                        }
+                )
             // His screenshot: chrome up and the clip paused, and nothing mid-screen — the row's own
             // play button is the control. The big one covers the state with no chrome to press.
             if !isPlaying && !showChrome && !zoomed {
@@ -426,7 +497,11 @@ struct VideoPlayerScreen: View {
     // Video closes exactly like a photo: one pipeline, the UIKit animator pair. The button close
     // flies the poster home through MediaDismissHost, same as the drag (its no-geometry fallback
     // dismisses plainly, so closing is never blocked).
-    private func closeViewer() { closeToken += 1 }
+    private func closeViewer() {
+        // Upright first: the flight home lands on a portrait chat.
+        if fullScreen { setFullScreen(false) }
+        closeToken += 1
+    }
     /// The drag-close's exit: the flying poster IS the animation, so the presentation goes without one.
     /// The transaction is what makes that true — a bare `dismiss()` still ran the cover's own slide-out
     /// under the copy, which held the presentation open and blocked an immediate re-tap.
@@ -521,14 +596,20 @@ struct VideoPlayerScreen: View {
 
     // MARK: - The bottom panel: scrubber capsule, then share · play/pause · forward
 
-    /// Theirs: the capsule 44 tall with its labels 16 in; 24 between it and the button row; the row
-    /// a fixed distance from the screen's bottom edge (the container ignores the bottom safe area).
+    /// Owner 2026-11-14 layout: the speed circle at the right above a 44pt glass scrubber capsule,
+    /// then one row: Share (left), back 10 / play / forward 10 in one capsule (centre), Full Screen
+    /// (right). The row sits a fixed distance from the screen's bottom edge.
     private var bottomPanel: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 12) {
+            HStack {
+                Spacer()
+                PlayerSpeedMenu(speed: speed, setSpeed: SpeedSetter(run: { setSpeed($0) }))
+                    .equatable()
+            }
             scrubberCapsule
             HStack {
-                panelButton("ic_link_share", label: "Share",
-                            enabled: localVideoURL != nil && !savingLocked) { share() }
+                panelButton("arrowshape.turn.up.right", label: "Share",
+                            enabled: canForward || (localVideoURL != nil && !savingLocked)) { openShare() }
                 Spacer()
                 // 10s back / forward beside play in ONE capsule (owner 2026-10-21, with the
                 // reference's picture), only on a clip of 20s or more: on a short one a 10s jump
@@ -547,18 +628,70 @@ struct VideoPlayerScreen: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
-                panelButton("arrowshape.turn.up.right", label: "Forward",
-                            enabled: localVideoURL != nil && message.sendState == nil
-                                     && !message.deleted && !message.viewOnce && !forwardingLocked) {
-                    guard !forwardingLocked else { return }
-                    forwarding = message
+                panelButton(fullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                            label: fullScreen ? "Exit Full Screen" : "Full Screen", enabled: true) {
+                    setFullScreen(!fullScreen)
                 }
             }
+            .padding(.top, 12)
             .padding(.horizontal, 4)   // the buttons' centres 46 from each edge in his screenshot
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 24)
+        .padding(.bottom, isLandscape ? 16 : 24)
         .transition(.opacity)
+    }
+
+    /// The small glass "2x" pill shown at the top while a hold plays fast.
+    private var boostPill: some View {
+        HStack(spacing: 4) {
+            Text("2x").font(.system(size: 15, weight: .semibold).monospacedDigit())
+            Image(systemName: "forward.fill").font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 14)
+        .frame(height: 32)
+        .liquidGlass(Capsule())
+        .allowsHitTesting(false)
+        .accessibilityLabel("Playing at double speed")
+    }
+
+    private func beginBoost(atX x: CGFloat) {
+        guard let player, !zoomed, pinch == 1, !scrubbing, !dismissing, surfaceWidth > 0 else { return }
+        // The left or right part of the picture; the middle stays a plain tap.
+        let f = x / surfaceWidth
+        guard f < 0.4 || f > 0.6 else { return }
+        boosting = true
+        boostResumePaused = !isPlaying
+        player.rate = 2   // rate, not defaultRate: the chosen speed is untouched
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    private func endBoost() {
+        guard boosting else { return }
+        boosting = false
+        boostEndedAt = Date()
+        guard let player else { return }
+        if boostResumePaused { player.pause() } else { player.rate = speed }
+    }
+
+    /// Full Screen turns the screen to landscape for this viewer only (OrientationLock gives
+    /// landscape to the top controller, which is this cover) and puts the controls away; a tap
+    /// brings them back. Off, or the phone turned upright, returns to portrait.
+    private func setFullScreen(_ on: Bool) {
+        guard on != fullScreen else { return }
+        fullScreen = on
+        OrientationLock.allowLandscape(on)
+        if on {
+            let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive }
+            // Turn now, even while the phone is still held upright; the mask then follows the hand.
+            scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { error in
+                debugLog("[Video] full screen rotate refused: \(error.localizedDescription)")
+            }
+            showChrome = false
+        } else {
+            showChrome = true
+        }
     }
 
     private var playButton: some View {
@@ -697,7 +830,11 @@ struct VideoPlayerScreen: View {
     }
 
     /// Theirs: the tap is the only thing that shows or hides the chrome; no timer does.
-    private func toggleChrome() { showChrome.toggle() }
+    private func toggleChrome() {
+        // The lift of a 2x hold is not a tap.
+        guard !boosting, Date().timeIntervalSince(boostEndedAt) > 0.3 else { return }
+        showChrome.toggle()
+    }
 
     // MARK: - Load (mailman: local → download+decrypt+cache → clear server)
 
@@ -985,5 +1122,40 @@ private struct PlayerMoreMenu: View, Equatable {
                 .liquidGlass(Circle(), interactive: true)
                 .contentShape(Circle())
         }
+    }
+}
+
+/// The speed closure, not compared: it always sets this player's speed.
+private struct SpeedSetter { let run: (Float) -> Void }
+
+/// The round speed button above the scrubber (owner 2026-11-14): a system Menu titled "Playback
+/// Speed" with a check on the current one. Equatable for the same reason as `PlayerMoreMenu`: the
+/// playback clock re-runs the screen's body many times a second, and a rebuilt Menu closes itself.
+private struct PlayerSpeedMenu: View, Equatable {
+    let speed: Float
+    let setSpeed: SpeedSetter
+
+    static func == (a: PlayerSpeedMenu, b: PlayerSpeedMenu) -> Bool { a.speed == b.speed }
+
+    var body: some View {
+        Menu {
+            Section("Playback Speed") {
+                // Inline, its own label empty: the section above is the one title.
+                Picker(selection: Binding(get: { speed }, set: { setSpeed.run($0) })) {
+                    ForEach([Float(0.5), 1, 1.5, 2], id: \.self) { s in
+                        Text(VideoPlayerScreen.speedLabel(s)).tag(s)
+                    }
+                } label: { EmptyView() }
+                .pickerStyle(.inline)
+            }
+        } label: {
+            Image(systemName: "speedometer")
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
+        }
+        .accessibilityLabel("Playback Speed")
     }
 }

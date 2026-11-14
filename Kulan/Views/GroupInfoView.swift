@@ -2032,19 +2032,30 @@ struct GroupMemberRow: View, Equatable {
     let photo: String?
     let rank: String?
     let role: GroupRole?
+    /// "Promoted by <name>" under an admin, on the Administrators page only (owner 2026-11-14).
+    let promoter: String?
     let onTap: () -> Void
 
-    init(conv: Conversation?, uid: String, me: String, onTap: @escaping () -> Void) {
+    init(conv: Conversation?, uid: String, me: String, showPromoter: Bool = false, onTap: @escaping () -> Void) {
         self.uid = uid
         self.name = uid == me ? "You" : (GroupMemberRow.freshName(conv, uid) ?? conv?.names[uid] ?? "User")
         self.photo = GroupMemberRow.freshPhoto(conv, uid)
         self.rank = GroupMembers.rank(conv, uid)
         self.role = conv?.roles[uid]
+        // Who made them admin (`adminBy`, written since 2026-10-18). Not for the owner, and not for
+        // an admin from before that field, who simply has no second line.
+        if showPromoter, uid != conv?.createdBy, let by = conv?.adminBy[uid], !by.isEmpty {
+            let who = by == me ? "You" : (GroupMemberRow.freshName(conv, by) ?? conv?.names[by] ?? "User")
+            self.promoter = "Promoted by \(who)"
+        } else {
+            self.promoter = nil
+        }
         self.onTap = onTap
     }
 
     static func == (a: Self, b: Self) -> Bool {
         a.uid == b.uid && a.name == b.name && a.photo == b.photo && a.rank == b.rank && a.role == b.role
+            && a.promoter == b.promoter
     }
 
     var body: some View {
@@ -2053,10 +2064,15 @@ struct GroupMemberRow: View, Equatable {
                 AvatarView(name: name, photoUrl: photo, size: 40)
                 // The Role sits on the name's line, right of it (owner 2026-10-18: "not under the
                 // name"). The name gives way first, so a long one truncates before the chip does.
-                HStack(spacing: 6) {
-                    Text(name).foregroundStyle(.primary).lineLimit(1)
-                    VerifiedMark(uid: uid, size: 13)
-                    if let role { RoleChip(role: role).layoutPriority(1) }
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(name).foregroundStyle(.primary).lineLimit(1)
+                        VerifiedMark(uid: uid, size: 13)
+                        if let role { RoleChip(role: role).layoutPriority(1) }
+                    }
+                    if let promoter {
+                        Text(promoter).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 8)
                 // Owner / Admin at the reference app's size for this label (owner 2026-10-18): the
