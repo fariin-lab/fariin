@@ -168,16 +168,21 @@ struct VideoPlayerScreen: View {
         }
         .animation(.easeOut(duration: 0.15), value: boosting)
         // Full Screen ends when the phone is turned back upright, the same as tapping the button.
+        // ROTATE TO WATCH (owner 2026-11-14): with the phone's rotation lock off, turning the phone
+        // sideways turns the video too (landscape is allowed for as long as this viewer is open,
+        // see onAppear) and that counts as Full Screen: the controls step away until a tap.
         .onGeometryChange(for: Bool.self, of: { $0.size.width > $0.size.height }) { wide in
             let wasWide = isLandscape
             isLandscape = wide
             if fullScreen, wasWide, !wide { setFullScreen(false) }
+            if !fullScreen, !wasWide, wide { fullScreen = true; showChrome = false }
         }
         .overlay(alignment: .bottom) {
             if showChrome, player != nil { bottomPanel.opacity(chromeEntered ? 1 : 0).transition(.opacity) }
         }
         .animation(.linear(duration: 0.15), value: player != nil)
         .onAppear {
+            OrientationLock.allowLandscape(true)   // rotate to watch (owner 2026-11-14)
             guard !chromeEntered else { return }
             withAnimation(.linear(duration: 0.15)) { chromeEntered = true }
         }
@@ -252,7 +257,8 @@ struct VideoPlayerScreen: View {
         // is gone). If its landing never completes it is left in the window, drawn over the
         // conversation — see `sweepOrphanedFlights`.
         .onDisappear {
-            if fullScreen { fullScreen = false; OrientationLock.allowLandscape(false) }
+            fullScreen = false
+            OrientationLock.allowLandscape(false)   // the rest of the app stays portrait
             cleanup(); MediaPresentGate.noteClosed(); MediaDismissHost.scheduleOrphanSweep()
         }
         // 2026-09-24 decision D16: the photo viewer's alerts and sheets, video wording.
@@ -680,10 +686,11 @@ struct VideoPlayerScreen: View {
     private func setFullScreen(_ on: Bool) {
         guard on != fullScreen else { return }
         fullScreen = on
-        OrientationLock.allowLandscape(on)
+        // Landscape stays allowed the whole time the viewer is open (rotate to watch); the button
+        // turns the screen itself, whichever way the phone is held.
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
         if on {
-            let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-                .first { $0.activationState == .foregroundActive }
             // Turn now, even while the phone is still held upright; the mask then follows the hand.
             scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { error in
                 debugLog("[Video] full screen rotate refused: \(error.localizedDescription)")
@@ -691,6 +698,11 @@ struct VideoPlayerScreen: View {
             showChrome = false
         } else {
             showChrome = true
+            if isLandscape {   // the button pressed while sideways: back upright now
+                scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { error in
+                    debugLog("[Video] full screen exit rotate refused: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -1082,6 +1094,7 @@ private final class PlayerLayerUIView: UIView {
 /// clock re-running the screen's body does not rebuild it: an open Speed submenu stays open until a
 /// speed is picked (owner 2026-11-13, build 1187).
 private struct PlayerMoreMenu: View, Equatable {
+    static let showSpeed = false
     let speed: Float
     let canSave: Bool
     let canDelete: Bool
@@ -1102,14 +1115,17 @@ private struct PlayerMoreMenu: View, Equatable {
         Menu {
             // A Picker in .menu style is the system's own submenu with a checkmark on the current
             // choice; it hands the pick straight to the player.
-            Picker(selection: Binding(get: { speed }, set: { actions.setSpeed($0) })) {
-                ForEach([Float(0.5), 1, 1.25, 1.5, 2], id: \.self) { s in
-                    Text(VideoPlayerScreen.speedLabel(s)).tag(s)
+            // HIDDEN (owner 2026-11-14): Speed has its own button above the scrubber now.
+            if Self.showSpeed {
+                Picker(selection: Binding(get: { speed }, set: { actions.setSpeed($0) })) {
+                    ForEach([Float(0.5), 1, 1.25, 1.5, 2], id: \.self) { s in
+                        Text(VideoPlayerScreen.speedLabel(s)).tag(s)
+                    }
+                } label: {
+                    Label("Speed  \(VideoPlayerScreen.speedLabel(speed))", systemImage: "gauge.with.dots.needle.67percent")
                 }
-            } label: {
-                Label("Speed  \(VideoPlayerScreen.speedLabel(speed))", systemImage: "gauge.with.dots.needle.67percent")
+                .pickerStyle(.menu)
             }
-            .pickerStyle(.menu)
             if canSave {
                 Button { actions.save() } label: { Label("Save Video", systemImage: "square.and.arrow.down") }
             }
