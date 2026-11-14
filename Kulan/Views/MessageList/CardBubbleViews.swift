@@ -746,6 +746,8 @@ final class PollBubbleView: UIView {
     private let subtitle = UILabel()
     private let total = UILabel()
     private let hairline = UIView()             // Thick bars only (owner 2026-10-21)
+    private let timeLeft = UILabel()            // card look: "3 days left" / "Ended"
+    private let quizLine = UILabel()            // card look: "You got it right" / "Not this time"
     private var rows: [PollOptionRow] = []
 
     private var listener: ListenerRegistration?
@@ -768,6 +770,11 @@ final class PollBubbleView: UIView {
         addSubview(total)
         addSubview(hairline)
         addSubview(footerStack)
+        timeLeft.textAlignment = .right
+        timeLeft.lineBreakMode = .byTruncatingHead
+        addSubview(timeLeft)
+        quizLine.lineBreakMode = .byTruncatingTail
+        addSubview(quizLine)
     }
     required init?(coder: NSCoder) { fatalError() }
     deinit { FirestoreHub.drop([listener]) }   // never remove() directly in a deinit: see ListenerBox
@@ -786,6 +793,10 @@ final class PollBubbleView: UIView {
         hairline.isHidden = plan.hairline == nil
         hairline.frame = plan.hairline ?? .zero
         hairline.backgroundColor = tint.withAlphaComponent(0.22)
+        timeLeft.isHidden = !plan.card
+        timeLeft.frame = plan.timeLeft
+        quizLine.isHidden = plan.quizLine == nil
+        quizLine.frame = plan.quizLine ?? .zero
 
         while rows.count < plan.options.count {
             let r = PollOptionRow()
@@ -797,7 +808,7 @@ final class PollBubbleView: UIView {
             r.isHidden = false
             r.frame = bounds
             r.apply(plan.options[i], filledRows: plan.filledRows, trackRadius: plan.trackRadius,
-                    ink: tint, check: plan.checkColor)
+                    ink: tint, check: plan.checkColor, card: plan.card, isMe: plan.isMe)
         }
 
         let key = "\(cid)|\(p.messageId)"
@@ -825,6 +836,7 @@ final class PollBubbleView: UIView {
     /// Vote counts → the bar fills and the percentages. Geometry is untouched.
     private func paintVotes() {
         guard let plan, let body else { return }
+        if plan.card { paintCard(plan, body); return }
         let voters = votes.count
         let mine = Set(votes[AuthService.shared.uid ?? ""] ?? [])
         // The footer is the door to the results page (who voted, Stop Poll). owner 2026-10-21 redesign:
@@ -871,9 +883,99 @@ final class PollBubbleView: UIView {
     }
     private let footerStack = PollFaceStack()
 
-    /// The footer ("N votes · Results ›"), for the tap that opens the results page.
+    /// The card look (owner 2026-11-14). The vote count moved up into the subtitle; the footer says
+    /// whether votes are public and how long the poll has left.
+    private func paintCard(_ plan: PollPlan, _ body: BubbleBody.PollBody) {
+        let voters = votes.count
+        let mine = Set(votes[AuthService.shared.uid ?? ""] ?? [])
+        let open = isOpen
+        let showResults = !mine.isEmpty || !open
+        let quiz = !body.correct.isEmpty
+        let reveal = quiz && showResults
+        let secondary = tint.withAlphaComponent(plan.isMe ? 0.8 : 0.62)
+
+        let count = "\(voters) vote\(voters == 1 ? "" : "s")"
+        let sub: String
+        if quiz {
+            sub = "Quiz · \(voters) answer\(voters == 1 ? "" : "s")"
+        } else if !showResults {
+            sub = "\(count) · Vote to see results"
+        } else {
+            sub = "\(count) · " + (body.multiple ? "Multiple choice" : "Single choice")
+        }
+        subtitle.attributedText = NSAttributedString(string: sub, attributes: [
+            .font: UIFont.systemFont(ofSize: 13), .foregroundColor: secondary])
+
+        let foot: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 12),
+                                                   .foregroundColor: secondary]
+        total.attributedText = NSAttributedString(
+            string: body.hideVoters ? "Anonymous" : "Public votes", attributes: foot)
+        footerStack.set([], side: 18)
+        timeLeft.attributedText = Self.timeLeftWords(body, open: open).map {
+            NSAttributedString(string: $0 + " ·", attributes: foot)
+        }
+
+        // Per option: how many chose it, and which fill colour it gets.
+        let counts = (0..<plan.options.count).map { i in votes.values.filter { $0.contains(i) }.count }
+        // The leading option I did not pick gets the soft purple (not in a quiz).
+        var leading: Int?
+        if !quiz {
+            for i in counts.indices where !mine.contains(i) && counts[i] > 0 {
+                if let l = leading, counts[i] <= counts[l] { continue }
+                leading = i
+            }
+        }
+        let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+        let showFaces = showResults && !body.hideVoters
+        for (i, r) in rows.enumerated() where i < plan.options.count {
+            let chose = votes.filter { $0.value.contains(i) }.map(\.key)
+            let fraction = voters > 0 ? Double(counts[i]) / Double(voters) : 0
+            let state: PollOptionRow.CardState
+            if reveal {
+                state = body.correct.contains(i) ? .right : (mine.contains(i) ? .wrong : .other)
+            } else if mine.contains(i) {
+                state = .mine
+            } else {
+                state = i == leading ? .leading : .other
+            }
+            let faces: [(String, String?)] = showFaces
+                ? chose.sorted().prefix(3).map { (conv?.names[$0] ?? "", conv?.photos[$0]) } : []
+            r.paintCard(fraction: fraction, state: state, multiple: body.multiple,
+                        showResults: showResults, faces: faces, faceRing: plan.checkColor)
+        }
+
+        if plan.quizLine != nil {
+            if reveal && !mine.isEmpty {
+                let right = mine.isSubset(of: Set(body.correct))
+                let color: UIColor = plan.isMe ? tint : (right ? PollCardColors.check : PollCardColors.wrong)
+                quizLine.attributedText = NSAttributedString(
+                    string: right ? "You got it right" : "Not this time",
+                    attributes: [.font: UIFont.systemFont(ofSize: 13, weight: .semibold),
+                                 .foregroundColor: color])
+            } else {
+                quizLine.attributedText = nil
+            }
+        }
+    }
+
+    /// "3 days left", "5 h left", "20 min left", "Ended", or nil for a poll with no end.
+    static func timeLeftWords(_ body: BubbleBody.PollBody, open: Bool) -> String? {
+        if !open { return "Ended" }
+        guard let ends = body.endsAt else { return nil }
+        let left = ends / 1000 - Date().timeIntervalSince1970
+        if left <= 0 { return "Ended" }
+        let days = Int(left / 86_400)
+        if days >= 1 { return "\(days) day\(days == 1 ? "" : "s") left" }
+        let hours = Int(left / 3_600)
+        if hours >= 1 { return "\(hours) h left" }
+        return "\(max(1, Int(left / 60))) min left"
+    }
+
+    /// The footer ("N votes · Results ›"), for the tap that opens the results page. In the card look
+    /// the count lives in the subtitle, so the subtitle opens it too.
     func hitsResults(_ point: CGPoint) -> Bool {
-        total.frame.insetBy(dx: -8, dy: -8).contains(point)
+        if plan?.card == true, subtitle.frame.insetBy(dx: -8, dy: -6).contains(point) { return true }
+        return total.frame.insetBy(dx: -8, dy: -8).contains(point)
     }
 
     /// Cast a vote on this option.
@@ -932,10 +1034,14 @@ final class PollOptionRow: UIView {
     private var filledRows = false
     private var ink: UIColor = .label
     private var check: UIColor = .systemBlue
+    private var card = false
+    private var isMe = false
+    private let smallMark = UIImageView()       // card look: the tick or cross before the words
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
+        smallMark.contentMode = .center
         track.clipsToBounds = true
         addSubview(track)
         track.addSubview(fill)
@@ -948,11 +1054,19 @@ final class PollOptionRow: UIView {
         percent.textAlignment = .right
         addSubview(percent)
         addSubview(faceStack)
+        addSubview(smallMark)
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func apply(_ o: PollPlan.Option, filledRows: Bool, trackRadius: CGFloat, ink: UIColor, check: UIColor) {
+    func apply(_ o: PollPlan.Option, filledRows: Bool, trackRadius: CGFloat, ink: UIColor, check: UIColor,
+               card: Bool = false, isMe: Bool = false) {
         option = o
+        self.card = card
+        self.isMe = isMe
+        smallMark.frame = o.mark
+        smallMark.isHidden = !card
+        glyph.isHidden = false
+        if !card { track.layer.borderWidth = 0 }
         self.filledRows = filledRows
         self.ink = ink
         self.check = check
@@ -967,9 +1081,93 @@ final class PollOptionRow: UIView {
         // Thick bars: the fill has the bar's own rounded ends. Filled rows: a plain rectangle the
         // row's corners clip, so it reads as the row filling from the left.
         fill.layer.cornerRadius = filledRows ? 0 : trackRadius
+        if card {
+            // A full capsule, and the fill is a capsule of its own growing from the left.
+            track.layer.cornerRadius = o.track.height / 2
+            fill.layer.cornerRadius = o.track.height / 2
+            fill.layer.cornerCurve = .continuous
+        }
     }
 
     enum QuizMark { case none, right, wrong }
+    /// Card look: what one option is once results show.
+    enum CardState { case mine, leading, other, right, wrong }
+
+    /// The card look (owner 2026-11-14). Before results: an empty ring (a square for multiple
+    /// choice), the words, nothing else. With results: the fill, a tick on mine (or the quiz right
+    /// answer), a cross on my wrong quiz pick, the faces, the percent.
+    func paintCard(fraction: Double, state: CardState, multiple: Bool, showResults: Bool,
+                   faces: [(String, String?)], faceRing: UIColor) {
+        guard let o = option else { return }
+        let tc = traitCollection
+        typealias Pal = PollCardColors
+        track.backgroundColor = isMe ? ink.withAlphaComponent(0.14) : Pal.track
+        let ringed = showResults && (state == .mine || state == .right)
+        track.layer.borderWidth = ringed ? 1.5 : 0
+        track.layer.borderColor = (isMe ? ink.withAlphaComponent(0.9) : Pal.ring).resolvedColor(with: tc).cgColor
+
+        // The empty ring before voting.
+        glyph.isHidden = showResults
+        mark.image = nil
+        glyph.backgroundColor = .clear
+        glyph.layer.borderWidth = 1.5
+        glyph.layer.borderColor = (isMe ? ink.withAlphaComponent(0.7) : Pal.emptyRing).resolvedColor(with: tc).cgColor
+        glyph.layer.cornerRadius = multiple ? o.glyph.width * 0.27 : o.glyph.width / 2
+        glyph.layer.cornerCurve = .continuous
+
+        let cfg = UIImage.SymbolConfiguration(pointSize: 11, weight: .bold)
+        var marked = false
+        if showResults {
+            switch state {
+            case .mine, .right:
+                smallMark.image = UIImage(systemName: "checkmark", withConfiguration: cfg)
+                smallMark.tintColor = isMe ? ink : Pal.check
+                marked = true
+            case .wrong:
+                smallMark.image = UIImage(systemName: "xmark", withConfiguration: cfg)
+                smallMark.tintColor = isMe ? ink : Pal.wrong
+                marked = true
+            case .leading, .other:
+                break
+            }
+        }
+        if !marked { smallMark.image = nil }
+        smallMark.isHidden = !marked
+        label.attributedText = o.labelAttr
+        if showResults {
+            // No tick: the words start at the inner edge, where the tick would be.
+            var f = o.labelResult
+            if !marked {
+                f.size.width += o.labelResult.minX - o.mark.minX
+                f.origin.x = o.mark.minX
+            }
+            label.frame = f
+        } else {
+            label.frame = o.label
+        }
+
+        percent.isHidden = !showResults
+        percent.attributedText = NSAttributedString(
+            string: "\(Int((fraction * 100).rounded()))%",
+            attributes: [.font: UIFont.systemFont(ofSize: 14, weight: .bold), .foregroundColor: ink])
+        faceStack.set(showResults ? faces : [], side: 24, step: 16, border: 2, ringColor: faceRing)
+        let textW = ceil(percent.attributedText?.size().width ?? 0)
+        faceStack.frame.origin = CGPoint(x: percent.frame.maxX - textW - 8 - faceStack.frame.width,
+                                         y: o.track.midY - 12)
+
+        let fillColor: UIColor
+        switch state {
+        case .mine, .right: fillColor = isMe ? ink.withAlphaComponent(0.34) : Pal.mine
+        case .leading: fillColor = isMe ? ink.withAlphaComponent(0.22) : Pal.leading
+        case .other, .wrong: fillColor = isMe ? ink.withAlphaComponent(0.22) : Pal.other
+        }
+        fill.backgroundColor = fillColor
+        let shown = showResults ? CGFloat(max(0, min(1, fraction))) : 0
+        // The fill grows from the left as a vote lands.
+        UIView.animate(withDuration: 0.25) {
+            self.fill.frame = CGRect(x: 0, y: 0, width: o.track.width * shown, height: o.track.height)
+        }
+    }
 
     private let faceStack = PollFaceStack()
 
@@ -1089,6 +1287,26 @@ final class ContactBubbleView: UIView {
     }
 }
 
+/// The card look's fixed colours on someone else's bubble (owner 2026-11-14 canvas, light / dark).
+/// My own bubble uses its ink at an alpha instead.
+enum PollCardColors {
+    private static func dyn(_ light: UInt32, _ dark: UInt32) -> UIColor {
+        UIColor { $0.userInterfaceStyle == .dark ? hex(dark) : hex(light) }
+    }
+    private static func hex(_ v: UInt32) -> UIColor {
+        UIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
+                blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+    }
+    static let track = dyn(0xF2F3F5, 0x2A2D33)
+    static let mine = dyn(0xC9F2CF, 0x1F5A33)
+    static let leading = dyn(0xC7C3F7, 0x3E3A7A)
+    static let other = dyn(0xE3E5E8, 0x3A3D44)
+    static let ring = dyn(0x34A853, 0x3DBE63)
+    static let check = dyn(0x1E8E3E, 0x7EE29A)
+    static let wrong = dyn(0xC5221F, 0xFF7B72)
+    static let emptyRing = dyn(0xA3A8B0, 0x6B7079)
+}
+
 /// Up to three small round faces, overlapping, each with a thin ring (owner 2026-10-21: voters on
 /// a poll). Sized by `set`; the caller places it.
 final class PollFaceStack: UIView {
@@ -1096,19 +1314,22 @@ final class PollFaceStack: UIView {
     override init(frame: CGRect) { super.init(frame: frame); isUserInteractionEnabled = false }
     required init?(coder: NSCoder) { fatalError() }
 
-    func set(_ faces: [(String, String?)], side: CGFloat) {
+    func set(_ faces: [(String, String?)], side: CGFloat, step: CGFloat? = nil,
+             border: CGFloat = 1.5, ringColor: UIColor? = nil) {
         while views.count < faces.count {
             let v = RowAvatarView()
-            v.layer.borderWidth = 1.5
-            v.layer.borderColor = UIColor.systemBackground.cgColor
             v.clipsToBounds = true
             addSubview(v)
             views.append(v)
         }
-        let step = side * 0.68
+        let step = step ?? side * 0.68
+        // Card look: the ring is the card's own colour, so overlapping faces read as cut out of it.
+        let ring = (ringColor ?? .systemBackground).resolvedColor(with: traitCollection).cgColor
         for (i, v) in views.enumerated() {
             guard i < faces.count else { v.isHidden = true; continue }
             v.isHidden = false
+            v.layer.borderWidth = border
+            v.layer.borderColor = ring
             v.frame = CGRect(x: CGFloat(i) * step, y: 0, width: side, height: side)
             v.layer.cornerRadius = side / 2
             v.configure(name: faces[i].0, photoUrl: faces[i].1)

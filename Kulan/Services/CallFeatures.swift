@@ -58,4 +58,8 @@ enum AppFeatures {
     /// (each option a row with a thick bar under it, the default); true = "Filled rows" (each option
     /// a rounded row that fills from the left). Read once per layout pass, so one launch is one look.
     static var pollRows: Bool { RemoteFeatures.value("pollRows", default: false) }
+    /// The poll card look (owner 2026-11-14, approved canvas): full 46pt capsules that fill from the
+    /// left, voter faces and the percent on the right, a public/anonymous + time-left footer. On by
+    /// default; the server can only switch it off, which brings back the `pollRows` choice above.
+    static var pollCard: Bool { RemoteFeatures.offOnly("pollCard", default: true) }
 }

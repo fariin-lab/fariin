@@ -139,6 +139,12 @@ struct PollPlan {
         var track: CGRect
         /// The tap target for a vote.
         var hit: CGRect
+        // Card look (2026-11-14) only, zero in the older looks.
+        /// The words once results show, shortened by the faces and the percentage. Same height as
+        /// `label`: the plan measured the words at both widths and kept the taller.
+        var labelResult: CGRect = .zero
+        /// The small tick (or quiz cross) before the words once results show.
+        var mark: CGRect = .zero
     }
     var filledRows: Bool
     /// The side inset, so the in-bubble sender name lines up with the question.
@@ -153,6 +159,20 @@ struct PollPlan {
     var checkColor: UIColor
     var hairline: CGRect?               // Thick bars only, above the footer
     var total: CGRect                   // footer left, "N votes · View results", written live
+    // ── Card look (owner 2026-11-14, "go build" on his canvas). Off in the two older looks. ──
+    /// Full 46pt capsules on a light track, the fill grows from the left, faces and percent on the
+    /// right. The subtitle carries the vote count; the footer says public or anonymous and the time
+    /// left.
+    var card: Bool = false
+    /// My own bubble: every poll colour is the bubble's ink at an alpha, not the fixed palette.
+    var isMe: Bool = false
+    /// Footer right slot for "3 days left" / "Ended", right-aligned, ending before the time.
+    var timeLeft: CGRect = .zero
+    /// A quiz's "You got it right" / "Not this time" line under the options. Reserved for every
+    /// quiz, so answering never re-measures the row.
+    var quizLine: CGRect? = nil
+    /// Room kept on each option's right for voter faces (0 when votes are hidden).
+    var facesWidth: CGFloat = 0
 }
 
 /// A capsule with a glyph and a word.
@@ -2907,6 +2927,14 @@ enum MessageRowLayout {
                              topSpacing: CGFloat, y startY: CGFloat,
                              senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
                              forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
+        // owner 2026-11-14: the card look is the one drawn. The two older looks below stay behind
+        // the `pollCard` switch (hide, don't delete).
+        if AppFeatures.pollCard {
+            return pollCard(p, row: b, originX: originX, columnX: columnX, columnW: columnW,
+                            textColor: textColor, metaColor: metaColor, topSpacing: topSpacing,
+                            y: startY, senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                            forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
+        }
         let y = startY
         // ⛔ TWO LOOKS, ONE PLAN — owner 2026-10-21. Read once here: this plan is both the height the
         // list measures and the rects the cell draws, so the switch can never split the two.
@@ -3211,6 +3239,138 @@ enum MessageRowLayout {
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
             locationPlan: nil, contactPlan: plan, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
+            avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+            forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+            failBadge: nil)
+        let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
+                                 columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                 senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                 forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
+                                 y: bubbleRect.maxY)
+        return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    /// The card look (owner 2026-11-14, from his approved canvas). Padding 18 top, 16 sides, 14
+    /// bottom; 10pt between rows; every option a 46pt capsule. Only the fills, percentages, faces
+    /// and words are written live; no rect here depends on a vote.
+    private static func pollCard(_ p: BubbleBody.PollBody, row b: BubbleRow,
+                                 originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
+                                 textColor: UIColor, metaColor: UIColor,
+                                 topSpacing: CGFloat, y: CGFloat,
+                                 senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
+                                 forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
+        let padTop: CGFloat = 18, pad: CGFloat = 16, padBottom: CGFloat = 14, gap: CGFloat = 10
+        let bubbleW = min(columnW, 320)
+        let contentW = max(1, bubbleW - pad * 2)
+        var innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                                otherwise: padTop)
+
+        var quoteRect: CGRect?
+        var quoteInner: QuoteInnerPlan?
+        if let q = b.quote {
+            let (size, inner) = quoteSize(q, textColor: textColor, maxWidth: contentW)
+            quoteInner = inner
+            quoteRect = CGRect(x: pad, y: innerY, width: contentW, height: size.height)
+            innerY += size.height + 8
+        }
+
+        let qFont = UIFont.systemFont(ofSize: 17, weight: .bold)
+        let qLine: CGFloat = 22
+        let qPara = NSMutableParagraphStyle()
+        qPara.minimumLineHeight = qLine
+        qPara.maximumLineHeight = qLine
+        qPara.lineBreakMode = .byWordWrapping
+        let questionAttr = NSAttributedString(string: p.question, attributes: [
+            .font: qFont, .foregroundColor: textColor, .paragraphStyle: qPara,
+            .baselineOffset: max(0, (qLine - qFont.lineHeight) / 4)])
+        let qSize = BubbleText.size(questionAttr, width: contentW)
+        let question = CGRect(x: pad, y: innerY, width: contentW, height: qSize.height)
+        innerY = question.maxY + 4
+
+        // The words are written live (the count changes); this is the first paint and the measure.
+        let secondary = textColor.withAlphaComponent(b.isMe ? 0.8 : 0.62)
+        let subtitleAttr = NSAttributedString(
+            string: p.correct.isEmpty ? (p.multiple ? "Multiple choice" : "Single choice") : "Quiz",
+            attributes: [.font: UIFont.systemFont(ofSize: 13), .foregroundColor: secondary])
+        let subH = ceil(UIFont.systemFont(ofSize: 13).lineHeight)
+        let subtitle = CGRect(x: pad, y: innerY, width: contentW, height: subH)
+        innerY = subtitle.maxY + gap
+
+        // Option geometry. Before results: 14 inner, an 18pt ring, 10 gap, the words.
+        // With results: 14 inner, a 14pt tick slot + 6, the words, faces, the percent, 14 inner.
+        let labelFont = UIFont.systemFont(ofSize: 15, weight: .semibold)
+        let inner: CGFloat = 14, ring: CGFloat = 18, ringGap: CGFloat = 10
+        let markW: CGFloat = 14, markGap: CGFloat = 6
+        let percentW: CGFloat = 38
+        let percentH = ceil(UIFont.systemFont(ofSize: 14, weight: .bold).lineHeight)
+        // Up to three 24pt faces overlapping by 8.
+        let facesW: CGFloat = p.hideVoters ? 0 : (24 + 16 * 2)
+        let rightW = inner + percentW + 8 + (facesW > 0 ? facesW + 8 : 0)
+        let w0 = max(1, contentW - inner - ring - ringGap - inner)
+        let w1 = max(1, contentW - inner - markW - markGap - rightW)
+        var options: [PollPlan.Option] = []
+        for (i, opt) in p.options.enumerated() {
+            let labelAttr = NSAttributedString(string: opt, attributes: [
+                .font: labelFont, .foregroundColor: textColor])
+            let lH = max(BubbleText.size(labelAttr, width: w0).height,
+                         BubbleText.size(labelAttr, width: w1).height)
+            let rowH = max(46, lH + 20)      // a long option grows the capsule, never clips
+            let row = CGRect(x: pad, y: innerY, width: contentW, height: rowH)
+            let labelY = innerY + (rowH - lH) / 2
+            options.append(PollPlan.Option(
+                glyph: CGRect(x: pad + inner, y: innerY + (rowH - ring) / 2, width: ring, height: ring),
+                label: CGRect(x: pad + inner + ring + ringGap, y: labelY, width: w0, height: lH),
+                labelAttr: labelAttr, labelChosenAttr: labelAttr,
+                percent: CGRect(x: row.maxX - inner - percentW, y: innerY + (rowH - percentH) / 2,
+                                width: percentW, height: percentH),
+                track: row,
+                // Half the gap to each neighbour, so every point between two options votes.
+                hit: row.insetBy(dx: 0, dy: -gap / 2),
+                labelResult: CGRect(x: pad + inner + markW + markGap, y: labelY, width: w1, height: lH),
+                mark: CGRect(x: pad + inner, y: innerY + (rowH - markW) / 2, width: markW, height: markW)))
+            innerY += rowH
+            if i < p.options.count - 1 { innerY += gap }
+        }
+
+        var quizLine: CGRect?
+        if !p.correct.isEmpty {
+            innerY += gap
+            let h = ceil(UIFont.systemFont(ofSize: 13, weight: .semibold).lineHeight)
+            quizLine = CGRect(x: pad, y: innerY, width: contentW, height: h)
+            innerY += h
+        }
+
+        // FOOTER: "Public votes" / "Anonymous" left; "3 days left" then the time and ticks right.
+        innerY += gap + 2
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
+        let metaSize = BubbleText.lineSize(metaAttr)
+        let footH = ceil(UIFont.systemFont(ofSize: 12).lineHeight)
+        let footerH = max(footH, metaSize.height)
+        let metaRect = CGRect(x: pad + contentW - metaSize.width, y: innerY + (footerH - metaSize.height) / 2,
+                              width: metaSize.width, height: metaSize.height)
+        let leftW: CGFloat = 96
+        let total = CGRect(x: pad, y: innerY + (footerH - footH) / 2, width: leftW, height: footH)
+        let timeLeft = CGRect(x: total.maxX + 4, y: total.minY,
+                              width: max(1, metaRect.minX - 6 - (total.maxX + 4)), height: footH)
+        innerY += footerH + padBottom
+
+        let plan = PollPlan(filledRows: false, inset: pad,
+                            question: question, questionAttr: questionAttr,
+                            subtitle: subtitle, subtitleAttr: subtitleAttr,
+                            options: options, trackRadius: 23,
+                            checkColor: b.fill.representative,
+                            hairline: nil, total: total,
+                            card: true, isMe: b.isMe, timeLeft: timeLeft, quizLine: quizLine,
+                            facesWidth: facesW)
+        let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
+                                y: y, width: bubbleW, height: innerY)
+        var out = BubblePlan(
+            bubble: bubbleRect, radii: .uniform(22), isCapsule: false, fill: b.fill, rim: b.rim,
+            text: .zero, meta: metaRect, metaOnOwnLine: true,
+            quote: quoteRect, quoteInner: quoteInner,
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
+            locationPlan: nil, contactPlan: nil, pollPlan: plan, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             failBadge: nil)

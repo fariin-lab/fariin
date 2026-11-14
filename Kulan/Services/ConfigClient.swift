@@ -85,7 +85,7 @@ final class ConfigClient {
     /// The old switches (config/features keys) that apply on the NEXT launch. The rest of the
     /// switches the server sends (groupCreate, groupStats, and every app limit) apply live.
     static let nextLaunchKeys: Set<String> = [
-        "glow", "insights", "profileLinks", "myProfileCard", "twoStep", "storyList", "pollRows",
+        "glow", "insights", "profileLinks", "myProfileCard", "twoStep", "storyList", "pollRows", "pollCard",
         "stickerEdit", "chatBackup", "chatTransfer", "historyPull", "videoStream", "r2Media",
         "groups", "groupE2EE", "groupCalls", "callLinks",
     ]
