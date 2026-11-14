@@ -1297,10 +1297,15 @@ enum PollCardColors {
         UIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
                 blue: CGFloat(v & 0xFF) / 255, alpha: 1)
     }
-    static let track = dyn(0xF2F3F5, 0x2A2D33)
+    // ⛔ TRACK AND GREY FILL ARE SEE-THROUGH INK, not fixed greys (owner 2026-11-14, light mode:
+    // the incoming bubble is itself #F2F3F5-ish, so the fixed track vanished and only the words
+    // showed). A shade of black (light) / white (dark) reads on any bubble colour or wallpaper.
+    static let track = UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor.white.withAlphaComponent(0.08) : UIColor.black.withAlphaComponent(0.06) }
     static let mine = dyn(0xC9F2CF, 0x1F5A33)
     static let leading = dyn(0xC7C3F7, 0x3E3A7A)
-    static let other = dyn(0xE3E5E8, 0x3A3D44)
+    static let other = UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor.white.withAlphaComponent(0.10) : UIColor.black.withAlphaComponent(0.07) }
     static let ring = dyn(0x34A853, 0x3DBE63)
     static let check = dyn(0x1E8E3E, 0x7EE29A)
     static let wrong = dyn(0xC5221F, 0xFF7B72)
