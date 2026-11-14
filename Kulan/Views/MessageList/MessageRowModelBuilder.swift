@@ -382,13 +382,16 @@ enum MessageRowModelBuilder {
         // last-of-run rule): with last-only, sending a new message took the art off the one before,
         // which read as the old style being erased. Colour styles' decorations stay last-of-run.
         let picture: PictureStyle? = bubbleStyle?.picture
+        // A poll card is SOLID, never the wallpaper blur (owner 2026-11-14, colour option 1: the
+        // blurred wallpaper under the see-through option rows made them muddy).
+        let pollCardSolid: Bool = { if case .poll = body { return AppFeatures.pollCard }; return false }()
         let fill: BubbleFill = bubbleStyle.map { s -> BubbleFill in
             let look = s.look(ctx.dark)
             // Soft Glass with no wallpaper behind: a blur of the plain page is nearly invisible,
             // so it takes its own soft colour there.
             if look.glass && !ctx.onWallpaper { return .solid(look.fill.first ?? 0xF2F2F7) }
             return BubbleStyles.fill(look)
-        } ?? (isMe ? myFill(ctx) : receivedFill(ctx))
+        } ?? (isMe ? myFill(ctx) : pollCardSolid ? .received : receivedFill(ctx))
 
         let tick: BubbleTicks.Kind
         if ctx.isChannel, authored, !msg.deleted, msg.sendState == .sending {

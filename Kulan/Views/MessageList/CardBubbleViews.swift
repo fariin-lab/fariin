@@ -1302,12 +1302,18 @@ enum PollCardColors {
     // showed). A shade of black (light) / white (dark) reads on any bubble colour or wallpaper.
     static let track = UIColor { $0.userInterfaceStyle == .dark
         ? UIColor.white.withAlphaComponent(0.08) : UIColor.black.withAlphaComponent(0.06) }
-    static let mine = dyn(0xC9F2CF, 0x1F5A33)
-    static let leading = dyn(0xC7C3F7, 0x3E3A7A)
-    static let other = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor.white.withAlphaComponent(0.10) : UIColor.black.withAlphaComponent(0.07) }
-    static let ring = dyn(0x34A853, 0x3DBE63)
-    static let check = dyn(0x1E8E3E, 0x7EE29A)
+    // ⛔ "SOFT INK" (owner 2026-11-14 picked option 1 of three): the app's own colour, no green, no
+    // purple. My pick = see-through white (dark) / black (light) with a ring and tick in the same
+    // ink; every other option, the leading one included, = one grey.
+    private static func ink(_ dark: CGFloat, _ light: CGFloat) -> UIColor {
+        UIColor { $0.userInterfaceStyle == .dark
+            ? UIColor.white.withAlphaComponent(dark) : UIColor.black.withAlphaComponent(light) }
+    }
+    static let mine = ink(0.28, 0.28)
+    static let other = ink(0.12, 0.09)
+    static let leading = other
+    static let ring = ink(0.9, 0.9)
+    static let check = UIColor.label
     static let wrong = dyn(0xC5221F, 0xFF7B72)
     static let emptyRing = dyn(0xA3A8B0, 0x6B7079)
 }
