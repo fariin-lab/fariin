@@ -395,6 +395,11 @@ struct PollComposerSheet: View {
     @State private var pickedItem: PhotosPickerItem?
     @State private var uploading = false
     @State private var uploadError: String?
+    /// ⛔ PICTURES GO UP WHEN THEY ARE PICKED, NOT WHEN SEND IS TAPPED (owner 2026-11-14: Send spun
+    /// for seconds with three option pictures; the reference app sends at once). Each option's
+    /// upload starts the moment its picture is attached, so by Send it is usually finished and Send
+    /// only waits for whatever is still on the way. Replacing or removing a picture cancels its upload.
+    @State private var preUploads: [UUID: Task<PollImage, Error>] = [:]
 
     enum EndChoice: Hashable, CaseIterable {
         case never, hour, day, week
@@ -407,10 +412,10 @@ struct PollComposerSheet: View {
     }
 
     /// The options kept (non-empty), each with whether it was marked right and its picture.
-    private var kept: [(text: String, right: Bool, image: Data?)] {
+    private var kept: [(id: UUID, text: String, right: Bool, image: Data?)] {
         options.compactMap { o in
             let t = o.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return t.isEmpty ? nil : (t, o.right, o.imageData)
+            return t.isEmpty ? nil : (o.id, t, o.right, o.imageData)
         }
     }
     private var canSend: Bool {
@@ -472,6 +477,8 @@ struct PollComposerSheet: View {
                 Task { await attach(item, to: id) }
             }
             .interactiveDismissDisabled(uploading)
+            // Closed without sending: stop the pictures still on the way.
+            .onDisappear { if !sent { preUploads.values.forEach { $0.cancel() } } }
             .alert("Could not send the poll", isPresented: Binding(get: { uploadError != nil },
                                                                    set: { if !$0 { uploadError = nil } })) {
                 Button("OK", role: .cancel) {}
@@ -569,6 +576,15 @@ struct PollComposerSheet: View {
         guard let k = options.firstIndex(where: { $0.id == id }) else { return }
         options[k].imageData = nil
         options[k].preview = nil
+        preUploads.removeValue(forKey: id)?.cancel()
+    }
+
+    /// Starts (or restarts) the upload of one option's picture in the background.
+    private func startUpload(_ id: UUID, data: Data) {
+        preUploads.removeValue(forKey: id)?.cancel()
+        guard !cid.isEmpty else { return }
+        let cid = cid, group = group
+        preUploads[id] = Task { try await ChatService.uploadPollImage(cid: cid, data: data, group: group, prepared: true) }
     }
 
     /// Reads the picked photo, shrinks it to 512px on its long side and keeps it on the row.
@@ -580,6 +596,7 @@ struct PollComposerSheet: View {
             guard let k = options.firstIndex(where: { $0.id == id }) else { return }
             options[k].imageData = jpeg
             options[k].preview = ui
+            startUpload(id, data: jpeg)
         }
     }
 
@@ -635,21 +652,24 @@ struct PollComposerSheet: View {
             dismiss()
             return
         }
-        // Pictures go up first (small, 512px); the poll is sent once every one is stored, so no one
-        // ever sees a poll pointing at a file that is not there yet.
-        uploading = true
+        // The poll is still sent only once every picture is stored, so no one ever sees a poll
+        // pointing at a file that is not there yet. The uploads began when each picture was picked
+        // (`startUpload`); a picture without one (should not happen) starts here.
+        let count = pictures.count
         let cid = cid, group = group
+        var pending: [(Int, UUID, Task<PollImage, Error>)] = []
+        for (i, o) in list.enumerated() {
+            guard let data = o.image else { continue }
+            if preUploads[o.id] == nil {
+                preUploads[o.id] = Task { try await ChatService.uploadPollImage(cid: cid, data: data, group: group, prepared: true) }
+            }
+            if let t = preUploads[o.id] { pending.append((i, o.id, t)) }
+        }
+        uploading = true
         Task {
             do {
-                let images = try await withThrowingTaskGroup(of: (Int, PollImage).self) { g in
-                    for (i, data) in pictures.enumerated() {
-                        guard let data else { continue }
-                        g.addTask { (i, try await ChatService.uploadPollImage(cid: cid, data: data, group: group)) }
-                    }
-                    var out = [PollImage?](repeating: nil, count: pictures.count)
-                    for try await (i, img) in g { out[i] = img }
-                    return out
-                }
+                var images = [PollImage?](repeating: nil, count: count)
+                for (i, _, t) in pending { images[i] = try await t.value }
                 await MainActor.run {
                     uploading = false
                     guard !sent else { return }
@@ -659,7 +679,11 @@ struct PollComposerSheet: View {
                 }
             } catch {
                 let msg = error.localizedDescription
-                await MainActor.run { uploading = false; uploadError = msg }
+                await MainActor.run {
+                    // A failed upload is dropped so the next Send starts that picture again.
+                    for (_, oid, t) in pending where preUploads[oid] == t { preUploads[oid] = nil }
+                    uploading = false; uploadError = msg
+                }
             }
         }
     }

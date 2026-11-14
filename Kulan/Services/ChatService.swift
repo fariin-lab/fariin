@@ -2056,8 +2056,9 @@ enum ChatService {
     /// this chat (1:1 sealed, sealed group sealed for its members, plain group or channel in the
     /// clear) and stored where a photo is, `chat/{cid}/{id}.enc`, under a fresh message-style id.
     /// Uploaded before the poll is sent; the poll's sealed text then carries the url and key.
-    static func uploadPollImage(cid: String, data rawData: Data, group: [String]?) async throws -> PollImage {
-        let data = downscaledJPEG(rawData, maxDimension: 512, quality: 0.75)
+    /// `prepared`: the composer already made `rawData` the 512px JPEG, so it is not encoded again.
+    static func uploadPollImage(cid: String, data rawData: Data, group: [String]?, prepared: Bool = false) async throws -> PollImage {
+        let data = prepared ? rawData : downscaledJPEG(rawData, maxDimension: 512, quality: 0.75)
         guard !data.isEmpty else {
             throw NSError(domain: "Poll", code: 1, userInfo: [NSLocalizedDescriptionKey: "That picture could not be read."])
         }

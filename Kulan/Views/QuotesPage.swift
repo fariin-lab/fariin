@@ -229,6 +229,10 @@ struct QuotesPage: View {
 
     private var postText: String {
         guard let post else { return "Channel post" }
+        // A poll post's text is its marker (owner 2026-11-14: the Quotes sheet printed
+        // "fariin-poll:eyJ..."). Same words the quote card in a chat uses.
+        if let poll = PollCard.parse(post.text) { return "Poll: \(poll.question)" }
+        if post.text.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil { return kindName(post) }
         return post.text.isEmpty ? kindName(post) : post.text
     }
 
@@ -236,6 +240,7 @@ struct QuotesPage: View {
 
     private func kindIcon(_ m: Message) -> String {
         if !m.album.isEmpty { return "photo.on.rectangle" }
+        if PollCard.parse(m.text) != nil { return "chart.bar.xaxis" }
         switch m.type {
         case "image": return "photo"
         case "video": return "video"
